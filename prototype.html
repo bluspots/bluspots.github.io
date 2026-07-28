@@ -1,0 +1,2167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1.0"/>
+<title>Haven — Prototype</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+</head>
+<body style="margin:0;background:#888">
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useRef, useEffect } = React;
+
+const N='#1C2B3A',AM='#F59E0B',BG='#F5F2ED',W='#FFFFFF';
+const TX='#1C2B3A',TS='#5A6B78',TM='#9AAAB6',BD='#E5DED4';
+const SC='#059669',SL='#ECFDF5';
+
+const TASKS=[
+  // Assembly
+  {id:1, e:"🪑",n:"Assemble furniture",    p:65,  t:"50 min",c:"Assembly"},
+  {id:2, e:"🛏️",n:"Assemble bed",          p:79,  t:"60 min",c:"Assembly",    pop:true},
+  {id:3, e:"🏋️",n:"Assemble home gym",     p:120, t:"90 min",c:"Assembly"},
+  {id:4, e:"🛋️",n:"Assemble sofa",         p:70,  t:"45 min",c:"Assembly"},
+  {id:5, e:"🗄️",n:"Assemble office desk",  p:75,  t:"50 min",c:"Assembly"},
+  // Installation
+  {id:6, e:"📺",n:"Mount TV",              p:89,  t:"45 min",c:"Installation",pop:true},
+  {id:7, e:"🖼️",n:"Hang artwork",          p:45,  t:"30 min",c:"Installation"},
+  {id:8, e:"🪟",n:"Install curtains/blinds",p:55,  t:"35 min",c:"Installation"},
+  {id:9, e:"📚",n:"Install shelving",      p:59,  t:"40 min",c:"Installation"},
+  {id:10,e:"🚪",n:"Install door hardware", p:65,  t:"35 min",c:"Installation"},
+  // Smart Home
+  {id:11,e:"🔒",n:"Install smart lock",    p:95,  t:"30 min",c:"Smart Home",  pop:true},
+  {id:12,e:"📡",n:"Install doorbell camera",p:65, t:"30 min",c:"Smart Home"},
+  {id:13,e:"🌡️",n:"Install smart thermostat",p:75,t:"40 min",c:"Smart Home"},
+  {id:14,e:"💡",n:"Install smart lighting",p:59,  t:"35 min",c:"Smart Home"},
+  // Plumbing
+  {id:15,e:"🚰",n:"Replace faucet",        p:85,  t:"45 min",c:"Plumbing"},
+  {id:16,e:"🚽",n:"Install/repair toilet", p:95,  t:"50 min",c:"Plumbing"},
+  {id:17,e:"🍽️",n:"Install dishwasher",    p:99,  t:"60 min",c:"Plumbing"},
+  {id:18,e:"♻️",n:"Install garbage disposal",p:89, t:"45 min",c:"Plumbing"},
+  {id:19,e:"🔧",n:"Fix leaky pipe",        p:79,  t:"Varies",c:"Plumbing"},
+  // Electrical
+  {id:20,e:"💡",n:"Replace light fixture", p:55,  t:"25 min",c:"Electrical"},
+  {id:21,e:"🌀",n:"Install ceiling fan",   p:79,  t:"50 min",c:"Electrical"},
+  {id:22,e:"🔌",n:"Install outlet/switch", p:65,  t:"30 min",c:"Electrical"},
+  {id:23,e:"🧯",n:"Install EV charger outlet",p:149,t:"90 min",c:"Electrical"},
+  // Painting
+  {id:24,e:"🎨",n:"Paint a room",          p:249, t:"3-4 hrs",c:"Painting",  pop:true},
+  {id:25,e:"🖌️",n:"Paint an accent wall",  p:129, t:"2 hrs",  c:"Painting"},
+  {id:26,e:"🚪",n:"Paint doors/trim",      p:99,  t:"90 min", c:"Painting"},
+  // Flooring
+  {id:27,e:"🧱",n:"Install tile flooring", p:399, t:"4-6 hrs",c:"Flooring"},
+  {id:28,e:"🪵",n:"Install laminate/vinyl flooring",p:349,t:"3-5 hrs",c:"Flooring"},
+  {id:29,e:"🔨",n:"Repair squeaky floor",  p:89,  t:"Varies", c:"Flooring"},
+  // Cleaning
+  {id:30,e:"🧹",n:"Deep clean (2BR)",      p:159, t:"2-3 hrs",c:"Cleaning",  pop:true},
+  {id:31,e:"🧽",n:"Move-out cleaning",     p:199, t:"3 hrs",  c:"Cleaning"},
+  {id:32,e:"🪟",n:"Window washing (interior)",p:79,t:"60 min",c:"Cleaning"},
+  {id:33,e:"🛋️",n:"Carpet/upholstery cleaning",p:119,t:"90 min",c:"Cleaning"},
+  // Landscaping
+  {id:34,e:"🌱",n:"Lawn mowing",           p:49,  t:"45 min", c:"Landscaping"},
+  {id:35,e:"✂️",n:"Hedge trimming",        p:69,  t:"60 min", c:"Landscaping"},
+  {id:36,e:"🍂",n:"Leaf removal",          p:79,  t:"75 min", c:"Landscaping"},
+  {id:37,e:"🌸",n:"Garden bed cleanup",    p:89,  t:"90 min", c:"Landscaping"},
+  // Moving & Hauling
+  {id:38,e:"📦",n:"Furniture moving (single item)",p:89,t:"45 min",c:"Moving"},
+  {id:39,e:"🚛",n:"Load/unload moving truck",p:149,t:"2 hrs",c:"Moving"},
+  {id:40,e:"🗑️",n:"Junk removal",          p:99,  t:"60 min", c:"Moving"},
+  // Repair
+  {id:41,e:"🔧",n:"Minor repairs",         p:59,  t:"Varies", c:"Repair"},
+  {id:42,e:"🚪",n:"Fence repair",          p:159, t:"2 hrs",  c:"Repair"},
+  {id:43,e:"🚗",n:"Garage door repair",    p:139, t:"90 min", c:"Repair"},
+  {id:44,e:"🧱",n:"Drywall patch/repair",  p:99,  t:"60 min", c:"Repair"},
+  // Maintenance
+  {id:45,e:"❄️",n:"HVAC filter swap",      p:35,  t:"20 min", c:"Maintenance"},
+  {id:46,e:"🏠",n:"Gutter cleaning",       p:119, t:"90 min", c:"Maintenance"},
+  {id:47,e:"💦",n:"Pressure washing (driveway/patio)",p:149,t:"2 hrs",c:"Maintenance"},
+  {id:48,e:"🪟",n:"Window washing (exterior)",p:99,t:"75 min",c:"Maintenance"},
+  // Appliance
+  {id:49,e:"🌀",n:"Washer/dryer installation",p:99,t:"60 min",c:"Appliance"},
+  {id:50,e:"🧊",n:"Refrigerator installation",p:89,t:"45 min",c:"Appliance"},
+  // Pest Control
+  {id:51,e:"🐜",n:"Pest control treatment",p:129, t:"60 min", c:"Pest Control"},
+  // Added for problem-diagnosis coverage
+  {id:52,e:"🌀",n:"Garbage disposal repair",p:89,  t:"40 min", c:"Plumbing"},
+  {id:53,e:"🌡️",n:"AC/heating repair visit", p:99,  t:"Varies", c:"Repair"},
+  {id:54,e:"⚡",n:"Electrical troubleshooting",p:89, t:"Varies", c:"Electrical"},
+];
+const PROS=[
+  {i:"MT",n:"Marcus T.",r:4.97,j:543,s:"TV Mount Pro",   col:"#1E40AF",
+    trustScore:98,onTimeRate:99,hireAgainRate:97,completionRate:99,responseTime:"4 min",
+    badges:["Identity verified","Background checked","Insured"]},
+  {i:"DR",n:"David R.", r:4.93,j:312,s:"Assembly Pro",   col:"#065F46",
+    trustScore:95,onTimeRate:96,hireAgainRate:94,completionRate:98,responseTime:"7 min",
+    badges:["Identity verified","Background checked"]},
+  {i:"SK",n:"Sarah K.", r:4.99,j:189,s:"Smart Home Pro", col:"#5B21B6",
+    trustScore:99,onTimeRate:100,hireAgainRate:98,completionRate:99,responseTime:"3 min",
+    badges:["Identity verified","Background checked","Insured","Licensed"]},
+];
+const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
+const trustBg=score=>score>=97?SL:score>=90?"#FEF3C7":"#FEF2F2";
+const TIME_PREFS=[
+  {id:1,label:"ASAP",          sub:"Within 2 hours",              surge:10},
+  {id:2,label:"This morning",  sub:"Today · 8:00 AM – 12:00 PM",  surge:0},
+  {id:3,label:"This afternoon",sub:"Today · 12:00 – 5:00 PM",     surge:0},
+  {id:4,label:"This evening",  sub:"Today · 5:00 – 9:00 PM",      surge:0},
+  {id:5,label:"Tomorrow AM",   sub:"Tomorrow · 8:00 AM – 12:00 PM",surge:0},
+  {id:6,label:"Tomorrow PM",   sub:"Tomorrow · 12:00 – 5:00 PM",  surge:0},
+];
+// Emergency jobs use their own short-window timing instead of normal scheduling.
+const EMERGENCY_TIME_PREFS=[
+  {id:101,label:"ASAP",            sub:"Within 1–2 hours", surge:10},
+  {id:102,label:"Within 4 hours",  sub:"Response within 4 hours",surge:0},
+  {id:103,label:"Within 6 hours",  sub:"Response within 6 hours",surge:0},
+];
+const ALL_TIME_PREFS=[...TIME_PREFS,...EMERGENCY_TIME_PREFS];
+const CATS=["All","Assembly","Installation","Smart Home","Plumbing","Electrical","Painting","Flooring","Cleaning","Landscaping","Moving","Repair","Maintenance","Appliance","Pest Control"];
+const JOB_CATS=[...CATS.filter(c=>c!=="All"),"Other"];
+
+// Simplified home screen entry tiles — each maps to a group of categories
+const ENTRY_GROUPS=[
+  {key:"fix",     label:"Fix",     e:"🔧", cats:["Repair","Plumbing","Electrical","Appliance","Pest Control"]},
+  {key:"install", label:"Install", e:"🛠️", cats:["Installation","Smart Home","Flooring"]},
+  {key:"assemble",label:"Assemble",e:"🪑", cats:["Assembly"]},
+  {key:"clean",   label:"Clean",   e:"🧹", cats:["Cleaning"]},
+  {key:"outdoor", label:"Outdoor", e:"🌿", cats:["Landscaping","Maintenance"]},
+  {key:"move",    label:"Move",    e:"📦", cats:["Moving"]},
+];
+const EMERGENCY_CATS=["Repair","Plumbing","Electrical"];
+const EMERGENCY_FEE=35;
+// Emergency screen options — map to an existing catalog task where possible,
+// otherwise fall back to a custom-job flow (Locked out, Other).
+const EMERGENCY_OPTIONS=[
+  {key:"leak",  label:"Active leak / burst pipe", e:"🚿", taskId:19, desc:"Emergency: active leak or burst pipe — needs urgent attention."},
+  {key:"ac",    label:"No AC / heating issue",    e:"🌡️", taskId:53, desc:"Emergency: no AC or heating — needs urgent attention."},
+  {key:"elec",  label:"Electrical issue",         e:"⚡", taskId:54, desc:"Emergency: electrical issue — needs urgent attention."},
+  {key:"lock",  label:"Locked out",               e:"🔑", taskId:null, customTitle:"Emergency lockout assistance", customPrice:"89", ccat:"Repair", desc:"Emergency: locked out of home — needs urgent assistance."},
+  {key:"garage",label:"Garage door stuck",        e:"🚪", taskId:43, desc:"Emergency: garage door stuck — needs urgent attention."},
+  {key:"other", label:"Other urgent repair",      e:"❗", taskId:null, customTitle:"", customPrice:"", ccat:"Repair", desc:"Emergency: urgent repair needed — details below."},
+];
+// Demo/placeholder support number — replace before launch.
+const SUPPORT_PHONE_DISPLAY="(407) 555-0147";
+const SUPPORT_PHONE_LINK="tel:+14075550147";
+
+const TOPICS=[
+  {t:"Booking & pricing questions",a:"All prices shown are fixed — what you see at booking is what you pay, plus a surge fee only if you choose ASAP scheduling. There are no hidden fees or hourly surprises."},
+  {t:"Cancel or reschedule a job",a:"You can cancel a job any time before a pro accepts it for free from the Bookings tab. Once a pro is en route, cancellations may include a small fee to compensate their travel time."},
+  {t:"Report an issue with a pro",a:"If you experience a problem with a pro or a completed job, contact Haven Support. Our support team can review the booking details, messages, photos, and receipt and help determine the next steps."},
+  {t:"Refunds & billing",a:"If a job wasn't completed to your satisfaction, contact support within 48 hours of completion and we'll review it for a partial or full refund."},
+  {t:"Trust & safety",a:"Haven verifies each pro's identity and background-check status before they can accept jobs. Additional credentials, such as insurance or professional licenses, are shown on the pro's profile when verified. If you're ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},
+];
+
+// Maintenance suggestion rules — keyed by TASKS id, used to generate simple
+// simulated reminders from a customer's completed service history.
+const MAINT_RULES={
+  46:{months:6, msg:"Your gutters may be due for cleaning again soon."},
+  45:{months:3, msg:"Time to check your HVAC filter — it's been a few months."},
+  51:{days:90,  msg:"Your pest control treatment may need a follow-up soon."},
+  47:{months:12,msg:"Your driveway or patio may be due for a refresh."},
+};
+
+// Mock saved appliances for My Home — placeholders until real records exist.
+const APPLIANCES=[
+  {key:"fridge", label:"Refrigerator", e:"🧊", relatedIds:[50]},
+  {key:"laundry",label:"Washer/Dryer", e:"🌀", relatedIds:[49]},
+  {key:"heater", label:"Water Heater", e:"🚿", relatedIds:[]},
+  {key:"hvac",   label:"HVAC System",  e:"❄️", relatedIds:[45,53]},
+];
+
+// My Home edit-screen dropdown options
+const HOME_TYPES=["Single-family home","Townhouse","Condo","Apartment","Duplex","Mobile/manufactured home","Other"];
+const YEAR_OPTIONS=(()=>{
+  const cy=new Date().getFullYear();
+  const years=[]; for(let y=cy;y>=1900;y--) years.push(String(y));
+  return [...years,"Before 1900","Not sure"];
+})();
+const BEDROOM_OPTIONS=["Studio","1","2","3","4","5","6+"];
+const BATHROOM_OPTIONS=["1","1.5","2","2.5","3","3.5","4","4.5","5+"];
+const formatLayout=h=>`${h.beds==="Studio"?"Studio":h.beds+" bed"} / ${h.baths} bath`;
+
+// Keyword map for the "Describe the problem" diagnosis flow — simulates what a
+// real NLP/AI matching backend would do. Matching is score-based: every keyword
+// phrase found in the description adds to that entry's score, so more specific
+// descriptions produce higher-confidence, less-generic matches.
+const KEYWORD_MAP=[
+  {kws:["disposal","garbage disposal","humming","not spinning","jammed disposal","disposal stuck","disposal won't turn"],taskId:52,issue:"Jammed or stuck garbage disposal",conf:"High"},
+  {kws:["leak","leaking","drip","dripping","under sink","p-trap","water under","puddle","wet under cabinet","pipe leak","leaky pipe","water stain","dripping pipe"],taskId:19,issue:"Leaking pipe or fitting",conf:"High"},
+  {kws:["clogged","clog","won't drain","not draining","backed up","slow drain","drain is slow","water won't go down"],taskId:19,issue:"Clogged or slow drain",conf:"Medium"},
+  {kws:["toilet","running toilet","won't flush","toilet won't stop","toilet keeps running","toilet leaking","weak flush","clogged toilet"],taskId:16,issue:"Toilet malfunction",conf:"High"},
+  {kws:["faucet","dripping faucet","faucet leaking","faucet loose","low water pressure faucet","faucet handle broken"],taskId:15,issue:"Faucet needs replacing",conf:"High"},
+  {kws:["dishwasher","dishwasher not draining","dishwasher leaking","dishwasher won't start","dishwasher installation"],taskId:17,issue:"Dishwasher issue",conf:"High"},
+  {kws:["ac ","air conditioning","not cooling","no ac","a/c","ac not working","ac blowing warm","central air"],taskId:53,issue:"AC not cooling properly",conf:"High"},
+  {kws:["heater","furnace","not heating","no heat","heat not working","thermostat not working","hvac","cold air blowing"],taskId:53,issue:"Heating system not working",conf:"High"},
+  {kws:["outlet","won't turn on","power out","tripping breaker","sparking","flicker","flickering","dead outlet","no power in room","breaker keeps tripping","outlet not working"],taskId:54,issue:"Electrical fault",conf:"High"},
+  {kws:["install outlet","new outlet","add an outlet","switch installation"],taskId:22,issue:"New outlet or switch install",conf:"High"},
+  {kws:["fan","ceiling fan","fan wobbling","fan noisy","fan not spinning","fan making noise"],taskId:21,issue:"Ceiling fan issue or install",conf:"High"},
+  {kws:["light","bulb","fixture","light won't turn on","light fixture broken","flickering light","light socket"],taskId:20,issue:"Light fixture issue",conf:"Medium"},
+  {kws:["smart lock","keypad lock","electronic lock","lock won't connect","keyless entry"],taskId:11,issue:"Smart lock install or issue",conf:"High"},
+  {kws:["doorbell","ring camera","video doorbell","doorbell camera"],taskId:12,issue:"Doorbell camera install or issue",conf:"High"},
+  {kws:["thermostat","nest","smart thermostat","ecobee"],taskId:13,issue:"Smart thermostat install or issue",conf:"High"},
+  {kws:["smart bulb","smart lighting","hue lights","app controlled lights"],taskId:14,issue:"Smart lighting install",conf:"High"},
+  {kws:["ev charger","car charger","tesla charger","electric vehicle outlet"],taskId:23,issue:"EV charger outlet install",conf:"High"},
+  {kws:["tv","mount","television","tv falling","tv bracket","hang my tv","wall mount tv"],taskId:6,issue:"TV needs mounting",conf:"High"},
+  {kws:["hang a picture","hang artwork","hang a frame","picture frame","mirror on wall"],taskId:7,issue:"Artwork or mirror needs hanging",conf:"High"},
+  {kws:["curtains","blinds","curtain rod","hang curtains"],taskId:8,issue:"Curtains or blinds need installing",conf:"High"},
+  {kws:["shelf","shelving","floating shelf","bookshelf install"],taskId:9,issue:"Shelving needs installing",conf:"High"},
+  {kws:["door handle","door knob","door hinge","door hardware","sticky door","door won't close","door won't latch"],taskId:10,issue:"Door hardware issue",conf:"Medium"},
+  {kws:["furniture","assemble","ikea","desk","build a bed","build furniture","flat pack","build my desk"],taskId:1,issue:"Furniture needs assembly",conf:"High"},
+  {kws:["bed frame","assemble bed","build my bed","new bed setup"],taskId:2,issue:"Bed needs assembly",conf:"High"},
+  {kws:["home gym","gym equipment","weight rack","exercise equipment assembly"],taskId:3,issue:"Home gym equipment needs assembly",conf:"High"},
+  {kws:["sofa","couch","assemble sofa","build my couch"],taskId:4,issue:"Sofa needs assembly",conf:"High"},
+  {kws:["paint","wall color","chip","chipped paint","repaint","faded paint","paint my room","need a paint job"],taskId:24,issue:"Wall paint touch-up or repaint",conf:"Medium"},
+  {kws:["accent wall","feature wall"],taskId:25,issue:"Accent wall paint",conf:"High"},
+  {kws:["paint trim","paint doors","baseboards need paint"],taskId:26,issue:"Trim/door paint touch-up",conf:"High"},
+  {kws:["drywall","hole in wall","crack in wall","dent in wall","wall damage"],taskId:44,issue:"Drywall damage",conf:"High"},
+  {kws:["tile","tile floor","cracked tile","tile installation"],taskId:27,issue:"Tile flooring work",conf:"High"},
+  {kws:["laminate","vinyl floor","new flooring","floor installation"],taskId:28,issue:"Laminate/vinyl flooring work",conf:"High"},
+  {kws:["squeaky floor","floor creaks","floor squeaks"],taskId:29,issue:"Squeaky floorboard",conf:"High"},
+  {kws:["deep clean","house is a mess","need a cleaning","clean my house","clean my apartment"],taskId:30,issue:"Deep home cleaning",conf:"Medium"},
+  {kws:["move out clean","moving out cleaning","end of lease clean"],taskId:31,issue:"Move-out cleaning",conf:"High"},
+  {kws:["windows are dirty","clean windows inside","window cleaning inside"],taskId:32,issue:"Interior window cleaning",conf:"High"},
+  {kws:["carpet stain","dirty carpet","upholstery stain","carpet cleaning","couch cleaning"],taskId:33,issue:"Carpet or upholstery cleaning",conf:"High"},
+  {kws:["lawn","grass","mow","mowing","grass is long","overgrown lawn"],taskId:34,issue:"Lawn needs mowing",conf:"High"},
+  {kws:["hedge","bushes","trim bushes","overgrown hedges"],taskId:35,issue:"Hedges need trimming",conf:"High"},
+  {kws:["leaves","leaf pile","fall cleanup","raking leaves"],taskId:36,issue:"Leaf removal",conf:"High"},
+  {kws:["garden bed","weeds","flower bed","overgrown garden"],taskId:37,issue:"Garden bed cleanup",conf:"High"},
+  {kws:["move a couch","move furniture","help me move this","move a heavy item"],taskId:38,issue:"Single item needs moving",conf:"High"},
+  {kws:["moving truck","load my truck","help unloading","moving day"],taskId:39,issue:"Moving truck help",conf:"High"},
+  {kws:["junk","haul away","old furniture removal","get rid of","junk removal"],taskId:40,issue:"Junk needs hauling away",conf:"High"},
+  {kws:["fence","broken fence","fence panel","gate broken"],taskId:42,issue:"Fence damage",conf:"High"},
+  {kws:["garage door","garage door won't open","garage door stuck","garage opener broken"],taskId:43,issue:"Garage door malfunction",conf:"High"},
+  {kws:["gutter","gutters full","gutters clogged","overflowing gutter"],taskId:46,issue:"Gutters need cleaning",conf:"High"},
+  {kws:["pressure wash","driveway dirty","stained patio","power wash"],taskId:47,issue:"Driveway/patio needs pressure washing",conf:"High"},
+  {kws:["windows dirty outside","exterior window cleaning","outside windows"],taskId:48,issue:"Exterior window cleaning",conf:"High"},
+  {kws:["washer","dryer","washing machine install","laundry machine"],taskId:49,issue:"Washer/dryer installation",conf:"High"},
+  {kws:["fridge","refrigerator","new fridge install"],taskId:50,issue:"Refrigerator installation",conf:"High"},
+  {kws:["bug","bugs","ant","ants","roach","roaches","pest","spider","spiders","mice","rodent","infestation","termites"],taskId:51,issue:"Pest infestation",conf:"High"},
+  {kws:["hvac filter","air filter","furnace filter"],taskId:45,issue:"HVAC filter needs replacing",conf:"High"},
+  {kws:["ev outlet"],taskId:23,issue:"EV charger outlet",conf:"High"},
+  {kws:["smell","odor","stuck","broken","squeak","noise","weird sound","not sure what's wrong","something's off"],taskId:41,issue:"General issue needing inspection",conf:"Low"},
+];
+
+// Score-based match: count how many keyword phrases hit, pick the highest score.
+// More overlapping keywords = a more specific description = higher confidence.
+function matchDiagnosis(text){
+  const t=text.toLowerCase();
+  let best=null,bestScore=0;
+  for(const entry of KEYWORD_MAP){
+    const score=entry.kws.reduce((n,kw)=>n+(t.includes(kw)?1:0),0);
+    if(score>bestScore){best=entry;bestScore=score;}
+  }
+  if(!best) return null;
+  const conf = bestScore>=2 ? "High" : best.conf;
+  return {...best,conf};
+}
+const SF=["en_route","arrived","in_progress","complete"];
+const SI={
+  en_route:   {label:"Pro is on the way",  sub:"is heading to you",     em:"🚗"},
+  arrived:    {label:"Pro has arrived",    sub:"is at your door",       em:"📍"},
+  in_progress:{label:"Job in Progress",   sub:"is working on your job", em:"🔨"},
+  complete:   {label:"Job Complete! 🎉",  sub:"— tap below to review",  em:"⭐"},
+};
+const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
+const SMSG=[
+  {id:1,f:"pro",m:"Hey! Just accepted your job — heading over shortly 👋",t:"2:18 PM"},
+  {id:2,f:"cu", m:"Great! Everything is ready for you.",                   t:"2:19 PM"},
+  {id:3,f:"pro",m:"Perfect. On my way now!",                               t:"2:21 PM"},
+];
+const PRO_REPLIES=["Got it! 👍","On it!","Thanks for the heads up!","Almost there!","Sounds good!","Will do!"];
+const PC=['#BFDBFE','#BBF7D0','#FDE68A','#FECACA','#DDD6FE'];
+const PE=['📺','🛋️','🔧','🖼️','🏠'];
+
+const PersonIcon=({col=AM,sz=22})=>(
+  <svg width={sz} height={sz} viewBox="0 0 24 24" fill={col} style={{display:"block"}}>
+    <path d="M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z"/>
+  </svg>
+);
+
+const CSS=`
+.sc::-webkit-scrollbar{display:none}
+.sc{-ms-overflow-style:none;scrollbar-width:none}
+*{box-sizing:border-box}
+button,input,textarea{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+@keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.93)}}
+@keyframes bounce{0%{transform:translateY(0)}100%{transform:translateY(-5px)}}
+`;
+
+// v0.13 — registry of every valid scr value. goTo() refuses navigation to
+// anything not listed here (console-error, no crash). Adding a new screen
+// requires adding its name here AND a render branch in the switch below.
+const SCREENS = new Set([
+  "home","browse","diagnose","emergency","task","custom","posted","tracking",
+  "messages","rating","payment","editProfile","myhome","receiptList","receipt",
+  "editHome","proProfile","addresses","notifications","help","applianceDetail",
+]);
+
+// v0.13 — Fix 3: catches render errors that would otherwise produce a silent
+// blank screen. Only catches render-phase errors (React limitation) — errors
+// thrown inside event handlers still go to the console, which is why goTo()
+// logs-and-refuses on an unknown screen rather than throwing.
+class ErrorBoundary extends React.Component{
+  constructor(props){ super(props); this.state={error:null}; }
+  static getDerivedStateFromError(error){ return {error}; }
+  render(){
+    if(this.state.error){
+      return (
+        <div style={{minHeight:"100vh",background:"#F5F2ED",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"}}>
+          <div style={{maxWidth:420,width:"100%",background:"#FFFFFF",borderRadius:20,padding:24,boxShadow:"0 8px 30px rgba(28,43,58,.15)"}}>
+            <div style={{fontSize:32,marginBottom:12}}>⚠️</div>
+            <div style={{fontWeight:800,fontSize:18,color:"#1C2B3A",marginBottom:8}}>Something went wrong</div>
+            <div style={{fontSize:13,color:"#5A6B78",marginBottom:12,lineHeight:1.5}}>{String(this.state.error?.message||this.state.error)}</div>
+            {this.state.error?.stack&&(
+              <pre style={{fontSize:10,color:"#9AAAB6",background:"#F5F2ED",borderRadius:10,padding:12,marginBottom:16,maxHeight:160,overflow:"auto",whiteSpace:"pre-wrap"}}>{this.state.error.stack}</pre>
+            )}
+            <button onClick={()=>window.location.reload()} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"#F59E0B",color:"#fff",fontWeight:800,fontSize:15,cursor:"pointer"}}>Reload</button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
+
+// v0.13 — single factory for job objects. All 21 fields declared with
+// defaults so nothing is ever missing at creation (receipts render directly
+// from job data — a missing field breaks a receipt silently). If a feature
+// needs a new job field, add it here first, then use it via postJob/updateJob.
+function makeJob({
+  taskId=null, custom=null, tpId=null, photos=[], desc="", status="posted",
+  pro=null, msgs=[], surge=0, justAccepted=false, emergency=false, emergencyFee=0,
+  addressText="—", paymentBrand="Card", paymentLast4="----",
+  completedAt=null, rated=false, stars=0, reviewTxt="", hireAgain=null,
+}={}){
+  return {
+    id:Date.now(), // known limitation: two jobs in the same millisecond would collide — impossible via UI, fix when a backend exists
+    taskId, custom, tpId, photos, desc, status, pro, msgs, surge, justAccepted,
+    emergency, emergencyFee, addressText, paymentBrand, paymentLast4,
+    completedAt, rated, stars, reviewTxt, hireAgain,
+  };
+}
+
+function App(){
+  const [tid,setTid]       = useState(null);
+  const [tpid,setTpid]     = useState(null);
+  const [photos,setPhotos] = useState([]);
+  const [desc,setDesc]     = useState("");
+  const [emergency,setEmergency] = useState(false);
+  const [ctitle,setCtitle] = useState("");
+  const [ccat,setCcat]     = useState("Repair");
+  const [cprice,setCprice] = useState("");
+  const [jobs,setJobs]     = useState([]);
+  const [vjid,setVjid]     = useState(null);
+  const [scr,setScr]       = useState("home");
+  const [tab,setTab]       = useState("home");
+  const [cat,setCat]       = useState("All");
+  const [q,setQ]           = useState("");
+  const [bFilter,setBFilter]= useState("all");
+  const [stars,setStars]       = useState(0);
+  const [reviewTxt,setReviewTxt]= useState("");
+  const [hireAgain,setHireAgain]= useState(null);
+  const [minput,setMinput] = useState("");
+  const [typing,setTyping] = useState(false);
+  const [notifPrefs,setNotifPrefs] = useState({push:true,jobUpdates:true,messages:true,promos:false,email:true});
+  const [catGroup,setCatGroup] = useState(null);   // {cats:[...], label} or null
+  const [emergencyFlag,setEmergencyFlag] = useState(false);
+  const [diagInput,setDiagInput] = useState("");
+  const [diagResult,setDiagResult] = useState(null);
+  const [navFrom,setNavFrom] = useState({}); // v0.13 — per-screen origin {scr,tab}, replaces cameFrom/proProfileFrom/receiptFrom/helpFrom
+  // Profile
+  const [profile,setProfile]     = useState({name:"Jane Doe",bio:"",photo:null});
+  const [draftName,setDraftName] = useState("");
+  const [draftBio,setDraftBio]   = useState("");
+  const [draftPhoto,setDraftPhoto]= useState(null);
+  // Payment methods
+  const [cards,setCards] = useState([
+    {id:1,brand:"Visa",last4:"4242",exp:"08/28",isDefault:true},
+    {id:2,brand:"Mastercard",last4:"8821",exp:"02/27",isDefault:false},
+  ]);
+  const [expandedCard,setExpandedCard]=useState(null);
+  const [addingCard,setAddingCard]=useState(false);
+  const [newCardNum,setNewCardNum]=useState("");
+  const [newCardExp,setNewCardExp]=useState("");
+  const [newCardCvv,setNewCardCvv]=useState("");
+  const [newCardAddr,setNewCardAddr]=useState("");
+  const [newCardCity,setNewCardCity]=useState("");
+  const [newCardState,setNewCardState]=useState("");
+  const [newCardZip,setNewCardZip]=useState("");
+  // Addresses
+  const [addresses,setAddresses]=useState([
+    {id:1,label:"Home",text:"123 Market Street, Apt 4B, San Francisco, CA 94103"},
+    {id:2,label:"Work",text:"500 Folsom Street, San Francisco, CA 94105"},
+  ]);
+  const [expandedAddr,setExpandedAddr]=useState(null);
+  const [editingAddrId,setEditingAddrId]=useState(null);
+  const [draftAddrLabel,setDraftAddrLabel]=useState("");
+  const [draftAddrText,setDraftAddrText]=useState("");
+  const [addingAddr,setAddingAddr]=useState(false);
+  // Help & support
+  const [showSupportChat,setShowSupportChat]=useState(false);
+  const [supportMsgs,setSupportMsgs]=useState([{id:1,f:"agent",m:"Hi! I'm a support specialist — what can I help with today?",t:"Just now"}]);
+  const [supportInput,setSupportInput]=useState("");
+  const [supportTyping,setSupportTyping]=useState(false);
+  const [openTopicIdx,setOpenTopicIdx]=useState(null);
+  // My Home
+  const [home,setHome]=useState({address:"123 Market Street, Apt 4B, San Francisco, CA 94103",type:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"});
+  const [draftHome,setDraftHome]=useState(home);
+  // Appliances — customer-entered only; Haven does not verify this data
+  const [appliances,setAppliances]=useState({}); // keyed by APPLIANCES[].key -> {type,brand,model,serial,installDate,warrantyExp,notes}
+  const [applianceEditKey,setApplianceEditKey]=useState(null);
+  const [draftAppliance,setDraftAppliance]=useState({type:"",brand:"",model:"",serial:"",installDate:"",warrantyExp:"",notes:""});
+  // Pro profile
+  const [proProfileId,setProProfileId]=useState(null);
+  const [proProfileCtx,setProProfileCtx]=useState("view"); // "tracking" | "posted" | "view"
+  const msgEnd = useRef(null);
+
+  const tp          = ALL_TIME_PREFS.find(t=>t.id===tpid);
+  const surge       = tp?.surge||0;
+  const browsedTask = TASKS.find(t=>t.id===tid);
+  const customTask  = ctitle?{id:null,e:"🔧",n:ctitle,p:parseInt(cprice)||0,t:"Varies",c:ccat}:null;
+  const currentTask = browsedTask||customTask;
+  const total       = currentTask?currentTask.p+surge+(emergency?EMERGENCY_FEE:0):0;
+  const items       = TASKS.filter(t=>{
+    const passCat = catGroup ? catGroup.cats.includes(t.c) : (cat==="All"||t.c===cat);
+    const passQ   = !q||t.n.toLowerCase().includes(q.toLowerCase());
+    return passCat&&passQ;
+  });
+
+  const vj    = jobs.find(j=>j.id===vjid);
+  const vjTask= vj?(vj.taskId?TASKS.find(t=>t.id===vj.taskId):vj.custom?{e:"🔧",n:vj.custom.title,p:vj.custom.price,t:"Varies"}:null):null;
+  const vjTp  = vj?ALL_TIME_PREFS.find(t=>t.id===vj.tpId):null;
+  const vjPro = vj?.pro||PROS[0];
+  const vjPname=vjPro.n.split(" ")[0];
+  const vjTotal=vjTask?vjTask.p+(vj?.surge||0)+(vj?.emergencyFee||0):0;
+  const vjSIdx= vj?SF.indexOf(vj.status):-1;
+  const vjMsgs= vj?.msgs||[];
+  const proProfilePro = PROS.find(p=>p.i===proProfileId) || PROS[0];
+  const defaultAddress = addresses.find(a=>a.label==="Home") || addresses[0];
+  const defaultCard = cards.find(c=>c.isDefault) || cards[0];
+
+  const allJobs   = jobs.filter(j=>j.status!=="cancelled").slice().reverse();
+  const shownJobs = allJobs.filter(j=>{
+    if(bFilter==="active") return j.status!=="complete";
+    if(bFilter==="done")   return j.status==="complete";
+    return true;
+  });
+  const activeCount= allJobs.filter(j=>j.status!=="complete").length;
+  const doneCount  = allJobs.filter(j=>j.status==="complete").length;
+  const hasActive  = activeCount>0;
+
+  useEffect(()=>{
+    if(scr==="messages") setTimeout(()=>msgEnd.current?.scrollIntoView({behavior:"smooth"}),60);
+  },[vjMsgs,scr,typing]);
+
+  const updateJob  =(id,u)=>setJobs(p=>p.map(j=>j.id===id?{...j,...u}:j));
+  const addMsg     =(id,m)=>setJobs(p=>p.map(j=>j.id===id?{...j,msgs:[...j.msgs,m]}:j));
+  // v0.13 — the only 3 places setScr may appear: goTo, backFrom, goTab.
+  const goTo=(screen)=>{
+    if(!SCREENS.has(screen)){console.error(`goTo: unknown screen "${screen}" — navigation blocked. Add it to SCREENS first.`);return;}
+    setNavFrom(f=>({...f,[screen]:{scr,tab}})); // origin recorded automatically
+    setScr(screen);
+  };
+  const backFrom=(screen,fallback={scr:"home",tab:"home"})=>{
+    const o=navFrom[screen];
+    const dest=(o&&SCREENS.has(o.scr))?o:fallback;
+    setScr(dest.scr);
+    if(dest.scr==="home")setTab(dest.tab||"home");
+  };
+  const goTab      =t=>{if(t==="home")setQ("");setScr("home");setTab(t);};
+  const goHome     =()=>goTab("home");
+  const goBookings =()=>goTab("bookings");
+  const goProfile  =()=>goTab("profile");
+  const openTask   =(id)=>{setTid(id);setTpid(2);setDesc("");setEmergency(false);goTo("task");};
+  const photoInputRef = useRef(null);
+  const addPhoto   =()=>{ photoInputRef.current?.click(); };
+  const handlePhotoFiles=(e)=>{
+    const files=Array.from(e.target.files||[]).slice(0,4-photos.length);
+    files.forEach(file=>{
+      const reader=new FileReader();
+      reader.onload=()=>setPhotos(p=>p.length<4?[...p,reader.result]:p);
+      reader.readAsDataURL(file);
+    });
+    e.target.value=""; // allow re-selecting the same file
+  };
+  const remPhoto   =i=>setPhotos(p=>p.filter((_,x)=>x!==i));
+
+  // Profile edit
+  const profilePhotoInputRef = useRef(null);
+  const openEditProfile=()=>{setDraftName(profile.name);setDraftBio(profile.bio);setDraftPhoto(profile.photo);goTo("editProfile");};
+  const handleProfilePhoto=(e)=>{
+    const file=e.target.files?.[0]; if(!file) return;
+    const reader=new FileReader();
+    reader.onload=()=>setDraftPhoto(reader.result);
+    reader.readAsDataURL(file);
+    e.target.value="";
+  };
+  const saveProfile=()=>{setProfile({name:draftName.trim()||"Jane Doe",bio:draftBio.trim(),photo:draftPhoto});goProfile();};
+
+  // My Home
+  const openMyHome=()=>goTo("myhome");
+  const openEditHome=()=>{setDraftHome(home);goTo("editHome");};
+  const saveHome=()=>{setHome(draftHome);goTo("myhome");};
+  const openApplianceEdit=(key,defaultType)=>{
+    setApplianceEditKey(key);
+    setDraftAppliance(appliances[key]||{type:defaultType,brand:"",model:"",serial:"",installDate:"",warrantyExp:"",notes:""});
+    goTo("applianceDetail");
+  };
+  const saveAppliance=()=>{
+    setAppliances(a=>({...a,[applianceEditKey]:draftAppliance}));
+    goTo("myhome");
+  };
+  const hireAgainJob=(taskId)=>{ if(taskId) openTask(taskId); };
+  const openReceipt=(jobId)=>{ setVjid(jobId); goTo("receipt"); };
+  const openProProfile=(pro,ctx)=>{setProProfileId(pro.i);setProProfileCtx(ctx);goTo("proProfile");};
+  const openHelp=()=>{setShowSupportChat(false);setOpenTopicIdx(null);goTo("help");};
+
+  // Payment methods
+  const setCardDefault=id=>{setCards(cs=>cs.map(c=>({...c,isDefault:c.id===id})));setExpandedCard(null);};
+  const removeCard=id=>{setCards(cs=>cs.filter(c=>c.id!==id));setExpandedCard(null);};
+  const addCard=()=>{
+    if(newCardNum.trim().length<4)return;
+    const last4=newCardNum.trim().slice(-4);
+    // Only brand, last 4, expiry, and default status are ever persisted —
+    // CVV and billing address are used for this prototype form only and discarded.
+    setCards(cs=>[...cs,{id:Date.now(),brand:"Card",last4,exp:newCardExp.trim()||"—",isDefault:cs.length===0}]);
+    setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");setAddingCard(false);
+  };
+
+  // Addresses
+  const startEditAddr=a=>{setEditingAddrId(a.id);setDraftAddrLabel(a.label);setDraftAddrText(a.text);setExpandedAddr(null);};
+  const saveAddrEdit=()=>{
+    setAddresses(as=>as.map(a=>a.id===editingAddrId?{...a,label:draftAddrLabel.trim()||a.label,text:draftAddrText.trim()||a.text}:a));
+    setEditingAddrId(null);
+  };
+  const removeAddr=id=>{setAddresses(as=>as.filter(a=>a.id!==id));setExpandedAddr(null);};
+  const addAddress=()=>{
+    if(!draftAddrText.trim())return;
+    setAddresses(as=>[...as,{id:Date.now(),label:draftAddrLabel.trim()||"Address",text:draftAddrText.trim()}]);
+    setDraftAddrLabel("");setDraftAddrText("");setAddingAddr(false);
+  };
+
+  // Support chat
+  const sendSupportMsg=()=>{
+    if(!supportInput.trim())return;
+    const txt=supportInput.trim();
+    setSupportMsgs(p=>[...p,{id:Date.now(),f:"me",m:txt,t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}]);
+    setSupportInput("");setSupportTyping(true);
+    setTimeout(()=>{
+      setSupportTyping(false);
+      setSupportMsgs(p=>[...p,{id:Date.now()+1,f:"agent",m:"Thanks for the details — a specialist will follow up shortly. Anything else I can help with in the meantime?",t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}]);
+    },1800);
+  };
+
+  const openBrowse=(cats=null,label="",emergency=false)=>{
+    setCatGroup(cats?{cats,label}:null);
+    setCat("All");setEmergencyFlag(emergency);goTo("browse");
+  };
+  const clearGroup=()=>{setCatGroup(null);setEmergencyFlag(false);};
+  const openDiagnose=()=>{setDiagInput("");setDiagResult(null);goTo("diagnose");};
+  const runDiagnosis=()=>{
+    if(!diagInput.trim())return;
+    const hit=matchDiagnosis(diagInput);
+    const match=hit?TASKS.find(t=>t.id===hit.taskId):TASKS.find(t=>t.id===41);
+    setDiagResult({task:match,issue:hit?hit.issue:"Not sure from the description — a general repair pro can take a look",conf:hit?hit.conf:"Low"});
+  };
+  const bookDiagnosis=()=>{
+    if(!diagResult)return;
+    setTid(diagResult.task.id);setTpid(2);setDesc(diagInput);setEmergency(false);goTo("task");
+  };
+
+  const postJob=()=>{
+    if(!currentTask||!tpid)return;
+    const nj=makeJob({
+      taskId:tid,
+      custom:tid?null:{title:ctitle,cat:ccat,price:parseInt(cprice)||0},
+      tpId:tpid,photos:[...photos],desc,surge,
+      emergency,emergencyFee:emergency?EMERGENCY_FEE:0,
+      addressText:defaultAddress?.text||"—",paymentBrand:defaultCard?.brand||"Card",paymentLast4:defaultCard?.last4||"----",
+    });
+    setJobs(p=>[...p,nj]);setVjid(nj.id);
+    setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
+    goTo("posted");
+  };
+
+  const startEmergency=(opt)=>{
+    setEmergency(true);setTpid(101);setDesc(opt.desc);setPhotos([]);
+    if(opt.taskId){
+      setTid(opt.taskId);setCtitle("");setCcat("Repair");setCprice("");goTo("task");
+    }else{
+      setTid(null);setCtitle(opt.customTitle);setCcat(opt.ccat);setCprice(opt.customPrice);goTo("custom");
+    }
+  };
+
+  const proAccepts=()=>{
+    const p=PROS[Math.floor(Math.random()*PROS.length)];
+    updateJob(vjid,{pro:p,status:"en_route",msgs:SMSG,justAccepted:true});
+    goTo("tracking");
+    setTimeout(()=>updateJob(vjid,{justAccepted:false}),3500);
+  };
+
+  const advance=()=>{
+    if(!vj)return;
+    const i=SF.indexOf(vj.status);
+    if(i<SF.length-1){
+      const next=SF[i+1];
+      updateJob(vjid, next==="complete" ? {status:next,completedAt:Date.now()} : {status:next});
+    }
+  };
+
+  const sendMsg=()=>{
+    if(!minput.trim()||vj?.status==="complete")return;
+    const txt=minput.trim();
+    addMsg(vjid,{id:Date.now(),f:"cu",m:txt,t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});
+    setMinput("");setTyping(true);
+    setTimeout(()=>{setTyping(false);addMsg(vjid,{id:Date.now()+1,f:"pro",m:PRO_REPLIES[Math.floor(Math.random()*PRO_REPLIES.length)],t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});},2000);
+  };
+
+  const openRating=()=>{setStars(0);setReviewTxt("");setHireAgain(null);goTo("rating");};
+  const submitRating=()=>{updateJob(vjid,{rated:true,stars,reviewTxt,hireAgain});setStars(0);setReviewTxt("");setHireAgain(null);goBookings();};
+
+  // ── STATUS BAR ─────────────────────────────────────────────────────────────
+  const darkHdr=["task","custom","diagnose","emergency"].includes(scr)||(scr==="home"&&tab==="home");
+  const statusBar=()=>(
+    <div style={{background:darkHdr?N:W,padding:"14px 24px 8px",display:"flex",justifyContent:"space-between",flexShrink:0}}>
+      <span style={{fontWeight:700,fontSize:15,color:darkHdr?W:TX}}>9:41</span>
+      <span style={{fontSize:11,color:darkHdr?"rgba(255,255,255,.35)":TM}}>●●●  ▶▶  ▓▓</span>
+    </div>
+  );
+
+  // ── BOTTOM NAV (fixed alignment: every icon in a matched 24x24 box) ────────
+  // Single shared bottom-tab-bar renderer — one fixed style definition, no
+  // per-screen variants. The active-tab underline and the Bookings badge dot
+  // are ALWAYS mounted (never conditionally added/removed from the DOM) —
+  // only their color/opacity toggles. This was the actual cause of the bar's
+  // height fluctuating: when no tab was "active" (every non-tab-root screen),
+  // the underline element used to be omitted entirely, making the bar a few
+  // pixels shorter there than on Home/Bookings/Profile. Each button is also
+  // now a fixed flex:1 share (not content-sized), so bold-vs-regular label
+  // text never changes a button's width either.
+  const bottomNav=()=>(
+    <div style={{background:W,borderTop:`1px solid ${BD}`,paddingTop:10,paddingBottom:20,display:"flex",flexShrink:0}}>
+      {[["home","🏠","Home"],["bookings","📋","Bookings"],["profile",null,"Profile"]].map(([id,ic,lb])=>{
+        const a=tab===id&&scr==="home";
+        return(
+          <button key={id} onClick={()=>goTab(id)} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:0}}>
+            <div style={{width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
+              {id==="profile"?<PersonIcon col={AM} sz={22}/>:<span style={{fontSize:21,lineHeight:1}}>{ic}</span>}
+              <div style={{position:"absolute",top:-2,right:-2,width:8,height:8,borderRadius:4,background:AM,opacity:(id==="bookings"&&hasActive)?1:0}}/>
+            </div>
+            <span style={{fontSize:11,fontWeight:a?700:400,color:a?N:TM}}>{lb}</span>
+            <div style={{width:16,height:3,borderRadius:2,background:a?N:"transparent",marginTop:1}}/>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  // ── HOME (simplified dashboard) ─────────────────────────────────────────────
+  // ── EMERGENCY ──────────────────────────────────────────────────────────────
+  const emergencyScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
+        <div style={{background:N,padding:"14px 20px 32px"}}>
+          <button onClick={goHome} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:18,display:"inline-flex",alignItems:"center",gap:6}}>← Back</button>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:40,marginBottom:10}}>🚨</div>
+            <div style={{color:W,fontWeight:800,fontSize:20,marginBottom:6}}>What's the emergency?</div>
+            <div style={{color:"rgba(255,255,255,.6)",fontSize:13}}>We'll prioritize nearby available pros.</div>
+          </div>
+        </div>
+        <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,padding:"20px 20px 16px",position:"relative",zIndex:1}}>
+          <div style={{background:"#FFF7ED",border:"1px solid #FDE9CC",borderRadius:14,padding:"12px 14px",marginBottom:16,textAlign:"center"}}>
+            <span style={{fontSize:12,color:"#92400E",fontWeight:600}}>Emergency priority fee: +${EMERGENCY_FEE}</span>
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            {EMERGENCY_OPTIONS.map(opt=>(
+              <div key={opt.key} onClick={()=>startEmergency(opt)} style={{background:W,borderRadius:16,padding:"15px 16px",display:"flex",alignItems:"center",gap:14,cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.06)"}}>
+                <div style={{width:42,height:42,borderRadius:21,background:"#FFF1EE",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{opt.e}</div>
+                <span style={{flex:1,fontWeight:600,fontSize:14,color:TX}}>{opt.label}</span>
+                <span style={{color:TM,fontSize:18}}>›</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── HOME (simplified dashboard) ─────────────────────────────────────────────
+  const homeScreen=()=>{
+    const popular = TASKS.filter(t=>t.pop);
+    return(
+    <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
+      <div style={{background:N,padding:"8px 20px 30px"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+          <div>
+            <div style={{color:AM,fontSize:11,fontWeight:800,letterSpacing:2.5,marginBottom:6}}>HAVEN</div>
+            <div style={{color:"rgba(255,255,255,.5)",fontSize:11,marginBottom:2}}>📍 San Francisco, CA</div>
+            <div style={{color:W,fontSize:22,fontWeight:800,lineHeight:1.25}}>What do you<br/>need done?</div>
+          </div>
+          <button onClick={goProfile} style={{width:40,height:40,borderRadius:20,background:AM,display:"flex",alignItems:"center",justifyContent:"center",border:"none",cursor:"pointer",overflow:"hidden"}}>
+            {profile.photo?<img src={profile.photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:<PersonIcon col={W} sz={22}/>}
+          </button>
+        </div>
+        <div style={{display:"flex",gap:16,marginBottom:16}}>
+          {["✓ Fixed pricing","✓ Background checked","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
+        </div>
+        <div onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+          <span style={{fontSize:16,color:TM}}>🔍</span>
+          <input value={q} onChange={e=>setQ(e.target.value)} onFocus={()=>openBrowse(null,"")} placeholder="Search 50+ services..." style={{border:"none",flex:1,fontSize:15,color:TX,background:"transparent",outline:"none"}} readOnly/>
+        </div>
+      </div>
+
+      <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,position:"relative",zIndex:1,padding:"20px 20px 24px"}}>
+
+        {/* Describe the problem */}
+        <div onClick={openDiagnose} style={{background:W,borderRadius:20,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer",display:"flex",gap:14,alignItems:"center"}}>
+          <div style={{width:48,height:48,borderRadius:24,background:"#EEF2FF",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>🔍</div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:15,color:TX}}>What's going on at home?</div>
+            <div style={{fontSize:12,color:TS,marginTop:2}}>Describe it — we'll find the right pro and price</div>
+          </div>
+          <span style={{color:TM,fontSize:20}}>›</span>
+        </div>
+
+        {/* Emergency + Custom Job — compact side-by-side pair */}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+          <div onClick={()=>goTo("emergency")} style={{background:"#FFF1EE",border:"1.5px solid #FFD4C7",borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
+            <div style={{fontSize:22,marginBottom:6}}>🚨</div>
+            <div style={{fontWeight:700,fontSize:13,color:"#C2410C"}}>Urgent</div>
+            <div style={{fontSize:10,color:"#C2410C",opacity:.75,marginTop:1}}>Fast help</div>
+          </div>
+          <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);goTo("custom");}}
+            style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
+            <div style={{fontSize:22,marginBottom:6}}>✏️</div>
+            <div style={{fontWeight:700,fontSize:13,color:N}}>Not Listed?</div>
+            <div style={{fontSize:10,color:TS,marginTop:1}}>Describe it</div>
+          </div>
+        </div>
+
+        {/* Entry tiles */}
+        <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:12}}>What do you need?</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:22}}>
+          {ENTRY_GROUPS.map(g=>(
+            <div key={g.key} onClick={()=>openBrowse(g.cats,g.label)} style={{background:W,borderRadius:16,padding:"14px 8px",textAlign:"center",cursor:"pointer",boxShadow:"0 2px 8px rgba(28,43,58,.06)"}}>
+              <div style={{fontSize:24,marginBottom:6}}>{g.e}</div>
+              <div style={{fontSize:11,fontWeight:600,color:TX,lineHeight:1.3}}>{g.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* Popular services rail */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <span style={{fontWeight:700,fontSize:15,color:TX}}>Popular services</span>
+          <span onClick={()=>openBrowse(null,"")} style={{fontSize:12,color:AM,fontWeight:700,cursor:"pointer"}}>See all →</span>
+        </div>
+        <div className="sc" style={{display:"flex",gap:12,overflowX:"auto",marginBottom:4,paddingBottom:4}}>
+          {popular.map(t=>(
+            <div key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"14px 12px",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)",flexShrink:0,width:120}}>
+              <div style={{fontSize:26,marginBottom:8}}>{t.e}</div>
+              <div style={{fontWeight:700,fontSize:12,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
+              <div style={{fontWeight:800,fontSize:16,color:AM}}>${t.p}</div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );};
+
+  // ── BROWSE (full category grid — reached via search, tiles, or "see all") ──
+  const browseScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div style={{background:W,padding:"12px 20px 12px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
+          <button onClick={goHome} style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+          <div style={{flex:1,background:BG,borderRadius:12,padding:"9px 14px",display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:14,color:TM}}>🔍</span>
+            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search services..."
+              style={{border:"none",flex:1,fontSize:14,color:TX,background:"transparent",outline:"none"}}/>
+            {q&&<button onClick={()=>setQ("")} style={{background:"none",border:"none",cursor:"pointer",color:TM,fontSize:13,padding:0}}>✕</button>}
+          </div>
+        </div>
+        {catGroup&&(
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontSize:12,background:N,color:W,padding:"5px 12px",borderRadius:20,fontWeight:600}}>{catGroup.label||"Filtered"}</span>
+            <button onClick={clearGroup} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline"}}>Clear</button>
+          </div>
+        )}
+      </div>
+      {emergencyFlag&&(
+        <div style={{background:"#FFF1EE",padding:"10px 20px",flexShrink:0,textAlign:"center"}}>
+          <span style={{fontSize:12,color:"#C2410C",fontWeight:600}}>🚨 Showing pros who can respond fastest for urgent jobs</span>
+        </div>
+      )}
+      <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
+        <div className="sc" style={{overflowX:"auto",padding:"16px 20px 12px",display:"flex",gap:8}}>
+          {CATS.map(c=>{
+            const a=!catGroup&&cat===c;
+            return <button key={c} onClick={()=>{setCatGroup(null);setCat(c);}} style={{border:"none",borderRadius:20,padding:"8px 16px",fontSize:12,cursor:"pointer",whiteSpace:"nowrap",fontWeight:a?700:500,flexShrink:0,background:a?AM:W,color:a?W:TS,boxShadow:a?`0 2px 8px rgba(245,158,11,.35)`:`0 1px 3px rgba(0,0,0,.07)`}}>{c}</button>;
+          })}
+        </div>
+        <div style={{padding:"4px 20px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontWeight:700,fontSize:15,color:TX}}>{q?`"${q}"`:catGroup?catGroup.label:cat==="All"?"All services":cat}</span>
+          <span style={{fontSize:12,color:TM}}>{items.length} services</span>
+        </div>
+        {items.length>0?(
+          <div style={{padding:"0 20px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,paddingBottom:24}}>
+            {items.map(t=>(
+              <div key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                {t.pop&&<span style={{position:"absolute",top:10,right:10,background:"#FEF3C7",color:"#D97706",fontSize:9,fontWeight:800,padding:"2px 7px",borderRadius:10}}>POPULAR</span>}
+                <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{t.e}</div>
+                <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
+                <div style={{fontWeight:800,fontSize:20,color:AM}}>${t.p}</div>
+                <div style={{fontSize:11,color:TM,marginTop:1}}>est. {t.t}</div>
+              </div>
+            ))}
+            <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);goTo("custom");}}
+              style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
+              <div style={{fontSize:28,marginBottom:8}}>✏️</div>
+              <div style={{fontWeight:700,fontSize:13,color:W,lineHeight:1.3,marginBottom:4}}>Post a custom job</div>
+              <div style={{fontSize:11,color:"rgba(255,255,255,.55)"}}>Don't see what you need?</div>
+            </div>
+          </div>
+        ):(
+          <div style={{textAlign:"center",padding:"40px 20px"}}>
+            <div style={{fontSize:48,marginBottom:12}}>🔍</div>
+            <div style={{fontWeight:600,color:TS,marginBottom:16}}>No services found</div>
+            <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:AM,border:"none",color:W,padding:"10px 20px",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14}}>Clear filters</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // ── DIAGNOSE ("Describe the problem" flow) ──────────────────────────────────
+  const diagnoseScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
+        <div style={{background:N,padding:"14px 20px 34px"}}>
+          <button onClick={goHome} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:18,display:"inline-flex",alignItems:"center",gap:6}}>← Back</button>
+          <div style={{textAlign:"center"}}>
+            <div style={{fontSize:44,marginBottom:10}}>🔍</div>
+            <div style={{color:W,fontWeight:800,fontSize:20,marginBottom:6}}>What's going on at home?</div>
+            <div style={{color:"rgba(255,255,255,.6)",fontSize:13}}>Describe it in your own words</div>
+          </div>
+        </div>
+        <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,padding:"20px 20px 16px",position:"relative",zIndex:1}}>
+          <div style={{background:W,borderRadius:18,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <textarea value={diagInput} onChange={e=>{setDiagInput(e.target.value);setDiagResult(null);}} maxLength={300}
+              placeholder={`e.g. "My garbage disposal is humming but not spinning" or "There's a small leak under my kitchen sink"`}
+              style={{width:"100%",minHeight:90,border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.55,outline:"none",padding:0}}/>
+            <div style={{fontSize:11,color:TM,textAlign:"right",marginTop:6,paddingTop:6,borderTop:`1px solid ${BD}`}}>{diagInput.length}/300</div>
+          </div>
+          {!diagResult&&(
+            <button onClick={runDiagnosis} disabled={!diagInput.trim()} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:diagInput.trim()?N:"#DDD9D2",color:W,fontWeight:700,fontSize:15,cursor:diagInput.trim()?"pointer":"default",marginBottom:8}}>
+            Find a solution →</button>
+          )}
+
+          {diagResult&&(
+            <div style={{background:W,borderRadius:20,padding:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+                <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Diagnosis</span>
+                <span style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:10,
+                  background:diagResult.conf==="High"?SL:diagResult.conf==="Medium"?"#FEF3C7":"#F1F5F9",
+                  color:diagResult.conf==="High"?SC:diagResult.conf==="Medium"?"#D97706":TS}}>{diagResult.conf} confidence</span>
+              </div>
+              <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:14}}>Likely issue: {diagResult.issue}</div>
+              <div style={{background:BG,borderRadius:16,padding:14,display:"flex",gap:12,alignItems:"center",marginBottom:16}}>
+                <div style={{fontSize:28}}>{diagResult.task.e}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:14,color:TX}}>{diagResult.task.n}</div>
+                  <div style={{fontSize:12,color:TS,marginTop:1}}>est. {diagResult.task.t}</div>
+                </div>
+                <div style={{fontWeight:800,fontSize:18,color:AM}}>${diagResult.task.p}</div>
+              </div>
+              <button onClick={bookDiagnosis} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:AM,color:W,fontWeight:800,fontSize:15,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Book this repair →</button>
+              <button onClick={()=>{setDiagInput("");setDiagResult(null);}} style={{width:"100%",padding:12,borderRadius:16,border:"none",background:"none",color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Try a different description</button>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── BOOKINGS ───────────────────────────────────────────────────────────────
+  const bookingsScreen=()=>{
+    if(allJobs.length===0) return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,textAlign:"center",background:BG}}>
+        <div style={{fontSize:52,marginBottom:16}}>📋</div>
+        <div style={{fontWeight:800,fontSize:20,color:TX,marginBottom:8}}>No bookings yet</div>
+        <div style={{color:TS,fontSize:14,lineHeight:1.6,marginBottom:24}}>Post a job and a pro will accept it. You'll track everything here.</div>
+        <button onClick={()=>goTab("home")} style={{background:N,color:W,border:"none",padding:"14px 30px",borderRadius:16,fontWeight:700,fontSize:15,cursor:"pointer"}}>Browse services</button>
+      </div>
+    );
+    return(
+      <div className="sc" style={{flex:1,overflowY:"auto",background:BG,padding:"20px 20px 100px"}}>
+        <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:16}}>Bookings</div>
+        <div style={{display:"flex",gap:8,marginBottom:18}}>
+          {[["all",`All (${allJobs.length})`],["active",`Active (${activeCount})`],["done",`Done (${doneCount})`]].map(([id,lb])=>{
+            const a=bFilter===id;
+            return <button key={id} onClick={()=>setBFilter(id)} style={{flex:1,padding:"9px 0",borderRadius:12,border:"none",fontWeight:a?700:500,background:a?N:W,color:a?W:TS,fontSize:13,cursor:"pointer",boxShadow:a?`0 2px 8px rgba(28,43,58,.18)`:`0 1px 3px rgba(0,0,0,.06)`}}>{lb}</button>;
+          })}
+        </div>
+        {shownJobs.length===0?(
+          <div style={{textAlign:"center",padding:"40px 20px"}}>
+            <div style={{fontSize:40,marginBottom:12}}>{bFilter==="active"?"⏳":"✅"}</div>
+            <div style={{fontWeight:600,color:TS}}>{bFilter==="active"?"No active jobs":"No completed jobs yet"}</div>
+          </div>
+        ):shownJobs.map(j=>{
+          const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
+          const jtp=ALL_TIME_PREFS.find(t=>t.id===j.tpId);
+          const jTotal=jt?jt.p+j.surge+(j.emergencyFee||0):0;
+          const isPending=j.status==="posted";const isDone=j.status==="complete";
+          const statusLabel=isPending?"Waiting for pro":isDone?"Completed":SI[j.status]?.label||"Active";
+          const statusColor=isPending?AM:isDone?SC:N;
+          const statusBg=isPending?"#FEF3C7":isDone?SL:"#EEF2FF";
+          return(
+            <div key={j.id} onClick={()=>{setVjid(j.id);goTo(isPending?"posted":"tracking");}} style={{background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:12,cursor:"pointer"}}>
+              <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:12}}>
+                <div style={{width:50,height:50,borderRadius:25,background:"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{jt?.e||"🔧"}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:15,color:TX}}>{jt?.n||"Custom job"}</div>
+                  <div style={{fontSize:13,color:TS,marginTop:2}}>{jtp?jtp.label:"—"} · ${jTotal}</div>
+                  {j.desc&&<div style={{fontSize:12,color:TM,marginTop:3,lineHeight:1.4,fontStyle:"italic"}}>"{j.desc.slice(0,55)}{j.desc.length>55?"…":""}"</div>}
+                </div>
+                <span style={{color:TM,fontSize:20,flexShrink:0}}>›</span>
+              </div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}}>
+                <div style={{display:"flex",alignItems:"center",gap:6}}>
+                  <span style={{fontSize:12,fontWeight:700,color:statusColor,background:statusBg,padding:"5px 12px",borderRadius:20}}>{statusLabel}</span>
+                  {j.emergency&&<span style={{fontSize:11,fontWeight:700,color:"#C2410C",background:"#FFF1EE",padding:"4px 10px",borderRadius:20}}>🚨 Emergency</span>}
+                </div>
+                {!isPending&&j.pro&&<span style={{fontSize:12,color:TS}}>Pro: {j.pro.n}</span>}
+                {isDone&&!j.rated&&<span style={{fontSize:12,color:AM,fontWeight:700}}>⭐ Rate now</span>}
+                {isDone&&j.rated&&<span style={{fontSize:12,color:SC,fontWeight:600}}>{"★".repeat(j.stars)} Reviewed</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
+
+  // ── PROFILE (main + sub-screens) ────────────────────────────────────────────
+  const profileScreen=()=>(
+    <div className="sc" style={{flex:1,overflowY:"auto",padding:"20px 20px 100px",background:BG}}>
+      <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:20}}>Profile</div>
+      <div onClick={openEditProfile} style={{background:N,borderRadius:20,padding:20,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer"}}>
+        <div style={{width:52,height:52,borderRadius:26,background:AM,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,overflow:"hidden"}}>
+          {profile.photo?<img src={profile.photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:<PersonIcon col={W} sz={30}/>}
+        </div>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:700,fontSize:16,color:W}}>{profile.name}</div>
+          <div style={{color:"rgba(255,255,255,.55)",fontSize:13,marginTop:2}}>{profile.bio||"Member since 2024"}</div>
+        </div>
+        <span style={{color:"rgba(255,255,255,.6)",fontSize:12,fontWeight:600}}>Edit ›</span>
+      </div>
+
+      {/* My Home entry — prominent */}
+      <div onClick={openMyHome} style={{background:"linear-gradient(135deg,#FEF3C7,#FDE68A)",borderRadius:20,padding:18,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+        <div style={{width:48,height:48,borderRadius:24,background:"rgba(255,255,255,.55)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>🏡</div>
+        <div style={{flex:1}}>
+          <div style={{fontWeight:700,fontSize:15,color:"#92400E"}}>My Home</div>
+          <div style={{fontSize:12,color:"#92400E",opacity:.8,marginTop:2}}>Service history, maintenance & more</div>
+        </div>
+        <span style={{color:"#92400E",fontSize:18}}>›</span>
+      </div>
+
+      <div style={{background:W,borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+        {[
+          ["My bookings",()=>goTab("bookings"),false],
+          ["Payment methods",()=>goTo("payment"),false],
+          ["Saved addresses",()=>goTo("addresses"),false],
+          ["Notifications",()=>goTo("notifications"),false],
+          ["Help & support",()=>openHelp(),false],
+          ["Sign out (coming soon)",()=>{},true],
+        ].map(([item,fn,disabledItem],i,arr)=>(
+          <div key={item} onClick={disabledItem?undefined:fn} style={{padding:"16px 20px",borderBottom:i<arr.length-1?`1px solid ${BD}`:"none",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:disabledItem?"default":"pointer"}}>
+            <span style={{fontWeight:500,fontSize:15,color:disabledItem?TM:TX}}>{item}</span>
+            {!disabledItem&&<span style={{color:TM,fontSize:18}}>›</span>}
+          </div>
+        ))}
+      </div>
+      <div style={{textAlign:"center",marginTop:28}}>
+        <div style={{fontSize:13,fontWeight:800,color:TM,letterSpacing:2.5}}>HAVEN</div>
+        <div style={{fontSize:11,color:TM,marginTop:4}}>Prototype build · v0.1</div>
+      </div>
+    </div>
+  );
+
+  const subHeader=(title,onBack=goProfile)=>(
+    <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",gap:14}}>
+      <button onClick={onBack} style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+      <span style={{fontWeight:700,fontSize:17,color:TX}}>{title}</span>
+    </div>
+  );
+
+  // ── TRUST SCORE (shared small components) ───────────────────────────────────
+  const trustBadge=(score,sz=13)=>(
+    <span style={{background:trustBg(score),color:trustColor(score),fontWeight:800,fontSize:sz,padding:"3px 9px",borderRadius:10,display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>🛡️ {score}</span>
+  );
+  const trustLine=pro=>(
+    <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+      {trustBadge(pro.trustScore)}
+      <span style={{fontSize:11,color:TS}}>{pro.onTimeRate}% on-time · {pro.hireAgainRate}% would hire again</span>
+    </div>
+  );
+
+  // ── BOOKING FLOW — SHARED COMPACT COMPONENTS ────────────────────────────────
+  // Compact chip-style time selector (replaces the old stacked full-width cards)
+  const timeChips=(list,isEmergency)=>{
+    const selected=list.find(p=>p.id===tpid);
+    return(
+      <div style={{marginBottom:16}}>
+        <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:selected?8:0}}>
+          {list.map(p=>{
+            const a=tpid===p.id;
+            return(
+              <button key={p.id} onClick={()=>setTpid(p.id)} style={{border:`1.5px solid ${a?N:BD}`,borderRadius:14,padding:"9px 14px",cursor:"pointer",background:a?N:W,display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontWeight:700,fontSize:13,color:a?W:TX}}>{p.label}</span>
+                {p.surge>0&&<span style={{fontSize:10,fontWeight:700,color:a?"#FFE8B0":"#D97706"}}>+${p.surge}</span>}
+              </button>
+            );
+          })}
+        </div>
+        {selected&&<div style={{fontSize:12,color:isEmergency?"#C2410C":TM}}>{selected.sub}</div>}
+      </div>
+    );
+  };
+  // Compact address + payment summary — smart defaults, editable via existing screens
+  const addressPaymentCard=()=>(
+    <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",gap:10,alignItems:"center",minWidth:0}}>
+          <span style={{fontSize:16,flexShrink:0}}>📍</span>
+          <span style={{fontSize:13,color:TX,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{defaultAddress?.text||"No address saved"}</span>
+        </div>
+        <span onClick={()=>goTo("addresses")} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10}}>Change</span>
+      </div>
+      <div style={{height:1,background:BD,margin:"12px 0"}}/>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+        <div style={{display:"flex",gap:10,alignItems:"center"}}>
+          <span style={{fontSize:16}}>💳</span>
+          <span style={{fontSize:13,color:TX,fontWeight:600}}>{defaultCard?`${defaultCard.brand} •••• ${defaultCard.last4}`:"No card saved"}</span>
+        </div>
+        <span onClick={()=>goTo("payment")} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer"}}>Change</span>
+      </div>
+    </div>
+  );
+  // Inline horizontal photo row — optional, no separate screen required
+  const photoRow=()=>(
+    <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Photos</span>
+        <span style={{fontSize:11,color:TM}}>Optional</span>
+      </div>
+      <input ref={photoInputRef} type="file" accept="image/*" capture="environment" multiple onChange={handlePhotoFiles} style={{display:"none"}}/>
+      <div className="sc" style={{display:"flex",gap:8,overflowX:"auto"}}>
+        {photos.map((p,i)=>(
+          <div key={i} style={{position:"relative",width:64,height:64,borderRadius:12,overflow:"hidden",flexShrink:0,background:BD}}>
+            <img src={p} alt={`Photo ${i+1}`} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+            <button onClick={()=>remPhoto(i)} style={{position:"absolute",top:2,right:2,width:18,height:18,borderRadius:9,background:"rgba(0,0,0,.55)",border:"none",color:W,fontSize:10,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+          </div>
+        ))}
+        {photos.length<4&&(
+          <div onClick={addPhoto} style={{width:64,height:64,borderRadius:12,background:BG,border:`1.5px dashed ${BD}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}>
+            <span style={{fontSize:20,color:TM}}>📷</span>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+
+  // ── PRO PROFILE ────────────────────────────────────────────────────────────
+  const proProfileScreen=()=>{
+    const p=proProfilePro;
+    const metrics=[
+      ["On-time rate",`${p.onTimeRate}%`],
+      ["Would hire again",`${p.hireAgainRate}%`],
+      ["Completion rate",`${p.completionRate}%`],
+      ["Avg. response",p.responseTime],
+    ];
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        {subHeader("Pro profile",()=>backFrom("proProfile",{scr:"tracking",tab:"home"}))}
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",marginBottom:20}}>
+            <div style={{width:76,height:76,borderRadius:38,background:p.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:800,fontSize:26,marginBottom:12}}>{p.i}</div>
+            <div style={{fontWeight:800,fontSize:19,color:TX,marginBottom:3}}>{p.n}</div>
+            <div style={{color:AM,fontSize:13,fontWeight:600,marginBottom:10}}>{p.s}</div>
+            <div style={{fontSize:12,color:TS}}>⭐ {p.r} · {p.j} completed jobs</div>
+          </div>
+
+          {/* Trust Score — primary card */}
+          <div style={{background:"linear-gradient(135deg,#1C2B3A,#2E4359)",borderRadius:20,padding:20,marginBottom:14,textAlign:"center"}}>
+            <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.55)",letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Trust Score</div>
+            <div style={{fontSize:44,fontWeight:900,color:W,lineHeight:1}}>{p.trustScore}<span style={{fontSize:18,color:"rgba(255,255,255,.5)"}}>/100</span></div>
+          </div>
+
+          {/* Metric chips */}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+            {metrics.map(([l,v])=>(
+              <div key={l} style={{background:W,borderRadius:16,padding:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:4}}>{l}</div>
+                <div style={{fontSize:18,fontWeight:800,color:TX}}>{v}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Badges */}
+          <div style={{background:W,borderRadius:18,padding:16,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:12}}>Verification</div>
+            <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
+              {p.badges.map(b=>(
+                <span key={b} style={{fontSize:11,background:SL,color:SC,padding:"5px 11px",borderRadius:20,fontWeight:700}}>✓ {b}</span>
+              ))}
+            </div>
+          </div>
+
+          {proProfileCtx==="tracking"&&vj&&(
+            <button onClick={()=>goTo("messages")} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:N,color:W,fontWeight:800,fontSize:15,cursor:"pointer"}}>💬 Message {p.n.split(" ")[0]}</button>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ── EDIT PROFILE ──────────────────────────────────────────────────────────
+  const editProfileScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Edit profile")}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        <input ref={profilePhotoInputRef} type="file" accept="image/*" onChange={handleProfilePhoto} style={{display:"none"}}/>
+        <div style={{display:"flex",flexDirection:"column",alignItems:"center",marginBottom:22}}>
+          <div onClick={()=>profilePhotoInputRef.current?.click()} style={{width:88,height:88,borderRadius:44,background:AM,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",overflow:"hidden",position:"relative",marginBottom:10}}>
+            {draftPhoto?<img src={draftPhoto} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:<PersonIcon col={W} sz={40}/>}
+            <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(0,0,0,.45)",color:W,fontSize:10,fontWeight:700,textAlign:"center",padding:"4px 0"}}>Change</div>
+          </div>
+          <span onClick={()=>profilePhotoInputRef.current?.click()} style={{fontSize:12,color:N,fontWeight:600,cursor:"pointer"}}>Tap to change photo</span>
+        </div>
+        <div style={{background:W,borderRadius:18,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+          <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Name</div>
+          <input value={draftName} onChange={e=>setDraftName(e.target.value)} placeholder="Your name"
+            style={{width:"100%",border:"none",fontSize:16,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}}/>
+        </div>
+        <div style={{background:W,borderRadius:18,padding:18,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+          <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Bio</div>
+          <textarea value={draftBio} onChange={e=>setDraftBio(e.target.value)} maxLength={150} placeholder="Tell pros a little about yourself or your home (optional)"
+            style={{width:"100%",minHeight:70,border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.55,outline:"none",padding:0}}/>
+          <div style={{fontSize:11,color:TM,textAlign:"right",marginTop:6,paddingTop:6,borderTop:`1px solid ${BD}`}}>{draftBio.length}/150</div>
+        </div>
+        <button onClick={saveProfile} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Save changes</button>
+        <button onClick={goProfile} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
+      </div>
+    </div>
+  );
+
+  // ── MY HOME ────────────────────────────────────────────────────────────────
+  const completedJobs = jobs.filter(j=>j.status==="complete").slice().sort((a,b)=>(b.completedAt||b.id)-(a.completedAt||a.id));
+  const maintSuggestions = (()=>{
+    const seen=new Set(); const out=[];
+    completedJobs.forEach(j=>{
+      const rule=j.taskId&&MAINT_RULES[j.taskId];
+      if(rule&&!seen.has(j.taskId)){
+        seen.add(j.taskId);
+        const jt=TASKS.find(t=>t.id===j.taskId);
+        out.push({taskId:j.taskId,name:jt?.n||"Service",e:jt?.e||"🔧",msg:rule.msg,every:rule.months?`Every ${rule.months} month${rule.months>1?"s":""}`:`Every ${rule.days} days`});
+      }
+    });
+    return out;
+  })();
+
+  const myhomeScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("My Home")}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:"20px 20px 32px"}}>
+
+        {/* Home Overview */}
+        <div style={{background:W,borderRadius:20,padding:20,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
+            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Home overview</div>
+            <span onClick={openEditHome} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
+          </div>
+          <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:14,lineHeight:1.4}}>📍 {home.address}</div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            {[["Home type",home.type],["Year built",home.yearBuilt],["Square footage",`${home.sqft} sqft`],["Layout",formatLayout(home)]].map(([l,v])=>(
+              <div key={l} style={{background:BG,borderRadius:12,padding:"10px 12px"}}>
+                <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:2}}>{l}</div>
+                <div style={{fontSize:13,fontWeight:700,color:TX}}>{v}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Service History */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+          <span style={{fontWeight:700,fontSize:15,color:TX}}>Service history</span>
+          <span style={{fontSize:12,color:TM}}>{completedJobs.length} completed</span>
+        </div>
+        {completedJobs.length===0?(
+          <div style={{background:W,borderRadius:18,padding:20,marginBottom:20,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:28,marginBottom:8}}>🗂️</div>
+            <div style={{fontSize:13,color:TS}}>Completed jobs will show up here as a timeline of everything done on your home.</div>
+          </div>
+        ):(
+          <div style={{marginBottom:20}}>
+            {completedJobs.map(j=>{
+              const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
+              const jTotal=jt?jt.p+j.surge+(j.emergencyFee||0):0;
+              const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+              return(
+                <div key={j.id} style={{background:W,borderRadius:18,padding:16,marginBottom:10,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                  <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:10}}>
+                    <div style={{width:42,height:42,borderRadius:21,background:SL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{jt?.e||"🔧"}</div>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:700,fontSize:14,color:TX}}>{jt?.n||"Custom job"}</div>
+                      <div style={{fontSize:12,color:TS,marginTop:1}}>{dateStr} · {j.pro?.n||"Pro"}</div>
+                    </div>
+                    <div style={{textAlign:"right"}}>
+                      <div style={{fontWeight:800,fontSize:15,color:AM}}>${jTotal}</div>
+                      <span style={{fontSize:10,fontWeight:700,color:SC,background:SL,padding:"2px 8px",borderRadius:8}}>Completed</span>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>{setVjid(j.id);goTo("tracking");}} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:600,fontSize:12,cursor:"pointer"}}>View details</button>
+                    <button onClick={()=>openReceipt(j.id)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:600,fontSize:12,cursor:"pointer"}}>View receipt</button>
+                    {j.taskId&&<button onClick={()=>hireAgainJob(j.taskId)} style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:N,color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Hire again</button>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {/* Maintenance Suggestions */}
+        <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:12}}>Suggested maintenance</div>
+        {maintSuggestions.length>0?(
+          <div style={{marginBottom:20}}>
+            {maintSuggestions.map(s=>(
+              <div key={s.taskId} style={{background:"#FFF7ED",border:"1px solid #FDE9CC",borderRadius:18,padding:16,marginBottom:10,display:"flex",gap:12,alignItems:"center"}}>
+                <div style={{fontSize:22,flexShrink:0}}>{s.e}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,color:"#92400E",fontWeight:600,lineHeight:1.4}}>{s.msg}</div>
+                  <div style={{fontSize:11,color:"#B45309",marginTop:2}}>{s.every}</div>
+                </div>
+                <button onClick={()=>hireAgainJob(s.taskId)} style={{padding:"8px 14px",borderRadius:10,border:"none",background:AM,color:W,fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>Book again</button>
+              </div>
+            ))}
+          </div>
+        ):(
+          <div style={{background:W,borderRadius:18,padding:18,marginBottom:20,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:24,marginBottom:8}}>🔔</div>
+            <div style={{fontSize:13,color:TS,lineHeight:1.5}}>No suggestions yet — these appear automatically after you complete services like gutter cleaning, HVAC filter swaps, pest control, or pressure washing.</div>
+          </div>
+        )}
+
+        {/* Appliances */}
+        <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>Appliances</div>
+        <div style={{fontSize:11,color:TM,marginBottom:12}}>Customer-entered — not verified by Haven</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
+          {APPLIANCES.map(a=>{
+            const count=completedJobs.filter(j=>j.taskId&&a.relatedIds.includes(j.taskId)).length;
+            const d=appliances[a.key];
+            const brandModel=d&&(d.brand||d.model)?[d.brand,d.model].filter(Boolean).join(" "):"Not added yet";
+            const installed=d&&d.installDate?d.installDate:"Not added yet";
+            const warranty=d&&d.warrantyExp?d.warrantyExp:"Not added yet";
+            return(
+              <div key={a.key} onClick={()=>openApplianceEdit(a.key,a.label)} style={{background:W,borderRadius:16,padding:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
+                  <div style={{fontSize:22,marginBottom:8}}>{a.e}</div>
+                  <span style={{color:TM,fontSize:16}}>›</span>
+                </div>
+                <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6}}>{d?.type||a.label}</div>
+                <div style={{fontSize:11,color:TM,marginBottom:1}}>Brand/model: {brandModel}</div>
+                <div style={{fontSize:11,color:TM,marginBottom:1}}>Installed: {installed}</div>
+                <div style={{fontSize:11,color:TM,marginBottom:6}}>Warranty: {warranty}</div>
+                <div style={{fontSize:11,fontWeight:700,color:count>0?SC:TM}}>{count} service{count!==1?"s":""} on record</div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Documents */}
+        <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:12}}>Documents</div>
+        <div onClick={()=>goTo("receiptList")}
+          style={{background:W,borderRadius:18,padding:16,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer",display:"flex",alignItems:"center",gap:14}}>
+          <div style={{width:44,height:44,borderRadius:22,background:SL,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontSize:22}}>🧾</span></div>
+          <div style={{flex:1}}>
+            <div style={{fontWeight:700,fontSize:14,color:TX}}>Receipts</div>
+            <div style={{fontSize:12,fontWeight:600,color:SC,marginTop:2}}>{completedJobs.length} saved</div>
+          </div>
+          <span style={{color:TM,fontSize:20}}>›</span>
+        </div>
+
+        {/* Home Report */}
+        <div style={{background:"linear-gradient(135deg,#1C2B3A,#2E4359)",borderRadius:20,padding:20}}>
+          <div style={{fontWeight:700,fontSize:15,color:W,marginBottom:6}}>📄 Home Report</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.65)",lineHeight:1.5,marginBottom:14}}>Your Home Report will combine completed services, receipts, appliance records, and maintenance history into one clean record.</div>
+          <button disabled style={{width:"100%",padding:13,borderRadius:14,border:"none",background:"rgba(255,255,255,.15)",color:"rgba(255,255,255,.7)",fontWeight:700,fontSize:13,cursor:"default"}}>Coming soon</button>
+        </div>
+      </div>
+    </div>
+  );
+
+  const homeFieldCard=(label,children)=>(
+    <div style={{background:W,borderRadius:18,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+      <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>{label}</div>
+      {children}
+    </div>
+  );
+  const selectStyle={width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0,appearance:"none",WebkitAppearance:"none"};
+  const homeSelect=(key,options)=>(
+    <div style={{position:"relative"}}>
+      <select value={draftHome[key]} onChange={e=>setDraftHome(h=>({...h,[key]:e.target.value}))} style={selectStyle}>
+        {options.map(o=><option key={o} value={o}>{o}</option>)}
+      </select>
+      <span style={{position:"absolute",right:0,top:1,color:TM,fontSize:13,pointerEvents:"none"}}>▾</span>
+    </div>
+  );
+
+  // ── RECEIPTS ───────────────────────────────────────────────────────────────
+  const receiptListScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Receipts",()=>goTo("myhome"))}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        {completedJobs.length===0?(
+          <div style={{background:W,borderRadius:18,padding:24,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:32,marginBottom:10}}>🧾</div>
+            <div style={{fontSize:13,color:TS,lineHeight:1.5}}>Receipts from completed jobs will appear here automatically.</div>
+          </div>
+        ):completedJobs.map(j=>{
+          const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
+          const jTotal=jt?jt.p+j.surge+(j.emergencyFee||0):0;
+          const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+          return(
+            <div key={j.id} style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+              <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:12}}>
+                <div style={{width:42,height:42,borderRadius:21,background:SL,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:20}}>{jt?.e||"🔧"}</span></div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:14,color:TX}}>{jt?.n||"Custom job"}</div>
+                  <div style={{fontSize:12,color:TS,marginTop:1}}>{dateStr} · {j.pro?.n||"Pro"}</div>
+                </div>
+                <div style={{fontWeight:800,fontSize:15,color:AM}}>${jTotal}</div>
+              </div>
+              <button onClick={()=>openReceipt(j.id)} style={{width:"100%",padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:12,cursor:"pointer"}}>View Receipt</button>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  const receiptScreen=()=>{
+    if(!vj) return null;
+    const dateStr=new Date(vj.completedAt||vj.id).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+    const receiptId=`HVN-${String(vj.id).slice(-6).toUpperCase()}`;
+    const lineItems=[
+      ["Base price",`$${vjTask?vjTask.p:0}`],
+      ...(vj.surge>0?[["ASAP surge",`+$${vj.surge}`]]:[]),
+      ...(vj.emergency?[["Emergency priority fee",`+$${vj.emergencyFee}`]]:[]),
+    ];
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        {subHeader("Receipt",()=>backFrom("receipt",{scr:"myhome",tab:"home"}))}
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+          <div style={{background:W,borderRadius:20,padding:22,boxShadow:"0 4px 20px rgba(28,43,58,.1)"}}>
+            <div style={{textAlign:"center",marginBottom:18}}>
+              <div style={{fontSize:13,fontWeight:800,color:N,letterSpacing:2.5}}>HAVEN</div>
+              <div style={{fontSize:11,color:TM,marginTop:4}}>Job Receipt</div>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
+              <span style={{fontSize:12,color:TS}}>Receipt ID</span>
+              <span style={{fontSize:12,color:TX,fontWeight:700}}>{receiptId}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
+              <span style={{fontSize:12,color:TS}}>Date completed</span>
+              <span style={{fontSize:12,color:TX,fontWeight:700}}>{dateStr}</span>
+            </div>
+
+            <div style={{borderTop:`1px dashed ${BD}`,marginBottom:16}}/>
+
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+              <div style={{width:44,height:44,borderRadius:22,background:SL,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:22}}>{vjTask?vjTask.e:"🔧"}</span></div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjTask?vjTask.n:"Custom job"}</div>
+                <div style={{fontSize:12,color:TS,marginTop:1}}>Completed by {vjPro.n}</div>
+              </div>
+            </div>
+
+            <div style={{marginBottom:8}}>
+              <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:8}}>SERVICE ADDRESS</div>
+              <div style={{fontSize:13,color:TX,marginBottom:16}}>{vj.addressText||"—"}</div>
+            </div>
+
+            <div style={{marginBottom:16}}>
+              <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:10}}>CHARGES</div>
+              {lineItems.map(([l,v])=>(
+                <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                  <span style={{fontSize:13,color:TS}}>{l}</span>
+                  <span style={{fontSize:13,color:TX,fontWeight:600}}>{v}</span>
+                </div>
+              ))}
+              <div style={{borderTop:`1px solid ${BD}`,marginTop:4,paddingTop:10,display:"flex",justifyContent:"space-between"}}>
+                <span style={{fontSize:14,color:TX,fontWeight:800}}>Total paid</span>
+                <span style={{fontSize:16,color:AM,fontWeight:900}}>${vjTotal}</span>
+              </div>
+            </div>
+
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+              <span style={{fontSize:12,color:TS}}>Payment method</span>
+              <span style={{fontSize:12,color:TX,fontWeight:700}}>{vj.paymentBrand||"Card"} •••• {vj.paymentLast4||"----"}</span>
+            </div>
+            <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
+              <span style={{fontSize:12,color:TS}}>Photos on file</span>
+              <span style={{fontSize:12,color:TX,fontWeight:700}}>{vj.photos?.length>0?`${vj.photos.length} attached`:"None"}</span>
+            </div>
+
+            {vj.desc&&(
+              <div style={{marginBottom:16}}>
+                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:6}}>JOB DESCRIPTION</div>
+                <div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div>
+              </div>
+            )}
+
+            <div style={{background:SL,borderRadius:14,padding:14,display:"flex",gap:10,alignItems:"center"}}>
+              <span style={{fontSize:16}}>✅</span>
+              <span style={{fontSize:12,color:SC,fontWeight:600,lineHeight:1.4}}>
+                {vj.rated?`Rated ${"★".repeat(vj.stars)} — covered by Haven's satisfaction guarantee.`:"This job is covered by Haven's trust & safety guarantee."}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── APPLIANCE DETAIL / EDIT ──────────────────────────────────────────────
+  const applianceFieldCard=(label,children)=>(
+    <div style={{background:W,borderRadius:18,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+      <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>{label}</div>
+      {children}
+    </div>
+  );
+  const applianceInput=(field,placeholder)=>(
+    <input value={draftAppliance[field]} onChange={e=>setDraftAppliance(d=>({...d,[field]:e.target.value}))} placeholder={placeholder}
+      style={{width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}}/>
+  );
+  const applianceDetailScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Appliance details",()=>goTo("myhome"))}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:14,padding:"12px 14px",marginBottom:16,display:"flex",gap:10,alignItems:"flex-start"}}>
+          <span style={{fontSize:15,flexShrink:0}}>ℹ️</span>
+          <span style={{fontSize:12,color:"#1E40AF",lineHeight:1.5}}>This information is entered by you. Haven does not verify appliance brand, model, age, or warranty status.</span>
+        </div>
+        {applianceFieldCard("Appliance type",applianceInput("type","Not added yet"))}
+        {applianceFieldCard("Brand",applianceInput("brand","Not added yet"))}
+        {applianceFieldCard("Model",applianceInput("model","Not added yet"))}
+        {applianceFieldCard("Serial number",applianceInput("serial","Not added yet"))}
+        {applianceFieldCard("Installation date (or approximate year)",applianceInput("installDate","Not added yet"))}
+        {applianceFieldCard("Warranty expiration (optional)",applianceInput("warrantyExp","Not added yet"))}
+        {applianceFieldCard("Notes (optional)",
+          <textarea value={draftAppliance.notes} onChange={e=>setDraftAppliance(d=>({...d,notes:e.target.value}))} maxLength={300} rows={3}
+            placeholder="Anything else worth remembering about this appliance"
+            style={{width:"100%",border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.5,outline:"none",padding:0}}/>
+        )}
+        <button onClick={saveAppliance} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Save changes</button>
+        <button onClick={()=>goTo("myhome")} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
+      </div>
+    </div>
+  );
+
+  const editHomeScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Edit home details",()=>goTo("myhome"))}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        {homeFieldCard("Address",
+          <input value={draftHome.address} onChange={e=>setDraftHome(h=>({...h,address:e.target.value}))}
+            style={{width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}}/>
+        )}
+        {homeFieldCard("Home type", homeSelect("type",HOME_TYPES))}
+        {homeFieldCard("Year built", homeSelect("yearBuilt",YEAR_OPTIONS))}
+        {homeFieldCard("Square footage",
+          <input value={draftHome.sqft} onChange={e=>setDraftHome(h=>({...h,sqft:e.target.value}))} inputMode="numeric" placeholder="e.g. 1,150"
+            style={{width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}}/>
+        )}
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:0}}>
+          {homeFieldCard("Bedrooms", homeSelect("beds",BEDROOM_OPTIONS))}
+          {homeFieldCard("Bathrooms", homeSelect("baths",BATHROOM_OPTIONS))}
+        </div>
+        <button onClick={saveHome} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10,marginTop:8}}>Save changes</button>
+        <button onClick={()=>goTo("myhome")} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
+      </div>
+    </div>
+  );
+
+  // ── PAYMENT METHODS ───────────────────────────────────────────────────────
+  const cardColors={Visa:N,Mastercard:"#EA580C",Card:"#5B21B6"};
+  const paymentScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Payment methods",()=>backFrom("payment",{scr:"home",tab:"profile"}))}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        {cards.map(c=>{
+          const open=expandedCard===c.id;
+          return(
+            <div key={c.id} style={{background:W,borderRadius:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",overflow:"hidden"}}>
+              <div onClick={()=>setExpandedCard(open?null:c.id)} style={{padding:16,display:"flex",alignItems:"center",gap:14,cursor:"pointer"}}>
+                <div style={{width:44,height:30,borderRadius:6,background:cardColors[c.brand]||N,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontSize:9,fontWeight:800,flexShrink:0}}>{c.brand.slice(0,4).toUpperCase()}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:700,fontSize:14,color:TX}}>{c.brand} •••• {c.last4}</div>
+                  <div style={{fontSize:12,color:TS,marginTop:2}}>Expires {c.exp}{c.isDefault?" · Default":""}</div>
+                </div>
+                <span style={{color:TM,fontSize:16,transform:open?"rotate(90deg)":"none",display:"inline-block"}}>›</span>
+              </div>
+              {open&&(
+                <div style={{display:"flex",gap:8,padding:"0 16px 16px"}}>
+                  <button onClick={()=>setCardDefault(c.id)} disabled={c.isDefault} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:c.isDefault?BG:W,color:c.isDefault?TM:N,fontWeight:600,fontSize:12,cursor:c.isDefault?"default":"pointer"}}>{c.isDefault?"Default card":"Set as default"}</button>
+                  <button onClick={()=>removeCard(c.id)} style={{flex:1,padding:"9px 0",borderRadius:10,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:600,fontSize:12,cursor:"pointer"}}>Remove card</button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {addingCard?(
+          <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Card number</div>
+            <input value={newCardNum} onChange={e=>setNewCardNum(e.target.value.replace(/\D/g,"").slice(0,16))} placeholder="1234 5678 9012 3456" inputMode="numeric"
+              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,marginBottom:12,outline:"none"}}/>
+
+            <div style={{display:"flex",gap:10,marginBottom:12}}>
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Expiry</div>
+                <input value={newCardExp} onChange={e=>setNewCardExp(e.target.value)} placeholder="MM/YY"
+                  style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,outline:"none"}}/>
+              </div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>CVV</div>
+                <input value={newCardCvv} onChange={e=>setNewCardCvv(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="123" inputMode="numeric"
+                  style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,outline:"none"}}/>
+              </div>
+            </div>
+
+            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Billing address</div>
+            <input value={newCardAddr} onChange={e=>setNewCardAddr(e.target.value)} placeholder="Street address"
+              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,marginBottom:10,outline:"none"}}/>
+            <div style={{display:"flex",gap:8,marginBottom:14}}>
+              <input value={newCardCity} onChange={e=>setNewCardCity(e.target.value)} placeholder="City"
+                style={{flex:2,minWidth:0,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 10px",fontSize:13,color:TX,outline:"none"}}/>
+              <input value={newCardState} onChange={e=>setNewCardState(e.target.value.slice(0,2).toUpperCase())} placeholder="ST"
+                style={{width:52,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 8px",fontSize:13,color:TX,outline:"none",textAlign:"center"}}/>
+              <input value={newCardZip} onChange={e=>setNewCardZip(e.target.value.replace(/\D/g,"").slice(0,5))} placeholder="ZIP" inputMode="numeric"
+                style={{width:68,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 8px",fontSize:13,color:TX,outline:"none"}}/>
+            </div>
+
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{setAddingCard(false);setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");}} style={{flex:1,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Cancel</button>
+              <button onClick={addCard} disabled={newCardNum.length<4} style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background:newCardNum.length>=4?AM:"#DDD9D2",color:W,fontWeight:700,fontSize:13,cursor:newCardNum.length>=4?"pointer":"default"}}>Add card</button>
+            </div>
+          </div>
+        ):(
+          <button onClick={()=>setAddingCard(true)} style={{width:"100%",padding:15,borderRadius:16,border:`1.5px dashed ${BD}`,background:"transparent",color:N,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:14}}>+ Add payment method</button>
+        )}
+        <div style={{display:"flex",gap:8,alignItems:"flex-start",justifyContent:"center",padding:"0 8px"}}>
+          <span style={{fontSize:13,flexShrink:0}}>🔒</span>
+          <span style={{fontSize:11,color:TM,lineHeight:1.5,textAlign:"center"}}>Payments are securely processed. Your full card information is never displayed.</span>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── SAVED ADDRESSES ───────────────────────────────────────────────────────
+  const addressesScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Saved addresses",()=>backFrom("addresses",{scr:"home",tab:"profile"}))}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        {addresses.map(a=>{
+          const open=expandedAddr===a.id;
+          const editing=editingAddrId===a.id;
+          return(
+            <div key={a.id} style={{background:W,borderRadius:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",overflow:"hidden"}}>
+              {editing?(
+                <div style={{padding:16}}>
+                  <input value={draftAddrLabel} onChange={e=>setDraftAddrLabel(e.target.value)} placeholder="Label (e.g. Home)"
+                    style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"9px 12px",fontSize:13,fontWeight:600,color:TX,marginBottom:8,outline:"none"}}/>
+                  <textarea value={draftAddrText} onChange={e=>setDraftAddrText(e.target.value)} placeholder="Full address"
+                    style={{width:"100%",minHeight:60,border:`1.5px solid ${BD}`,borderRadius:10,padding:"9px 12px",fontSize:13,color:TX,marginBottom:10,outline:"none",resize:"none"}}/>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>setEditingAddrId(null)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:12,cursor:"pointer"}}>Cancel</button>
+                    <button onClick={saveAddrEdit} style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:AM,color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Save</button>
+                  </div>
+                </div>
+              ):(
+                <>
+                  <div onClick={()=>setExpandedAddr(open?null:a.id)} style={{padding:16,display:"flex",gap:12,alignItems:"flex-start",cursor:"pointer"}}>
+                    <span style={{fontSize:20}}>{a.label==="Home"?"🏠":a.label==="Work"?"💼":"📍"}</span>
+                    <div style={{flex:1}}><div style={{fontWeight:700,fontSize:14,color:TX}}>{a.label}</div><div style={{fontSize:13,color:TS,marginTop:3,lineHeight:1.4}}>{a.text}</div></div>
+                    <span style={{color:TM,fontSize:16,transform:open?"rotate(90deg)":"none",display:"inline-block"}}>›</span>
+                  </div>
+                  {open&&(
+                    <div style={{display:"flex",gap:8,padding:"0 16px 16px"}}>
+                      <button onClick={()=>startEditAddr(a)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:W,color:N,fontWeight:600,fontSize:12,cursor:"pointer"}}>Edit</button>
+                      <button onClick={()=>removeAddr(a.id)} style={{flex:1,padding:"9px 0",borderRadius:10,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:600,fontSize:12,cursor:"pointer"}}>Delete</button>
+                    </div>
+                  )}
+                </>
+              )}
+            </div>
+          );
+        })}
+        {addingAddr?(
+          <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <input value={draftAddrLabel} onChange={e=>setDraftAddrLabel(e.target.value)} placeholder="Label (e.g. Home, Work)"
+              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"9px 12px",fontSize:13,fontWeight:600,color:TX,marginBottom:8,outline:"none"}}/>
+            <textarea value={draftAddrText} onChange={e=>setDraftAddrText(e.target.value)} placeholder="Full address"
+              style={{width:"100%",minHeight:60,border:`1.5px solid ${BD}`,borderRadius:10,padding:"9px 12px",fontSize:13,color:TX,marginBottom:10,outline:"none",resize:"none"}}/>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>{setAddingAddr(false);setDraftAddrLabel("");setDraftAddrText("");}} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:12,cursor:"pointer"}}>Cancel</button>
+              <button onClick={addAddress} disabled={!draftAddrText.trim()} style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:draftAddrText.trim()?AM:"#DDD9D2",color:W,fontWeight:700,fontSize:12,cursor:draftAddrText.trim()?"pointer":"default"}}>Add address</button>
+            </div>
+          </div>
+        ):(
+          <button onClick={()=>{setAddingAddr(true);setDraftAddrLabel("");setDraftAddrText("");}} style={{width:"100%",padding:15,borderRadius:16,border:`1.5px dashed ${BD}`,background:"transparent",color:N,fontWeight:700,fontSize:14,cursor:"pointer",marginTop:4}}>+ Add address</button>
+        )}
+      </div>
+    </div>
+  );
+
+  const toggleNotif=k=>setNotifPrefs(p=>({...p,[k]:!p[k]}));
+  const notifRow=(label,sub,k)=>(
+    <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 0",borderBottom:`1px solid ${BD}`}}>
+      <div><div style={{fontWeight:600,fontSize:14,color:TX}}>{label}</div><div style={{fontSize:12,color:TS,marginTop:2}}>{sub}</div></div>
+      <div onClick={()=>toggleNotif(k)} style={{width:44,height:26,borderRadius:13,background:notifPrefs[k]?AM:BD,position:"relative",cursor:"pointer",flexShrink:0}}>
+        <div style={{width:20,height:20,borderRadius:10,background:W,position:"absolute",top:3,left:notifPrefs[k]?21:3,transition:"left .15s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
+      </div>
+    </div>
+  );
+  const notificationsScreen=()=>{
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        {subHeader("Notifications")}
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+          <div style={{background:W,borderRadius:18,padding:"4px 16px",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            {notifRow("Push notifications","Enable notifications on this device","push")}
+            {notifRow("Job updates","Pro accepted, en route, arrived, done","jobUpdates")}
+            {notifRow("Messages","New chat messages from your pro","messages")}
+            {notifRow("Promotions","Deals and seasonal offers","promos")}
+            {notifRow("Email updates","Receipts and account activity","email")}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── HELP & SUPPORT ────────────────────────────────────────────────────────
+  const helpScreen=()=>{
+    if(showSupportChat) return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        {subHeader("Support chat",()=>setShowSupportChat(false))}
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:"16px 20px"}}>
+          {supportMsgs.map(m=>{
+            const mine=m.f==="me";
+            return(
+              <div key={m.id} style={{display:"flex",flexDirection:mine?"row-reverse":"row",gap:10,marginBottom:14,alignItems:"flex-end"}}>
+                {!mine&&<div style={{width:30,height:30,borderRadius:15,background:N,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:13,flexShrink:0}}>🎧</div>}
+                <div style={{maxWidth:"72%"}}>
+                  <div style={{background:mine?N:W,borderRadius:mine?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",boxShadow:mine?"none":"0 1px 4px rgba(28,43,58,.08)"}}>
+                    <div style={{fontSize:14,color:mine?W:TX,lineHeight:1.45}}>{m.m}</div>
+                  </div>
+                  <div style={{fontSize:10,color:TM,marginTop:4,textAlign:mine?"right":"left",fontWeight:500}}>{m.t}</div>
+                </div>
+              </div>
+            );
+          })}
+          {supportTyping&&(
+            <div style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-end"}}>
+              <div style={{width:30,height:30,borderRadius:15,background:N,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:13,flexShrink:0}}>🎧</div>
+              <div style={{background:W,borderRadius:"18px 18px 18px 4px",padding:"12px 16px",boxShadow:"0 1px 4px rgba(28,43,58,.08)"}}>
+                <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                  {[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:3.5,background:TM,opacity:.7,animation:`bounce 0.6s ${i*0.15}s infinite alternate`}}/>)}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <div style={{flexShrink:0,padding:"12px 16px 24px",background:W,borderTop:`1px solid ${BD}`,display:"flex",gap:10,alignItems:"center"}}>
+          <input value={supportInput} onChange={e=>setSupportInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendSupportMsg()}
+            placeholder="Describe your issue…"
+            style={{flex:1,background:BG,border:`1.5px solid ${BD}`,borderRadius:24,padding:"12px 18px",fontSize:14,color:TX,outline:"none"}}/>
+          <button onClick={sendSupportMsg} style={{width:46,height:46,borderRadius:23,background:supportInput.trim()?N:BD,border:"none",color:W,fontSize:18,cursor:supportInput.trim()?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>➤</button>
+        </div>
+      </div>
+    );
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        {subHeader("Help & support",()=>backFrom("help",{scr:"home",tab:"profile"}))}
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+          <a href={SUPPORT_PHONE_LINK} style={{textDecoration:"none",background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
+            <span style={{fontSize:22}}>📞</span>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700,fontSize:14,color:TX}}>Speak with support</div>
+              <div style={{fontSize:13,fontWeight:700,color:N,marginTop:2}}>{SUPPORT_PHONE_DISPLAY}</div>
+            </div>
+            <span style={{color:TM,fontSize:18}}>›</span>
+          </a>
+          <div onClick={()=>setShowSupportChat(true)} style={{background:W,borderRadius:18,padding:16,marginBottom:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
+            <span style={{fontSize:22}}>💬</span>
+            <div style={{flex:1}}><div style={{fontWeight:700,fontSize:14,color:TX}}>Chat with support</div><div style={{fontSize:12,color:TS,marginTop:2}}>Avg. response time: 3 minutes</div></div>
+            <span style={{color:TM,fontSize:18}}>›</span>
+          </div>
+          <div style={{fontSize:12,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:10}}>Common topics</div>
+          <div style={{background:W,borderRadius:18,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16}}>
+            {TOPICS.map((topic,i)=>{
+              const open=openTopicIdx===i;
+              return(
+                <div key={topic.t} style={{borderBottom:i<TOPICS.length-1?`1px solid ${BD}`:"none"}}>
+                  <div onClick={()=>setOpenTopicIdx(open?null:i)} style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
+                    <span style={{fontSize:14,color:TX,fontWeight:500}}>{topic.t}</span>
+                    <span style={{color:TM,transform:open?"rotate(90deg)":"none",display:"inline-block"}}>›</span>
+                  </div>
+                  {open&&<div style={{padding:"0 18px 16px",fontSize:13,color:TS,lineHeight:1.6}}>{topic.a}</div>}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── TASK DETAIL ────────────────────────────────────────────────────────────
+  // ── TASK DETAIL / BOOK SCREEN ────────────────────────────────────────────────
+  // Single screen: everything needed to post a job lives here — description,
+  // address/payment (smart defaults), time, and optional photos. Tapping
+  // "Post Job" posts immediately; no separate photo or confirmation screen.
+  const taskScreen=()=>{
+    if(!browsedTask) return null;
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+        <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
+          <div style={{background:N,padding:"14px 20px 34px"}}>
+            <button onClick={()=>backFrom("task",{scr:"home",tab:"home"})} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:16,display:"inline-flex",alignItems:"center",gap:6}}>← Back</button>
+            <div style={{display:"flex",alignItems:"center",gap:14}}>
+              <div style={{fontSize:38,flexShrink:0}}>{browsedTask.e}</div>
+              <div style={{flex:1,minWidth:0}}>
+                {emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:4,background:"rgba(255,255,255,.15)",color:"#FFD4C7",fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:20,marginBottom:5}}>🚨 Emergency</span>}
+                <div style={{color:W,fontWeight:800,fontSize:18,lineHeight:1.25}}>{browsedTask.n}</div>
+                <div style={{color:"rgba(255,255,255,.5)",fontSize:12,marginTop:2}}>Fixed price · est. {browsedTask.t}</div>
+              </div>
+              <div style={{textAlign:"right",flexShrink:0}}>
+                <div style={{color:W,fontWeight:900,fontSize:24}}>${total}</div>
+                {(surge>0||emergency)&&<div style={{color:"#FFD4C7",fontSize:10,fontWeight:600}}>{surge>0&&`+$${surge} surge`}{surge>0&&emergency&&" · "}{emergency&&`+$${EMERGENCY_FEE} priority`}</div>}
+              </div>
+            </div>
+          </div>
+
+          <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,padding:"18px 20px 16px",position:"relative",zIndex:1}}>
+            {addressPaymentCard()}
+
+            <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:8}}>{emergency?"Emergency timing":"When do you need it?"}</div>
+            {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10}}>Urgent issues, handled within 6 hours.</div>}
+            {timeChips(emergency?EMERGENCY_TIME_PREFS:TIME_PREFS,emergency)}
+
+            {photoRow()}
+
+            <div style={{background:W,borderRadius:18,padding:16,marginBottom:4,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+              <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Anything else we should know?</div>
+              <textarea value={desc} onChange={e=>setDesc(e.target.value)} maxLength={500} rows={2}
+                placeholder="Optional — e.g. wall type, access notes, anything a pro should bring"
+                style={{width:"100%",border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.5,outline:"none",padding:0}}/>
+            </div>
+          </div>
+        </div>
+        <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
+          <button onClick={postJob} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:17,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`}}>
+            Post Job — ${total}
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── CUSTOM JOB ─────────────────────────────────────────────────────────────
+  const customScreen=()=>{
+    const canPost = ctitle.trim() && cprice;
+    return(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
+      <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
+        <div style={{background:N,padding:"14px 20px 30px"}}>
+          <button onClick={()=>backFrom("custom",{scr:"home",tab:"home"})} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:16,display:"inline-flex",alignItems:"center",gap:6}}>← Back</button>
+          <div style={{fontWeight:800,fontSize:20,color:W,marginBottom:4}}>Post a custom job</div>
+          <div style={{fontSize:13,color:"rgba(255,255,255,.6)"}}>Describe any job and local pros will respond.</div>
+          {emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:4,background:"rgba(255,255,255,.15)",color:"#FFD4C7",fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:20,marginTop:8}}>🚨 Emergency</span>}
+        </div>
+        <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-16,padding:"18px 20px 16px",position:"relative",zIndex:1}}>
+
+          <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>What needs to be done?</div>
+            <input value={ctitle} onChange={e=>setCtitle(e.target.value)} placeholder="e.g. Pressure wash my driveway"
+              style={{width:"100%",border:"none",fontSize:16,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0,marginBottom:10}}/>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+              {JOB_CATS.map(c=>{
+                const a=ccat===c;
+                return <button key={c} onClick={()=>setCcat(c)} style={{border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:a?700:500,background:a?N:BG,color:a?W:TS}}>{c}</button>;
+              })}
+            </div>
+          </div>
+
+          <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Your budget</div>
+            <div style={{display:"flex",alignItems:"center",gap:6}}>
+              <span style={{fontSize:20,fontWeight:700,color:AM}}>$</span>
+              <input type="number" value={cprice} onChange={e=>setCprice(e.target.value)} placeholder="0"
+                style={{border:"none",fontSize:20,fontWeight:700,color:TX,background:"transparent",outline:"none",width:"100%",padding:0}}/>
+            </div>
+            {emergency&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,color:"#C2410C",fontWeight:600}}>🚨 Emergency priority fee</span><span style={{fontSize:12,color:"#C2410C",fontWeight:700}}>+${EMERGENCY_FEE}</span></div>}
+          </div>
+
+          {addressPaymentCard()}
+
+          <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:8}}>{emergency?"Emergency timing":"When do you need it?"}</div>
+          {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10}}>Urgent issues, handled within 6 hours.</div>}
+          {timeChips(emergency?EMERGENCY_TIME_PREFS:TIME_PREFS,emergency)}
+
+          {photoRow()}
+
+          <div style={{background:W,borderRadius:18,padding:16,marginBottom:4,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Anything else we should know?</div>
+            <textarea value={desc} onChange={e=>setDesc(e.target.value)} maxLength={500} rows={2}
+              placeholder="Optional — access details, tools needed, materials on hand"
+              style={{width:"100%",border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.5,outline:"none",padding:0}}/>
+          </div>
+        </div>
+      </div>
+      <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
+        <button onClick={postJob} disabled={!canPost}
+          style={{width:"100%",padding:18,borderRadius:18,border:"none",background:canPost?AM:"#DDD9D2",color:canPost?W:TM,fontWeight:800,fontSize:17,cursor:canPost?"pointer":"default",boxShadow:canPost?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
+          {canPost?`Post Job — $${total}`:"Add a title & budget to continue"}
+        </button>
+      </div>
+    </div>
+  );};
+
+  // ── POSTED / PENDING ────────────────────────────────────────────────────────
+  const postedScreen=()=>{
+    if(!vj) return null;
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        <div style={{background:N,padding:"14px 20px 20px",flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <button onClick={goBookings} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6}}>← Bookings</button>
+          <span style={{color:"rgba(255,255,255,.6)",fontSize:13,fontWeight:600}}>Pending</span>
+        </div>
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:"0 20px 24px"}}>
+          <div style={{textAlign:"center",padding:"28px 0 22px"}}>
+            <div style={{width:72,height:72,borderRadius:36,background:vj.emergency?"#FFF1EE":"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 16px",animation:"pulse 1.8s ease-in-out infinite"}}>{vj.emergency?"🚨":"📋"}</div>
+            {vj.emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:5,background:"#FFF1EE",color:"#C2410C",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,marginBottom:10}}>Emergency priority</span>}
+            <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{vj.emergency?"Prioritizing nearby available pros…":"Looking for a pro…"}</div>
+            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Verified pros near you can see your job and are deciding whether to accept."}</div>
+          </div>
+          <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{display:"flex",gap:14,alignItems:"center",paddingBottom:14,marginBottom:14,borderBottom:`1px solid ${BD}`}}>
+              <div style={{width:52,height:52,borderRadius:26,background:"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0}}>{vjTask?vjTask.e:"🔧"}</div>
+              <div><div style={{fontWeight:700,fontSize:16,color:TX}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontWeight:800,fontSize:20,color:AM,marginTop:2}}>${vjTotal}</div></div>
+            </div>
+            {[["When",vjTp?vjTp.label:"—"],["Window",vjTp?vjTp.sub:"—"],["Photos",vj.photos?.length>0?`${vj.photos.length} added`:"None"]].map(([l,v])=>(
+              <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:TX}}>{v}</span></div>
+            ))}
+            {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5,fontStyle:"italic"}}>"{vj.desc}"</div></div>}
+          </div>
+          <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:14}}>Pros near you viewing this job</div>
+            {PROS.map((p,i)=>(
+              <div key={p.i} onClick={()=>openProProfile(p,"posted")} style={{display:"flex",gap:12,alignItems:"center",marginBottom:i<PROS.length-1?12:0,cursor:"pointer"}}>
+                <div style={{width:40,height:40,borderRadius:20,background:p.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:13,flexShrink:0}}>{p.i}</div>
+                <div style={{flex:1}}>
+                  <div style={{fontWeight:600,fontSize:14,color:TX,marginBottom:2}}>{p.n}</div>
+                  {trustBadge(p.trustScore,11)}
+                </div>
+                <div style={{display:"flex",gap:3,alignItems:"center"}}>{[0,1,2].map(d=><div key={d} style={{width:5,height:5,borderRadius:2.5,background:AM,animation:`bounce 0.5s ${d*0.18}s infinite alternate`}}/>)}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{textAlign:"center",marginBottom:14}}>
+            <button onClick={proAccepts} style={{background:SC,border:"none",color:W,padding:"14px 28px",borderRadius:16,fontWeight:700,fontSize:14,cursor:"pointer",boxShadow:`0 4px 16px rgba(5,150,105,.3)`}}>🎉 Simulate: a pro accepts</button>
+          </div>
+          <div style={{textAlign:"center"}}>
+            <button onClick={()=>{updateJob(vjid,{status:"cancelled"});goBookings();}} style={{background:"none",border:"none",color:TM,fontSize:13,cursor:"pointer",textDecoration:"underline",padding:"8px 0"}}>Cancel this job</button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  // ── TRACKING MAP ────────────────────────────────────────────────────────────
+  const trackMap=()=>{
+    const px=vjSIdx>=1?240:60+vjSIdx*90; const showCar=vjSIdx<3;
+    return(
+      <svg width="100%" height="185" viewBox="0 0 350 185" style={{display:"block"}}>
+        <rect width="350" height="185" fill="#E8EBF2"/>
+        <rect x="10" y="12" width="52" height="50" rx="4" fill="#D5D9E8"/><rect x="100" y="12" width="78" height="50" rx="4" fill="#D5D9E8"/><rect x="220" y="12" width="52" height="50" rx="4" fill="#D5D9E8"/><rect x="300" y="12" width="38" height="50" rx="4" fill="#D5D9E8"/>
+        <rect x="10" y="115" width="52" height="38" rx="4" fill="#D5D9E8"/><rect x="100" y="115" width="78" height="38" rx="4" fill="#D5D9E8"/><rect x="220" y="115" width="118" height="38" rx="4" fill="#D5D9E8"/>
+        <rect x="0" y="74" width="350" height="18" fill={W}/><rect x="72" y="0" width="14" height="185" fill={W}/><rect x="192" y="0" width="14" height="185" fill={W}/><rect x="292" y="0" width="14" height="185" fill={W}/>
+        {[90,130,170,210,250].map(x=><rect key={x} x={x} y="82" width="14" height="2" rx="1" fill="#C5CAD8"/>)}
+        {showCar&&vjSIdx<1&&<line x1={px+14} y1={83} x2={224} y2={83} stroke={N} strokeWidth="3" strokeDasharray="8,5" opacity="0.4"/>}
+        {vjSIdx<3&&<><circle cx={240} cy={83} r="18" fill={W} stroke={N} strokeWidth="2.5"/><text x="240" y="88" textAnchor="middle" fontSize="14">🏠</text></>}
+        {vjSIdx===3&&<><circle cx={240} cy={83} r="22" fill={SL}/><circle cx={240} cy={83} r="16" fill={SC}/><text x="240" y="89" textAnchor="middle" fontSize="14" fill={W} fontWeight="900">✓</text></>}
+        {showCar&&<><circle cx={px} cy={83} r="20" fill={N} opacity="0.12"/><circle cx={px} cy={83} r="14" fill={N}/><text x={px} y="88" textAnchor="middle" fontSize="13">🚗</text></>}
+        {vj?.status==="en_route"&&<><rect x={px-2} y="50" width="90" height="21" rx="10" fill={AM}/><text x={px+43} y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">12 min away</text></>}
+        {vj?.status==="arrived"&&<><rect x="138" y="50" width="104" height="21" rx="10" fill={SC}/><text x="190" y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">{vjPname} is here!</text></>}
+      </svg>
+    );
+  };
+
+  // ── TRACKING ────────────────────────────────────────────────────────────────
+  const trackingScreen=()=>{
+    if(!vj) return null;
+    const info=SI[vj.status]||SI.en_route;
+    const emBg={en_route:"#FEF3C7",arrived:"#DBEAFE",in_progress:"#FEF3C7",complete:SL}[vj.status]||"#FEF3C7";
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        {vj.justAccepted&&(
+          <div style={{background:SC,padding:"12px 20px",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+            <span style={{fontSize:20}}>🎉</span>
+            <div><div style={{color:W,fontWeight:700,fontSize:14}}>{vjPro.n} accepted your job!</div><div style={{color:"rgba(255,255,255,.8)",fontSize:12}}>They're on their way</div></div>
+          </div>
+        )}
+        <div style={{background:W,padding:"12px 20px 14px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+            <button onClick={goBookings} style={{background:"none",border:"none",color:N,fontSize:14,fontWeight:700,cursor:"pointer",padding:0}}>← Bookings</button>
+            <span style={{fontWeight:700,fontSize:15,color:TX}}>{vjTask?vjTask.n:"Your job"}</span>
+            <button onClick={()=>openHelp()} style={{background:"none",border:"none",color:N,fontSize:14,fontWeight:600,cursor:"pointer",padding:0}}>Help</button>
+          </div>
+          <div style={{display:"flex",alignItems:"center"}}>
+            {SF.map((s,i)=>{
+              const isL=i===SF.length-1;const past=i<vjSIdx;const curr=i===vjSIdx;const sz=curr?20:16;
+              return(
+                <div key={s} style={{display:"flex",alignItems:"center",flex:isL?0:1}}>
+                  <div style={{width:sz,height:sz,borderRadius:sz/2,background:i<=vjSIdx?N:BD,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    {past&&<span style={{color:W,fontSize:8,fontWeight:900}}>✓</span>}
+                    {curr&&<div style={{width:7,height:7,borderRadius:3.5,background:W}}/>}
+                  </div>
+                  {!isL&&<div style={{flex:1,height:2.5,background:past?N:BD,margin:"0 3px"}}/>}
+                </div>
+              );
+            })}
+          </div>
+          <div style={{display:"flex",justifyContent:"space-between",marginTop:5}}>
+            {["En Route","Arrived","Working","Done"].map((l,i)=>(
+              <span key={l} style={{fontSize:9,color:i<=vjSIdx?N:TM,fontWeight:i===vjSIdx?700:400,flex:i===0||i===3?0:1,textAlign:i===0?"left":i===3?"right":"center",width:i===0||i===3?44:undefined,flexShrink:0}}>{l}</span>
+            ))}
+          </div>
+        </div>
+        <div className="sc" style={{flex:1,overflowY:"auto"}}>
+          <div style={{margin:"14px 20px 0",background:W,borderRadius:20,padding:"16px 18px",boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:14,alignItems:"center"}}>
+            <div style={{width:52,height:52,borderRadius:26,background:emBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{info.em}</div>
+            <div><div style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{info.label}</div><div style={{fontSize:13,color:TS}}>{vjPname} {info.sub}</div></div>
+          </div>
+          <div style={{margin:"12px 20px",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>{trackMap()}</div>
+          <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div onClick={()=>openProProfile(vjPro,"tracking")} style={{display:"flex",gap:14,alignItems:"center",marginBottom:14,cursor:"pointer"}}>
+              <div style={{width:50,height:50,borderRadius:25,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:800,fontSize:16,flexShrink:0}}>{vjPro.i}</div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjPro.n}</div>
+                <div style={{color:AM,fontSize:12,fontWeight:600,marginBottom:6}}>{vjPro.s}</div>
+                {trustLine(vjPro)}
+                <div style={{fontSize:11,color:TM,marginTop:4}}>⭐ {vjPro.r} · {vjPro.j} jobs</div>
+              </div>
+              <span style={{color:TM,fontSize:18,alignSelf:"flex-start"}}>›</span>
+            </div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>goTo("messages")} style={{flex:1,padding:"11px 0",borderRadius:14,border:`1.5px solid ${vj.status==="complete"?BD:N}`,background:vj.status==="complete"?BG:"rgba(28,43,58,.06)",color:vj.status==="complete"?TM:N,fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
+                💬 {vj.status==="complete"?"Chat (closed)":"Message"}
+              </button>
+              <button disabled style={{flex:1,padding:"11px 0",borderRadius:14,border:`1.5px solid ${BD}`,background:BG,color:TM,fontWeight:700,fontSize:14,cursor:"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:7,opacity:.6}}>📞 Call (soon)</button>
+            </div>
+          </div>
+          <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
+              <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Booking Summary</span>
+              {vj.emergency&&<span style={{fontSize:11,fontWeight:700,color:"#C2410C",background:"#FFF1EE",padding:"4px 10px",borderRadius:20}}>🚨 Emergency priority</span>}
+            </div>
+            {[["Service",vjTask?vjTask.n:"Custom job"],["Time",vjTp?vjTp.label:"—"],["Photos",vj.photos?.length>0?`${vj.photos.length} shared`:"None"],
+              ...(vj.emergency?[["Emergency fee",`+$${vj.emergencyFee}`]]:[]),
+              ["Total",`$${vjTotal}`]].map(([l,v])=>(
+              <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:l==="Total"?AM:TX}}>{v}</span></div>
+            ))}
+            {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div></div>}
+          </div>
+          {vj.status!=="complete"?(
+            <div style={{margin:"0 20px 24px",textAlign:"center"}}><button onClick={advance} style={{background:"none",border:`1px dashed ${BD}`,color:TM,padding:"10px 20px",borderRadius:12,fontSize:12,cursor:"pointer",fontWeight:500}}>▶ Advance status (demo)</button></div>
+          ):(
+            <div style={{margin:"0 20px 24px"}}>
+              {!vj.rated?(
+                <button onClick={openRating} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`,marginBottom:10}}>⭐ Rate {vjPname}</button>
+              ):(
+                <div style={{background:SL,borderRadius:18,padding:16,textAlign:"center",marginBottom:10}}>
+                  <div style={{fontSize:22,marginBottom:4,color:AM}}>{"★".repeat(vj.stars)}</div>
+                  <div style={{fontWeight:700,fontSize:14,color:SC}}>Review submitted — thanks!</div>
+                </div>
+              )}
+              <button onClick={()=>openReceipt(vj.id)} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:"pointer"}}>🧾 View Receipt</button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ── RATING ─────────────────────────────────────────────────────────────────
+  const ratingScreen=()=>{
+    if(!vj) return null;
+    const HIRE=[["yes","Yes, definitely! 👍"],["maybe","Maybe"],["no","No"]];
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
+          <button onClick={()=>goTo("tracking")} style={{background:"none",border:"none",color:N,fontSize:14,fontWeight:700,cursor:"pointer",padding:0}}>← Back</button>
+        </div>
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:"28px 22px"}}>
+          <div style={{textAlign:"center",marginBottom:28}}>
+            <div style={{width:72,height:72,borderRadius:36,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:800,fontSize:24,margin:"0 auto 14px"}}>{vjPro.i}</div>
+            <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:4}}>Rate {vjPname}</div>
+            <div style={{fontSize:14,color:TS}}>{vjPro.s} · ⭐ {vjPro.r} current rating</div>
+          </div>
+          <div style={{background:W,borderRadius:20,padding:"22px 20px",marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)",textAlign:"center"}}>
+            <div style={{fontSize:13,fontWeight:600,color:TS,marginBottom:14}}>How was your experience?</div>
+            <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:10}}>
+              {[1,2,3,4,5].map(s=>(
+                <button key={s} onClick={()=>setStars(s)} style={{fontSize:38,background:"none",border:"none",cursor:"pointer",padding:"2px",color:s<=stars?AM:"#DDD",lineHeight:1}}>{s<=stars?"★":"☆"}</button>
+              ))}
+            </div>
+            {stars>0&&<div style={{fontWeight:700,fontSize:17,color:AM}}>{STAR_LABELS[stars]}</div>}
+          </div>
+          <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Leave a review (optional)</div>
+            <textarea value={reviewTxt} onChange={e=>setReviewTxt(e.target.value)} maxLength={300}
+              placeholder={`Tell others about your experience with ${vjPname}.`}
+              style={{width:"100%",minHeight:90,border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.55,outline:"none",padding:0}}/>
+            <div style={{fontSize:11,color:TM,textAlign:"right",marginTop:6,paddingTop:6,borderTop:`1px solid ${BD}`}}>{reviewTxt.length}/300</div>
+          </div>
+          <div style={{background:W,borderRadius:20,padding:18,marginBottom:24,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:14,fontWeight:700,color:TX,marginBottom:14}}>Would you hire {vjPname} again?</div>
+            <div style={{display:"flex",gap:8}}>
+              {HIRE.map(([val,lbl])=>{
+                const a=hireAgain===val;
+                return(
+                  <button key={val} onClick={()=>setHireAgain(a?null:val)} style={{flex:1,padding:"10px 4px",borderRadius:12,border:`1.5px solid ${a?N:BD}`,background:a?N:BG,color:a?W:TS,fontWeight:a?700:500,fontSize:12,cursor:"pointer",lineHeight:1.3}}>{lbl}</button>
+                );
+              })}
+            </div>
+          </div>
+          <button onClick={submitRating} disabled={stars===0} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:stars>0?AM:"#DDD9D2",color:stars>0?W:TM,fontWeight:800,fontSize:17,cursor:stars>0?"pointer":"default",boxShadow:stars>0?`0 6px 20px rgba(245,158,11,.35)`:"none",marginBottom:12}}>
+            {stars>0?"Submit review":"Select a rating first"}
+          </button>
+          <button onClick={goBookings} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Skip for now</button>
+        </div>
+      </div>
+    );
+  };
+
+  // ── MESSAGES ────────────────────────────────────────────────────────────────
+  const messagesScreen=()=>{
+    if(!vj) return null;
+    const locked=vj.status==="complete";
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        <div style={{background:W,padding:"12px 20px 14px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:14}}>
+            <button onClick={()=>goTo("tracking")} style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+            <div style={{width:38,height:38,borderRadius:19,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:800,fontSize:14,flexShrink:0}}>{vjPro.i}</div>
+            <div>
+              <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjPro.n}</div>
+              <div style={{fontSize:12,color:locked?"#EF4444":SC,fontWeight:600}}>{locked?"Chat closed":"● Active job"}</div>
+            </div>
+          </div>
+        </div>
+        <div style={{background:"#FEF3C7",borderBottom:`1px solid ${BD}`,padding:"10px 20px",display:"flex",gap:10,alignItems:"center",flexShrink:0}}>
+          <span style={{fontSize:18}}>{vjTask?vjTask.e:"🔧"}</span>
+          <div><div style={{fontSize:12,fontWeight:700,color:"#92400E"}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontSize:11,color:TS}}>{vjTp?vjTp.label:"—"} · ${vjTotal}</div></div>
+        </div>
+        {locked&&<div style={{background:"#FFF1F2",borderBottom:"1px solid #FCC",padding:"10px 20px",textAlign:"center",flexShrink:0}}><span style={{fontSize:12,color:"#E11D48",fontWeight:600}}>🔒 Chat closed — job completed successfully.</span></div>}
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:"16px 20px"}}>
+          <div style={{textAlign:"center",marginBottom:18}}><span style={{fontSize:11,color:TM,background:BD,padding:"4px 12px",borderRadius:12,fontWeight:500}}>Today</span></div>
+          {vjMsgs.map(m=>{
+            const mine=m.f==="cu";
+            return(
+              <div key={m.id} style={{display:"flex",flexDirection:mine?"row-reverse":"row",gap:10,marginBottom:14,alignItems:"flex-end"}}>
+                {!mine&&<div style={{width:30,height:30,borderRadius:15,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:11,flexShrink:0}}>{vjPro.i}</div>}
+                <div style={{maxWidth:"72%"}}>
+                  <div style={{background:mine?N:W,borderRadius:mine?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",boxShadow:mine?"none":"0 1px 4px rgba(28,43,58,.08)"}}>
+                    <div style={{fontSize:14,color:mine?W:TX,lineHeight:1.45}}>{m.m}</div>
+                  </div>
+                  <div style={{fontSize:10,color:TM,marginTop:4,textAlign:mine?"right":"left",fontWeight:500}}>{m.t}</div>
+                </div>
+              </div>
+            );
+          })}
+          {typing&&(
+            <div style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-end"}}>
+              <div style={{width:30,height:30,borderRadius:15,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:11,flexShrink:0}}>{vjPro.i}</div>
+              <div style={{background:W,borderRadius:"18px 18px 18px 4px",padding:"12px 16px",boxShadow:"0 1px 4px rgba(28,43,58,.08)"}}>
+                <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                  {[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:3.5,background:TM,opacity:.7,animation:`bounce 0.6s ${i*0.15}s infinite alternate`}}/>)}
+                </div>
+              </div>
+            </div>
+          )}
+          <div ref={msgEnd}/>
+        </div>
+        <div style={{flexShrink:0,padding:"12px 16px 24px",background:W,borderTop:`1px solid ${BD}`}}>
+          {locked?(
+            <div style={{textAlign:"center",padding:"12px 0",fontSize:13,color:TM,fontWeight:500}}>🔒 Messaging only available during an active job</div>
+          ):(
+            <div style={{display:"flex",gap:10,alignItems:"center"}}>
+              <input value={minput} onChange={e=>setMinput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMsg()}
+                placeholder={`Message ${vjPname}…`}
+                style={{flex:1,background:BG,border:`1.5px solid ${BD}`,borderRadius:24,padding:"12px 18px",fontSize:14,color:TX,outline:"none"}}/>
+              <button onClick={sendMsg} style={{width:46,height:46,borderRadius:23,background:minput.trim()?N:BD,border:"none",color:W,fontSize:18,cursor:minput.trim()?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>➤</button>
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  // ── RENDER ─────────────────────────────────────────────────────────────────
+  return(
+    <>
+      <style>{CSS}</style>
+      <div style={{minHeight:"100vh",background:"linear-gradient(155deg,#B8C6D1 0%,#C8BBA8 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"}}>
+        <div style={{width:390,height:844,background:BG,borderRadius:46,overflow:"hidden",boxShadow:"0 32px 80px rgba(28,43,58,.28),0 0 0 1px rgba(28,43,58,.09)",display:"flex",flexDirection:"column"}}>
+          {statusBar()}
+          <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
+            {scr==="home"     &&tab==="home"     &&homeScreen()}
+            {scr==="browse"   &&browseScreen()}
+            {scr==="diagnose" &&diagnoseScreen()}
+            {scr==="emergency" &&emergencyScreen()}
+            {scr==="home"     &&tab==="bookings" &&bookingsScreen()}
+            {scr==="home"     &&tab==="profile"  &&profileScreen()}
+            {scr==="task"     &&taskScreen()}
+            {scr==="custom"   &&customScreen()}
+            {scr==="posted"   &&postedScreen()}
+            {scr==="tracking" &&trackingScreen()}
+            {scr==="messages" &&messagesScreen()}
+            {scr==="rating"   &&ratingScreen()}
+            {scr==="payment"  &&paymentScreen()}
+            {scr==="editProfile" &&editProfileScreen()}
+            {scr==="myhome"   &&myhomeScreen()}
+            {scr==="receiptList" &&receiptListScreen()}
+            {scr==="receipt"  &&receiptScreen()}
+            {scr==="editHome" &&editHomeScreen()}
+            {scr==="applianceDetail" &&applianceDetailScreen()}
+            {scr==="proProfile" &&proProfileScreen()}
+            {scr==="addresses"&&addressesScreen()}
+            {scr==="notifications"&&notificationsScreen()}
+            {scr==="help"     &&helpScreen()}
+          </div>
+          {bottomNav()}
+        </div>
+      </div>
+    </>
+  );
+}
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<ErrorBoundary><App/></ErrorBoundary>);
+</script>
+</body>
+</html>
