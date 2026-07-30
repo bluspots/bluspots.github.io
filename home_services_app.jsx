@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect } from "react";
 
-const N='#1C2B3A',AM='#F59E0B',BG='#F5F2ED',W='#FFFFFF';
-const TX='#1C2B3A',TS='#5A6B78',TM='#9AAAB6',BD='#E5DED4';
-const SC='#059669',SL='#ECFDF5';
+// Brand + semantic colors — constant across light/dark themes (see App() for
+// the theme-dependent surface/text/border tokens: BG, W, TX, TS, TM, BD, SL).
+const N='#1C2B3A',AM='#F59E0B';
+const SC='#059669';
 
 const TASKS=[
   // Assembly
@@ -87,7 +88,6 @@ const PROS=[
     badges:["Identity verified","Background checked","Insured","Licensed"]},
 ];
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
-const trustBg=score=>score>=97?SL:score>=90?"#FEF3C7":"#FEF2F2";
 const TIME_PREFS=[
   {id:1,label:"ASAP",          sub:"Within 2 hours",              surge:10},
   {id:2,label:"This morning",  sub:"Today · 8:00 AM – 12:00 PM",  surge:0},
@@ -148,16 +148,20 @@ const MAINT_RULES={
   47:{months:12,msg:"Your driveway or patio may be due for a refresh."},
 };
 
-// Mock saved appliances for My Home — placeholders until real records exist.
-const APPLIANCES=[
-  {key:"fridge", label:"Refrigerator", e:"🧊", relatedIds:[50]},
-  {key:"laundry",label:"Washer/Dryer", e:"🌀", relatedIds:[49]},
-  {key:"heater", label:"Water Heater", e:"🚿", relatedIds:[]},
-  {key:"hvac",   label:"HVAC System",  e:"❄️", relatedIds:[45,53]},
-];
-
 // My Home edit-screen dropdown options
 const HOME_TYPES=["Single-family home","Townhouse","Condo","Apartment","Duplex","Mobile/manufactured home","Other"];
+const US_STATES=[
+  ["AL","Alabama"],["AK","Alaska"],["AZ","Arizona"],["AR","Arkansas"],["CA","California"],
+  ["CO","Colorado"],["CT","Connecticut"],["DE","Delaware"],["FL","Florida"],["GA","Georgia"],
+  ["HI","Hawaii"],["ID","Idaho"],["IL","Illinois"],["IN","Indiana"],["IA","Iowa"],
+  ["KS","Kansas"],["KY","Kentucky"],["LA","Louisiana"],["ME","Maine"],["MD","Maryland"],
+  ["MA","Massachusetts"],["MI","Michigan"],["MN","Minnesota"],["MS","Mississippi"],["MO","Missouri"],
+  ["MT","Montana"],["NE","Nebraska"],["NV","Nevada"],["NH","New Hampshire"],["NJ","New Jersey"],
+  ["NM","New Mexico"],["NY","New York"],["NC","North Carolina"],["ND","North Dakota"],["OH","Ohio"],
+  ["OK","Oklahoma"],["OR","Oregon"],["PA","Pennsylvania"],["RI","Rhode Island"],["SC","South Carolina"],
+  ["SD","South Dakota"],["TN","Tennessee"],["TX","Texas"],["UT","Utah"],["VT","Vermont"],
+  ["VA","Virginia"],["WA","Washington"],["WV","West Virginia"],["WI","Wisconsin"],["WY","Wyoming"],
+];
 const YEAR_OPTIONS=(()=>{
   const cy=new Date().getFullYear();
   const years=[]; for(let y=cy;y>=1900;y--) years.push(String(y));
@@ -250,11 +254,6 @@ const SI={
   complete:   {label:"Job Complete! 🎉",  sub:"— tap below to review",  em:"⭐"},
 };
 const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
-const SMSG=[
-  {id:1,f:"pro",m:"Hey! Just accepted your job — heading over shortly 👋",t:"2:18 PM"},
-  {id:2,f:"cu", m:"Great! Everything is ready for you.",                   t:"2:19 PM"},
-  {id:3,f:"pro",m:"Perfect. On my way now!",                               t:"2:21 PM"},
-];
 const PRO_REPLIES=["Got it! 👍","On it!","Thanks for the heads up!","Almost there!","Sounds good!","Will do!"];
 const PC=['#BFDBFE','#BBF7D0','#FDE68A','#FECACA','#DDD6FE'];
 const PE=['📺','🛋️','🔧','🖼️','🏠'];
@@ -272,6 +271,22 @@ const CSS=`
 button,input,textarea{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.93)}}
 @keyframes bounce{0%{transform:translateY(0)}100%{transform:translateY(-5px)}}
+/* On an actual phone (or installed PWA) the app fills the real screen —
+   the centered "phone frame" mockup below is a desktop-preview convenience
+   only, and would otherwise float as a small fixed-size box on a real
+   device instead of using the real screen. */
+@media (max-width:480px){
+  .haven-frame-outer{padding:0!important;background:#F5F2ED!important;align-items:stretch!important;}
+  .haven-frame-phone{width:100%!important;height:100dvh!important;border-radius:0!important;box-shadow:none!important;}
+}
+/* Print isolation: hide everything except the receipt itself — no app
+   chrome, no bottom nav, no header buttons, no phone-frame styling. */
+@media print{
+  body *{visibility:hidden!important;}
+  .receipt-print-area,.receipt-print-area *{visibility:visible!important;}
+  .receipt-print-area{position:absolute!important;top:0!important;left:0!important;width:100%!important;background:#FFFFFF!important;box-shadow:none!important;}
+  .no-print{display:none!important;}
+}
 `;
 
 // v0.13 — registry of every valid scr value. goTo() refuses navigation to
@@ -280,7 +295,18 @@ button,input,textarea{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Ro
 const SCREENS = new Set([
   "home","browse","diagnose","emergency","task","custom","posted","tracking",
   "messages","rating","payment","editProfile","myhome","receiptList","receipt",
-  "editHome","proProfile","addresses","notifications","help","applianceDetail",
+  "addressEdit","proProfile","addresses","help","serviceHistory",
+  "notifCenter","settings",
+]);
+// Screens representing a temporary, single-use flow (the booking lifecycle,
+// and one-off editable forms) — these are never eligible for tab-memory
+// restoration, unlike stable "destination" screens (Notifications, My Home,
+// Saved Addresses, etc.) that a user might reasonably expect restored when
+// switching tabs and back. Prevents "zombie" restores into a flow the user
+// has already finished or explicitly navigated away from via a fixed
+// destination (e.g. Tracking's "← Bookings").
+const TRANSIENT_FLOW_SCREENS = new Set([
+  "task","custom","posted","tracking","messages","rating","receipt","addressEdit","editProfile",
 ]);
 
 // v0.13 — Fix 3: catches render errors that would otherwise produce a silent
@@ -310,25 +336,95 @@ class ErrorBoundary extends React.Component{
   }
 }
 
-// v0.13 — single factory for job objects. All 21 fields declared with
+// v0.13 — single factory for job objects. All fields declared with
 // defaults so nothing is ever missing at creation (receipts render directly
 // from job data — a missing field breaks a receipt silently). If a feature
 // needs a new job field, add it here first, then use it via postJob/updateJob.
 function makeJob({
   taskId=null, custom=null, tpId=null, photos=[], desc="", status="posted",
   pro=null, msgs=[], surge=0, justAccepted=false, emergency=false, emergencyFee=0,
-  addressText="—", paymentBrand="Card", paymentLast4="----",
+  addressText="—", addressLabel="", paymentBrand="Card", paymentLast4="----",
   completedAt=null, rated=false, stars=0, reviewTxt="", hireAgain=null,
+  cancelStatus=null, cancellationRequestedAt=null, // null | "requested"
 }={}){
   return {
     id:Date.now(), // known limitation: two jobs in the same millisecond would collide — impossible via UI, fix when a backend exists
     taskId, custom, tpId, photos, desc, status, pro, msgs, surge, justAccepted,
-    emergency, emergencyFee, addressText, paymentBrand, paymentLast4,
+    emergency, emergencyFee, addressText, addressLabel, paymentBrand, paymentLast4,
     completedAt, rated, stars, reviewTxt, hireAgain,
+    cancelStatus, cancellationRequestedAt,
+  };
+}
+
+const NOTIF_TYPES = {
+  JOB_UPDATE:"JOB_UPDATE", MESSAGE:"MESSAGE", CANCELLATION:"CANCELLATION",
+  RECEIPT:"RECEIPT", PAYMENT:"PAYMENT", LOCATION:"LOCATION", SUPPORT:"SUPPORT", ACCOUNT:"ACCOUNT",
+};
+// Types that must never be suppressible via notification preferences —
+// safety notices, payment failures, account security, essential cancellation
+// decisions. JOB_UPDATE/RECEIPT/MESSAGE/SUPPORT respect the user's toggles.
+const CRITICAL_NOTIF_TYPES = new Set([NOTIF_TYPES.CANCELLATION, NOTIF_TYPES.PAYMENT, NOTIF_TYPES.LOCATION, NOTIF_TYPES.ACCOUNT]);
+let notifIdCounter=0;
+// v0.13-style single factory — every notification object shape comes from
+// here, matching the makeJob() convention. Never construct one manually.
+function makeNotification({
+  type, title, body, jobId=null, conversationId=null, propertyId=null, receiptId=null,
+  destination=null, priority="normal", isRead=false, count=1,
+}={}){
+  notifIdCounter+=1;
+  return {
+    id:`n${Date.now()}_${notifIdCounter}`,
+    type, title, body, createdAt:Date.now(), isRead,
+    jobId, conversationId, propertyId, receiptId, destination, priority, count,
   };
 }
 
 export default function App(){
+  // Appearance — System / Light / Dark. Persisted so it survives reopening
+  // the installed PWA. "Tokens, not per-screen styles": every screen in this
+  // file already references BG/W/TX/TS/TM/BD/SL by name via closure, so
+  // computing them once here (instead of as module-level constants) is
+  // enough to theme the entire app — no screen's own JSX needs to change.
+  const [themePref,setThemePref]=useState(()=>{
+    try{ return localStorage.getItem("haven_theme")||"system"; }catch{ return "system"; }
+  });
+  const [systemDark,setSystemDark]=useState(()=>{
+    try{ return typeof window!=="undefined"&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches; }catch{ return false; }
+  });
+  useEffect(()=>{
+    try{ localStorage.setItem("haven_theme",themePref); }catch{}
+  },[themePref]);
+  useEffect(()=>{
+    if(typeof window==="undefined"||!window.matchMedia)return;
+    const mq=window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange=e=>setSystemDark(e.matches);
+    try{ mq.addEventListener("change",onChange); return ()=>mq.removeEventListener("change",onChange); }
+    catch{ mq.addListener(onChange); return ()=>mq.removeListener(onChange); }
+  },[]);
+  useEffect(()=>{
+    if(typeof window==="undefined")return;
+    const end=()=>setStarDragging(false);
+    try{ window.addEventListener("pointerup",end); return ()=>window.removeEventListener("pointerup",end); }
+    catch{ return undefined; }
+  },[]);
+  const isDark = themePref==="dark" || (themePref==="system" && systemDark);
+  // Theme-dependent surface/text/border tokens. Brand colors (N, AM, SC) stay
+  // constant across themes on purpose — they're accent/semantic colors, not
+  // surface colors, and a naive full-invert would break the navy hero
+  // sections. Receipts are intentionally kept light-only (see receiptScreen).
+  const BG = isDark ? "#10161D" : "#F5F2ED";
+  const W  = isDark ? "#1B242E" : "#FFFFFF";
+  const TX = isDark ? "#F1EFE9" : "#1C2B3A";
+  const TS = isDark ? "#9FB0BC" : "#5A6B78";
+  const TM = isDark ? "#63727D" : "#9AAAB6";
+  const BD = isDark ? "#2A3540" : "#E5DED4";
+  const SL = isDark ? "#0F2A20" : "#ECFDF5";
+  // The restrained "selected/default" light-blue treatment, reused by the
+  // address/card pickers and now the Notification Center's unread state.
+  const SELBG = isDark ? "#1E3A5F" : "#EFF6FF";
+  const SELBORDER = isDark ? "#3B6EA8" : "#BFDBFE";
+  const trustBg=score=>score>=97?SL:score>=90?(isDark?"#3A2E12":"#FEF3C7"):(isDark?"#3A1414":"#FEF2F2");
+
   const [tid,setTid]       = useState(null);
   const [tpid,setTpid]     = useState(null);
   const [photos,setPhotos] = useState([]);
@@ -345,11 +441,233 @@ export default function App(){
   const [q,setQ]           = useState("");
   const [bFilter,setBFilter]= useState("all");
   const [stars,setStars]       = useState(0);
+  const [starDragging,setStarDragging] = useState(false);
   const [reviewTxt,setReviewTxt]= useState("");
   const [hireAgain,setHireAgain]= useState(null);
   const [minput,setMinput] = useState("");
   const [typing,setTyping] = useState(false);
   const [notifPrefs,setNotifPrefs] = useState({push:true,jobUpdates:true,messages:true,promos:false,email:true});
+  // Notification Center — persisted locally so read/unread state survives
+  // closing and reopening the PWA. Defensive against malformed legacy data:
+  // anything that isn't a well-formed array of objects with an id is dropped
+  // rather than crashing the app.
+  const [notifications,setNotifications]=useState(()=>{
+    try{
+      const raw=localStorage.getItem("haven_notifications");
+      if(!raw)return [];
+      const parsed=JSON.parse(raw);
+      if(!Array.isArray(parsed))return [];
+      return parsed.filter(n=>n&&typeof n==="object"&&typeof n.id!=="undefined"&&typeof n.createdAt==="number");
+    }catch{ return []; }
+  });
+  useEffect(()=>{
+    try{ localStorage.setItem("haven_notifications",JSON.stringify(notifications)); }catch{}
+  },[notifications]);
+  const [lastDeletedNotif,setLastDeletedNotif]=useState(null);
+  const [showUndoToast,setShowUndoToast]=useState(false);
+  const [showUnavailableToast,setShowUnavailableToast]=useState(false);
+  const [showShareFallback,setShowShareFallback]=useState(false);
+  const [showCopiedToast,setShowCopiedToast]=useState(false);
+  const [openSwipeId,setOpenSwipeId]=useState(null);
+  const [openSwipeDir,setOpenSwipeDir]=useState(null); // 'left' | 'right' | null
+  const [swipeState,setSwipeState]=useState({id:null,startX:0,startY:0,deltaX:0,deltaY:0,dragging:false,locked:false});
+  const unreadCount = notifications.filter(n=>!n.isRead).length;
+  // App visibility — backgrounded/hidden Haven must NEVER suppress a
+  // notification based on "the last visible screen"; suppression only
+  // applies when the app is genuinely visible AND the user is looking at
+  // the exact matching context right now.
+  const [isAppVisible,setIsAppVisible]=useState(()=>{
+    try{ return typeof document==="undefined" || document.visibilityState!=="hidden"; }catch{ return true; }
+  });
+  useEffect(()=>{
+    if(typeof document==="undefined")return;
+    const onVis=()=>{
+      const nowVisible = document.visibilityState!=="hidden";
+      setIsAppVisible(nowVisible);
+      if(nowVisible) syncAppBadge(unreadCount); // resume: recalculate/correct any stale badge
+    };
+    document.addEventListener("visibilitychange",onVis);
+    return ()=>document.removeEventListener("visibilitychange",onVis);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
+  // Notifications are often created from inside a setTimeout scheduled much
+  // earlier (a simulated pro reply, a status delay) — a plain closure over
+  // scr/vjid/etc. would freeze whatever those were at SCHEDULING time, not
+  // when the notification actually fires. This ref is refreshed on every
+  // render (see the effect further below, once all its dependencies are
+  // declared) so shouldCreateNotification always reads the live, current
+  // context regardless of which render's closure is calling it.
+  const liveContextRef = useRef({});
+  // Centralized active-context check — the ONLY place suppression logic
+  // lives. Returns false only when the user is actively viewing the exact
+  // relevant screen/job/conversation right now; being elsewhere in Haven
+  // (Home, Bookings, a different job) never suppresses.
+  const shouldCreateNotification=({type,jobId,conversationId})=>{
+    const live=liveContextRef.current;
+    if(!live.isAppVisible) return true;
+    if(type===NOTIF_TYPES.MESSAGE && live.scr==="messages" && conversationId!=null && live.vjid===conversationId) return false;
+    if(type===NOTIF_TYPES.SUPPORT && live.scr==="help" && live.showSupportChat) return false;
+    if(type===NOTIF_TYPES.JOB_UPDATE && live.scr==="tracking" && jobId!=null && live.vjid===jobId) return false;
+    if(type===NOTIF_TYPES.RECEIPT && live.scr==="receipt" && jobId!=null && live.vjid===jobId) return false;
+    return true;
+  };
+  // Installed PWA icon badge — one centralized helper, feature-detected, never
+  // throws or blocks the app if unsupported or permission is denied. Direct
+  // navigator.setAppBadge/clearAppBadge calls should never appear anywhere
+  // else in this file.
+  const syncAppBadge=(count)=>{
+    try{
+      if(typeof navigator==="undefined")return;
+      if(count>0){
+        if("setAppBadge" in navigator) navigator.setAppBadge(count).catch(()=>{});
+      }else{
+        if("clearAppBadge" in navigator) navigator.clearAppBadge().catch(()=>{});
+      }
+    }catch{}
+  };
+  useEffect(()=>{ syncAppBadge(unreadCount); },[unreadCount]);
+  // Job updates and messages/support respect their own toggle; cancellation,
+  // payment, location, and account notices are never suppressible.
+  const notifAllowed=(type)=>{
+    if(CRITICAL_NOTIF_TYPES.has(type))return true;
+    if(type===NOTIF_TYPES.JOB_UPDATE||type===NOTIF_TYPES.RECEIPT)return notifPrefs.jobUpdates;
+    if(type===NOTIF_TYPES.MESSAGE||type===NOTIF_TYPES.SUPPORT)return notifPrefs.messages;
+    return true;
+  };
+  const createNotification=(partial)=>{
+    if(!notifAllowed(partial.type))return null;
+    if(!shouldCreateNotification({type:partial.type,jobId:partial.jobId,conversationId:partial.conversationId}))return null;
+    const n=makeNotification(partial);
+    setNotifications(prev=>[n,...prev]);
+    return n;
+  };
+  const JOB_TRANSITION_NOTIFS={
+    en_route:proName=>({title:"Pro accepted your job",body:`${proName} accepted the job and is on the way.`}),
+    arrived:proName=>({title:"Pro arrived",body:`${proName} has arrived at your property.`}),
+    in_progress:proName=>({title:"Work has started",body:`${proName} has started the job.`}),
+    complete:()=>({title:"Job completed",body:"Your job is complete — rate your experience or view the receipt."}),
+  };
+  // Centralized job-transition notification hook — called from proAccepts()
+  // and advance() (the same two functions Demo Pro Controls already route
+  // through), so a future real Pro app triggers identical notifications
+  // without any change here.
+  const handleJobTransition=(jobId,newStatus,proName)=>{
+    const gen=JOB_TRANSITION_NOTIFS[newStatus];
+    if(!gen)return;
+    const {title,body}=gen(proName);
+    const destination = newStatus==="complete" ? {screen:"rating",jobId} : {screen:"tracking",jobId};
+    createNotification({type:NOTIF_TYPES.JOB_UPDATE,title,body,jobId,destination});
+  };
+  const handleCancellationTransition=(jobId,kind)=>{
+    const copy={
+      requested:["Cancellation request received","We've received your cancellation request and will follow up shortly."],
+      approved:["Cancellation approved","Your cancellation has been approved."],
+      denied:["Cancellation needs attention","Haven Support has a question about your cancellation request."],
+    }[kind];
+    if(!copy)return;
+    createNotification({type:NOTIF_TYPES.CANCELLATION,title:copy[0],body:copy[1],jobId,destination:{screen:"tracking",jobId}});
+  };
+  // Deterministic grouping: while an existing unread MESSAGE notification for
+  // the same conversation is still unread, additional incoming messages fold
+  // into it (incrementing count and updating the title) instead of creating
+  // a new row — avoids "excessive message notifications" per spec.
+  const handleIncomingMessage=(jobId,proName)=>{
+    if(!notifAllowed(NOTIF_TYPES.MESSAGE))return;
+    if(!shouldCreateNotification({type:NOTIF_TYPES.MESSAGE,jobId,conversationId:jobId}))return; // live in an open conversation — seen, not suppressed-then-delayed
+    setNotifications(prev=>{
+      const idx=prev.findIndex(n=>n.type===NOTIF_TYPES.MESSAGE&&n.jobId===jobId&&!n.isRead);
+      if(idx>=0){
+        const existing=prev[idx];
+        const count=(existing.count||1)+1;
+        const updated={...existing,count,title:`${count} new messages from ${proName}`,createdAt:Date.now()};
+        const next=prev.slice(); next[idx]=updated;
+        return next;
+      }
+      return [makeNotification({type:NOTIF_TYPES.MESSAGE,title:`New message from ${proName}`,body:"Tap to view the conversation.",jobId,destination:{screen:"messages",jobId}}),...prev];
+    });
+  };
+  const handleIncomingSupportMessage=()=>{
+    if(!notifAllowed(NOTIF_TYPES.SUPPORT))return;
+    if(!shouldCreateNotification({type:NOTIF_TYPES.SUPPORT}))return; // live in the open support conversation — seen, not suppressed-then-delayed
+    setNotifications(prev=>{
+      const idx=prev.findIndex(n=>n.type===NOTIF_TYPES.SUPPORT&&!n.isRead);
+      if(idx>=0){
+        const existing=prev[idx];
+        const count=(existing.count||1)+1;
+        const updated={...existing,count,title:`${count} new messages from Haven Support`,createdAt:Date.now()};
+        const next=prev.slice(); next[idx]=updated;
+        return next;
+      }
+      return [makeNotification({type:NOTIF_TYPES.SUPPORT,title:"New message from Haven Support",body:"Tap to view the conversation.",destination:{screen:"help",supportChat:true}}),...prev];
+    });
+  };
+  const markNotifRead=(id,read=true)=>setNotifications(prev=>prev.map(n=>n.id===id?{...n,isRead:read}:n));
+  const markAllNotifsRead=()=>setNotifications(prev=>prev.map(n=>n.isRead?n:{...n,isRead:true}));
+  const deleteNotification=(id)=>{
+    const n=notifications.find(x=>x.id===id);
+    if(!n)return;
+    setNotifications(prev=>prev.filter(x=>x.id!==id));
+    setLastDeletedNotif(n);
+    setShowUndoToast(true);
+    setOpenSwipeId(null);setOpenSwipeDir(null);
+    setTimeout(()=>setShowUndoToast(false),4000);
+  };
+  const undoDeleteNotification=()=>{
+    if(!lastDeletedNotif)return;
+    setNotifications(prev=>[...prev,lastDeletedNotif].sort((a,b)=>b.createdAt-a.createdAt));
+    setLastDeletedNotif(null);
+    setShowUndoToast(false);
+  };
+  const openNotification=(n)=>{
+    markNotifRead(n.id,true);
+    setOpenSwipeId(null);
+    const d=n.destination;
+    if(!d){ return; }
+    const flagUnavailable=()=>{ setShowUnavailableToast(true); setTimeout(()=>setShowUnavailableToast(false),3000); };
+    const job = d.jobId!=null ? jobs.find(j=>j.id===d.jobId) : null;
+    if(d.jobId!=null && !job){ flagUnavailable(); return; }
+    switch(d.screen){
+      case "tracking": setVjid(job.id); goTo("tracking"); break;
+      case "rating": setVjid(job.id); openRating(); break;
+      case "receipt": openReceipt(job.id); break;
+      case "messages": setVjid(job.id); goTo("messages"); break;
+      case "help": openHelp(); if(d.supportChat) setShowSupportChat(true); break;
+      case "payment": goTo("payment"); break;
+      case "draftAddress":
+        if(hasDraft){ goTo(tid?"task":"custom",navFrom[tid?"task":"custom"]); }
+        else{ flagUnavailable(); }
+        break;
+      default: flagUnavailable();
+    }
+  };
+  const SWIPE_REVEAL=44, SWIPE_COMMIT=120;
+  const swipeDown=(id,e)=>{
+    setSwipeState({id,startX:e.clientX,startY:e.clientY,deltaX:0,deltaY:0,dragging:true,locked:false});
+  };
+  const swipeMove=(id,e)=>{
+    setSwipeState(s=>{
+      if(s.id!==id||!s.dragging)return s;
+      const deltaX=e.clientX-s.startX, deltaY=e.clientY-s.startY;
+      let locked=s.locked;
+      if(!locked){
+        if(Math.abs(deltaX)>10&&Math.abs(deltaX)>Math.abs(deltaY)) locked=true;
+        else if(Math.abs(deltaY)>10) return {...s,deltaX:0,deltaY,dragging:false}; // vertical scroll — abandon the swipe, never block scrolling
+      }
+      return {...s,deltaX,deltaY,locked};
+    });
+  };
+  const swipeUp=(id)=>{
+    setSwipeState(s=>{
+      if(s.id!==id||!s.locked){ return {id:null,startX:0,startY:0,deltaX:0,deltaY:0,dragging:false,locked:false}; }
+      const n=notifications.find(x=>x.id===id);
+      if(s.deltaX<=-SWIPE_COMMIT){ deleteNotification(id); }
+      else if(s.deltaX<=-SWIPE_REVEAL){ setOpenSwipeId(id); setOpenSwipeDir("left"); }
+      else if(s.deltaX>=SWIPE_COMMIT){ if(n)markNotifRead(id,!n.isRead); setOpenSwipeId(null); setOpenSwipeDir(null); }
+      else if(s.deltaX>=SWIPE_REVEAL){ setOpenSwipeId(id); setOpenSwipeDir("right"); }
+      else { setOpenSwipeId(null); setOpenSwipeDir(null); }
+      return {id:null,startX:0,startY:0,deltaX:0,deltaY:0,dragging:false,locked:false};
+    });
+  };
   const [catGroup,setCatGroup] = useState(null);   // {cats:[...], label} or null
   const [emergencyFlag,setEmergencyFlag] = useState(false);
   const [diagInput,setDiagInput] = useState("");
@@ -374,33 +692,78 @@ export default function App(){
   const [newCardCity,setNewCardCity]=useState("");
   const [newCardState,setNewCardState]=useState("");
   const [newCardZip,setNewCardZip]=useState("");
-  // Addresses
+  // Addresses — canonical property/address model. Exactly one entry has
+  // isPrimary:true; that entry IS "My Home" (no separate home/draftHome
+  // state exists anymore — My Home reads/writes this same array so the two
+  // screens can never drift out of sync with each other).
   const [addresses,setAddresses]=useState([
-    {id:1,label:"Home",text:"123 Market Street, Apt 4B, San Francisco, CA 94103"},
-    {id:2,label:"Work",text:"500 Folsom Street, San Francisco, CA 94105"},
+    {id:1,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
+    {id:2,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
   ]);
   const [expandedAddr,setExpandedAddr]=useState(null);
-  const [editingAddrId,setEditingAddrId]=useState(null);
-  const [draftAddrLabel,setDraftAddrLabel]=useState("");
-  const [draftAddrText,setDraftAddrText]=useState("");
-  const [addingAddr,setAddingAddr]=useState(false);
+  const [confirmDeleteAddrId,setConfirmDeleteAddrId]=useState(null);
+  const [editingAddressId,setEditingAddressId]=useState(null); // null while adding a new address
+  const emptyDraftAddress={label:"",street:"",unit:"",city:"",state:"",zip:"",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""};
+  const [draftAddress,setDraftAddress]=useState(emptyDraftAddress);
+  const [addressFormError,setAddressFormError]=useState("");
+  const [selectedAddressId,setSelectedAddressId]=useState(1); // which address the current booking will use
+  // Location awareness — architecture supports every real permission state,
+  // even though the current prototype only ever uses "simulated". A future
+  // real implementation replaces requestLocation()'s body with
+  // navigator.geolocation.getCurrentPosition(...) — no UI code needs to change.
+  const [locationPermission,setLocationPermission]=useState("never_requested"); // never_requested|requesting|granted|denied|unavailable|simulated
+  const [detectedCity,setDetectedCity]=useState(null); // null = not yet checked this session
+  const [locationWarningDismissed,setLocationWarningDismissed]=useState(false);
+  const SIMULATED_NEARBY_CITIES={"San Francisco":"Oakland","Oakland":"San Francisco"};
+  const requestLocation=()=>{
+    setLocationPermission("requesting");
+    setTimeout(()=>{
+      setLocationPermission("simulated");
+      setDetectedCity(selectedAddress?selectedAddress.city:null);
+      setLocationWarningDismissed(false);
+    },350);
+  };
+  const simulateDifferentLocation=()=>{
+    const currentCity=selectedAddress?.city||"";
+    const newCity=SIMULATED_NEARBY_CITIES[currentCity]||"a nearby city";
+    setLocationPermission("simulated");
+    setDetectedCity(newCity);
+    setLocationWarningDismissed(false);
+    createNotification({
+      type:NOTIF_TYPES.LOCATION,
+      title:"Location differs from booked property",
+      body:`Your booking is for your ${selectedAddress?.label||"selected"} property, but your phone appears to be in ${newCity}.`,
+      destination:{screen:"draftAddress"}, // resolved at tap time against whatever draft is currently active, if any
+    });
+  };
+  const [showAddressPicker,setShowAddressPicker]=useState(false);
+  const [showCancelConfirm,setShowCancelConfirm]=useState(false); // pre-accept direct cancel confirmation
+  const [showCancelRequest,setShowCancelRequest]=useState(false); // post-accept support-mediated cancel panel
+  const [tabScr,setTabScr]=useState({}); // per-tab remembered last screen — {home:..., bookings:..., profile:...}
+  const [lastTabTap,setLastTabTap]=useState({tab:null,time:0}); // for double-tap-to-reset detection
+  const [showDiscardConfirm,setShowDiscardConfirm]=useState(false); // "Discard draft?" prompt
+  const [selectedCardId,setSelectedCardId]=useState(1); // which card the current booking will use
+  const [showCardPicker,setShowCardPicker]=useState(false);
   // Help & support
   const [showSupportChat,setShowSupportChat]=useState(false);
+  useEffect(()=>{ liveContextRef.current = {scr,tab,vjid,isAppVisible,showSupportChat}; });
   const [supportMsgs,setSupportMsgs]=useState([{id:1,f:"agent",m:"Hi! I'm a support specialist — what can I help with today?",t:"Just now"}]);
   const [supportInput,setSupportInput]=useState("");
   const [supportTyping,setSupportTyping]=useState(false);
   const [openTopicIdx,setOpenTopicIdx]=useState(null);
-  // My Home
-  const [home,setHome]=useState({address:"123 Market Street, Apt 4B, San Francisco, CA 94103",type:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"});
-  const [draftHome,setDraftHome]=useState(home);
-  // Appliances — customer-entered only; Haven does not verify this data
-  const [appliances,setAppliances]=useState({}); // keyed by APPLIANCES[].key -> {type,brand,model,serial,installDate,warrantyExp,notes}
-  const [applianceEditKey,setApplianceEditKey]=useState(null);
-  const [draftAppliance,setDraftAppliance]=useState({type:"",brand:"",model:"",serial:"",installDate:"",warrantyExp:"",notes:""});
   // Pro profile
   const [proProfileId,setProProfileId]=useState(null);
   const [proProfileCtx,setProProfileCtx]=useState("view"); // "tracking" | "posted" | "view"
   const msgEnd = useRef(null);
+  const scrollPositions = useRef({});
+  useEffect(()=>{
+    const el = (typeof document!=="undefined") ? document.querySelector(".sc") : null;
+    if(!el) return;
+    el.scrollTop = scrollPositions.current[scr] ?? 0;
+    const onScroll = () => { scrollPositions.current[scr] = el.scrollTop; };
+    el.addEventListener("scroll", onScroll);
+    return () => el.removeEventListener("scroll", onScroll);
+  },[scr]);
 
   const tp          = ALL_TIME_PREFS.find(t=>t.id===tpid);
   const surge       = tp?.surge||0;
@@ -423,8 +786,12 @@ export default function App(){
   const vjSIdx= vj?SF.indexOf(vj.status):-1;
   const vjMsgs= vj?.msgs||[];
   const proProfilePro = PROS.find(p=>p.i===proProfileId) || PROS[0];
-  const defaultAddress = addresses.find(a=>a.label==="Home") || addresses[0];
-  const defaultCard = cards.find(c=>c.isDefault) || cards[0];
+  const formatAddress=a=>a?`${a.street}${a.unit?", "+a.unit:""}, ${a.city}, ${a.state} ${a.zip}`:"";
+  const primaryHome = addresses.find(a=>a.isPrimary) || addresses[0];
+  const sortedAddresses = addresses.slice().sort((a,b)=>(b.isPrimary?1:0)-(a.isPrimary?1:0));
+  const sortedCards = cards.slice().sort((a,b)=>(b.isDefault?1:0)-(a.isDefault?1:0));
+  const selectedAddress = addresses.find(a=>a.id===selectedAddressId) || primaryHome;
+  const selectedCard = cards.find(c=>c.id===selectedCardId) || cards.find(c=>c.isDefault) || cards[0];
 
   const allJobs   = jobs.filter(j=>j.status!=="cancelled").slice().reverse();
   const shownJobs = allJobs.filter(j=>{
@@ -443,22 +810,96 @@ export default function App(){
   const updateJob  =(id,u)=>setJobs(p=>p.map(j=>j.id===id?{...j,...u}:j));
   const addMsg     =(id,m)=>setJobs(p=>p.map(j=>j.id===id?{...j,msgs:[...j.msgs,m]}:j));
   // v0.13 — the only 3 places setScr may appear: goTo, backFrom, goTab.
-  const goTo=(screen)=>{
+  const goTo=(screen,forceOrigin,forTab)=>{
     if(!SCREENS.has(screen)){console.error(`goTo: unknown screen "${screen}" — navigation blocked. Add it to SCREENS first.`);return;}
-    setNavFrom(f=>({...f,[screen]:{scr,tab}})); // origin recorded automatically
+    setNavFrom(f=>({...f,[screen]:forceOrigin||{scr,tab}})); // origin recorded automatically, unless explicitly preserved
+    if(!TRANSIENT_FLOW_SCREENS.has(screen)){
+      setTabScr(ts=>({...ts,[forTab!==undefined?forTab:tab]:screen})); // remember this as the (possibly just-switched-to) tab's last screen
+    }
     setScr(screen);
   };
   const backFrom=(screen,fallback={scr:"home",tab:"home"})=>{
     const o=navFrom[screen];
     const dest=(o&&SCREENS.has(o.scr))?o:fallback;
+    const destTab=dest.scr==="home"?(dest.tab||"home"):tab;
+    setTabScr(ts=>{
+      const next={...ts};
+      if(dest.scr==="home"||TRANSIENT_FLOW_SCREENS.has(dest.scr)) delete next[destTab];
+      else next[destTab]=dest.scr;
+      for(const k of Object.keys(next)) if(TRANSIENT_FLOW_SCREENS.has(next[k])) delete next[k];
+      return next;
+    });
     setScr(dest.scr);
     if(dest.scr==="home")setTab(dest.tab||"home");
   };
-  const goTab      =t=>{if(t==="home")setQ("");setScr("home");setTab(t);};
+  const goTab      =t=>{
+    if(t==="home")setQ("");
+    setTabScr(ts=>{
+      const next={...ts};
+      delete next[t];
+      for(const k of Object.keys(next)) if(TRANSIENT_FLOW_SCREENS.has(next[k])) delete next[k];
+      return next;
+    });
+    setScr("home");setTab(t);
+  };
   const goHome     =()=>goTab("home");
   const goBookings =()=>goTab("bookings");
   const goProfile  =()=>goTab("profile");
-  const openTask   =(id)=>{setTid(id);setTpid(2);setDesc("");setEmergency(false);goTo("task");};
+  const hasDraft = tid!==null || ctitle.trim()!=="";
+  // Bottom-tab-bar tap handler ONLY — every other internal "return to root"
+  // call site (goHome/goBookings/goProfile, used as fixed-destination back
+  // targets from many screens) still goes through the untouched goTab above,
+  // and is NOT affected by memory-restore or double-tap-reset. Per-tab
+  // memory is only ever written by goTo() and only ever cleared here by an
+  // explicit double-tap — never by ordinary back navigation — matching the
+  // "do not automatically reset tabs" rule exactly.
+  const tabBarTap=(t)=>{
+    const now=Date.now();
+    const isDoubleTap = lastTabTap.tab===t && (now-lastTabTap.time)<500;
+    setLastTabTap({tab:t,time:now});
+    if(isDoubleTap){
+      setTabScr(ts=>({...ts,[t]:undefined}));
+      goTab(t);
+      return;
+    }
+    if(t==="bookings"&&hasDraft){
+      const draftScreen=tid?"task":"custom";
+      setTab(t);
+      goTo(draftScreen,navFrom[draftScreen],t); // preserve the draft's own original back-origin; record under the tab we're switching TO
+      return;
+    }
+    const remembered=tabScr[t];
+    if(remembered&&SCREENS.has(remembered)){
+      setTab(t);
+      goTo(remembered,navFrom[remembered],t);
+    }else{
+      goTab(t);
+    }
+  };
+  const scrubDraftFromTabMemory=()=>{
+    // "task"/"custom" render nothing meaningful once their underlying data
+    // is cleared — if a tab's memory still points at one of them (because
+    // the draft was cleared, whether posted or discarded, without ever
+    // navigating away first), restoring it later would show a blank screen.
+    setTabScr(ts=>{
+      const next={...ts};
+      for(const k of Object.keys(next)) if(next[k]==="task"||next[k]==="custom") delete next[k];
+      return next;
+    });
+  };
+  const discardDraftAndGo=(navFn)=>{
+    setTid(null);setTpid(null);setDesc("");setPhotos([]);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
+    setShowDiscardConfirm(false);
+    scrubDraftFromTabMemory();
+    navFn();
+  };
+  const resetBookingSelections=()=>{
+    setSelectedAddressId(primaryHome?.id);
+    setSelectedCardId((cards.find(c=>c.isDefault)||cards[0])?.id);
+    setShowAddressPicker(false);setShowCardPicker(false);
+    setLocationPermission("never_requested");setDetectedCity(null);setLocationWarningDismissed(false);
+  };
+  const openTask   =(id)=>{setTid(id);setTpid(2);setDesc("");setEmergency(false);resetBookingSelections();goTo("task");};
   const photoInputRef = useRef(null);
   const addPhoto   =()=>{ photoInputRef.current?.click(); };
   const handlePhotoFiles=(e)=>{
@@ -484,20 +925,26 @@ export default function App(){
   };
   const saveProfile=()=>{setProfile({name:draftName.trim()||"Jane Doe",bio:draftBio.trim(),photo:draftPhoto});goProfile();};
 
-  // My Home
+  // My Home / Addresses — one canonical model, one edit form for both contexts
   const openMyHome=()=>goTo("myhome");
-  const openEditHome=()=>{setDraftHome(home);goTo("editHome");};
-  const saveHome=()=>{setHome(draftHome);goTo("myhome");};
-  const openApplianceEdit=(key,defaultType)=>{
-    setApplianceEditKey(key);
-    setDraftAppliance(appliances[key]||{type:defaultType,brand:"",model:"",serial:"",installDate:"",warrantyExp:"",notes:""});
-    goTo("applianceDetail");
+  const openAddressForm=(addr)=>{
+    setEditingAddressId(addr?addr.id:null);
+    setDraftAddress(addr?{...addr}:{...emptyDraftAddress});
+    setAddressFormError("");
+    goTo("addressEdit");
   };
-  const saveAppliance=()=>{
-    setAppliances(a=>({...a,[applianceEditKey]:draftAppliance}));
-    goTo("myhome");
+  const saveAddressForm=()=>{
+    if(!draftAddress.street.trim()||!draftAddress.city.trim()||!draftAddress.state.trim()||!draftAddress.zip.trim()){
+      setAddressFormError("Please fill in street, city, state, and ZIP before saving.");
+      return;
+    }
+    if(editingAddressId){
+      setAddresses(as=>as.map(a=>a.id===editingAddressId?{...a,...draftAddress,label:draftAddress.label.trim()||a.label}:a));
+    }else{
+      setAddresses(as=>[...as,{...draftAddress,id:Date.now(),isPrimary:as.length===0,label:draftAddress.label.trim()||"Address"}]);
+    }
+    backFrom("addressEdit",{scr:"myhome",tab:"home"});
   };
-  const hireAgainJob=(taskId)=>{ if(taskId) openTask(taskId); };
   const openReceipt=(jobId)=>{ setVjid(jobId); goTo("receipt"); };
   const openProProfile=(pro,ctx)=>{setProProfileId(pro.i);setProProfileCtx(ctx);goTo("proProfile");};
   const openHelp=()=>{setShowSupportChat(false);setOpenTopicIdx(null);goTo("help");};
@@ -515,17 +962,19 @@ export default function App(){
   };
 
   // Addresses
-  const startEditAddr=a=>{setEditingAddrId(a.id);setDraftAddrLabel(a.label);setDraftAddrText(a.text);setExpandedAddr(null);};
-  const saveAddrEdit=()=>{
-    setAddresses(as=>as.map(a=>a.id===editingAddrId?{...a,label:draftAddrLabel.trim()||a.label,text:draftAddrText.trim()||a.text}:a));
-    setEditingAddrId(null);
+  const removeAddr=id=>{
+    setAddresses(as=>{
+      const target=as.find(a=>a.id===id);
+      const remaining=as.filter(a=>a.id!==id);
+      if(target?.isPrimary&&remaining.length>0){
+        return remaining.map((a,i)=>i===0?{...a,isPrimary:true}:{...a,isPrimary:false});
+      }
+      return remaining;
+    });
+    setExpandedAddr(null);
+    setConfirmDeleteAddrId(null);
   };
-  const removeAddr=id=>{setAddresses(as=>as.filter(a=>a.id!==id));setExpandedAddr(null);};
-  const addAddress=()=>{
-    if(!draftAddrText.trim())return;
-    setAddresses(as=>[...as,{id:Date.now(),label:draftAddrLabel.trim()||"Address",text:draftAddrText.trim()}]);
-    setDraftAddrLabel("");setDraftAddrText("");setAddingAddr(false);
-  };
+  const setPrimaryAddress=id=>{setAddresses(as=>as.map(a=>({...a,isPrimary:a.id===id})));setExpandedAddr(null);};
 
   // Support chat
   const sendSupportMsg=()=>{
@@ -536,6 +985,7 @@ export default function App(){
     setTimeout(()=>{
       setSupportTyping(false);
       setSupportMsgs(p=>[...p,{id:Date.now()+1,f:"agent",m:"Thanks for the details — a specialist will follow up shortly. Anything else I can help with in the meantime?",t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}]);
+      handleIncomingSupportMessage();
     },1800);
   };
 
@@ -553,7 +1003,7 @@ export default function App(){
   };
   const bookDiagnosis=()=>{
     if(!diagResult)return;
-    setTid(diagResult.task.id);setTpid(2);setDesc(diagInput);setEmergency(false);goTo("task");
+    setTid(diagResult.task.id);setTpid(2);setDesc(diagInput);setEmergency(false);resetBookingSelections();goTo("task");
   };
 
   const postJob=()=>{
@@ -563,15 +1013,18 @@ export default function App(){
       custom:tid?null:{title:ctitle,cat:ccat,price:parseInt(cprice)||0},
       tpId:tpid,photos:[...photos],desc,surge,
       emergency,emergencyFee:emergency?EMERGENCY_FEE:0,
-      addressText:defaultAddress?.text||"—",paymentBrand:defaultCard?.brand||"Card",paymentLast4:defaultCard?.last4||"----",
+      addressText:selectedAddress?formatAddress(selectedAddress):"—",addressLabel:selectedAddress?.label||"",
+      paymentBrand:selectedCard?.brand||"Card",paymentLast4:selectedCard?.last4||"----",
     });
     setJobs(p=>[...p,nj]);setVjid(nj.id);
     setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
+    setShowCancelConfirm(false);setShowCancelRequest(false);
+    scrubDraftFromTabMemory();
     goTo("posted");
   };
 
   const startEmergency=(opt)=>{
-    setEmergency(true);setTpid(101);setDesc(opt.desc);setPhotos([]);
+    setEmergency(true);setTpid(101);setDesc(opt.desc);setPhotos([]);resetBookingSelections();
     if(opt.taskId){
       setTid(opt.taskId);setCtitle("");setCcat("Repair");setCprice("");goTo("task");
     }else{
@@ -581,7 +1034,8 @@ export default function App(){
 
   const proAccepts=()=>{
     const p=PROS[Math.floor(Math.random()*PROS.length)];
-    updateJob(vjid,{pro:p,status:"en_route",msgs:SMSG,justAccepted:true});
+    updateJob(vjid,{pro:p,status:"en_route",msgs:[],justAccepted:true});
+    handleJobTransition(vjid,"en_route",p.n);
     goTo("tracking");
     setTimeout(()=>updateJob(vjid,{justAccepted:false}),3500);
   };
@@ -592,28 +1046,27 @@ export default function App(){
     if(i<SF.length-1){
       const next=SF[i+1];
       updateJob(vjid, next==="complete" ? {status:next,completedAt:Date.now()} : {status:next});
+      handleJobTransition(vjid,next,vj.pro?.n||"Your pro");
     }
   };
+  const cancelJobDirect=()=>{ updateJob(vjid,{status:"cancelled"}); setShowCancelConfirm(false); goHome(); };
+  const requestCancellation=()=>{ updateJob(vjid,{cancelStatus:"requested",cancellationRequestedAt:Date.now()}); setShowCancelRequest(false); handleCancellationTransition(vjid,"requested"); };
 
   const sendMsg=()=>{
     if(!minput.trim()||vj?.status==="complete")return;
     const txt=minput.trim();
+    const forJobId=vjid, proName=vj?.pro?.n||"your pro";
     addMsg(vjid,{id:Date.now(),f:"cu",m:txt,t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});
     setMinput("");setTyping(true);
-    setTimeout(()=>{setTyping(false);addMsg(vjid,{id:Date.now()+1,f:"pro",m:PRO_REPLIES[Math.floor(Math.random()*PRO_REPLIES.length)],t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});},2000);
+    setTimeout(()=>{
+      setTyping(false);
+      addMsg(forJobId,{id:Date.now()+1,f:"pro",m:PRO_REPLIES[Math.floor(Math.random()*PRO_REPLIES.length)],t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});
+      handleIncomingMessage(forJobId,proName);
+    },2000);
   };
 
   const openRating=()=>{setStars(0);setReviewTxt("");setHireAgain(null);goTo("rating");};
-  const submitRating=()=>{updateJob(vjid,{rated:true,stars,reviewTxt,hireAgain});setStars(0);setReviewTxt("");setHireAgain(null);goBookings();};
-
-  // ── STATUS BAR ─────────────────────────────────────────────────────────────
-  const darkHdr=["task","custom","diagnose","emergency"].includes(scr)||(scr==="home"&&tab==="home");
-  const statusBar=()=>(
-    <div style={{background:darkHdr?N:W,padding:"14px 24px 8px",display:"flex",justifyContent:"space-between",flexShrink:0}}>
-      <span style={{fontWeight:700,fontSize:15,color:darkHdr?W:TX}}>9:41</span>
-      <span style={{fontSize:11,color:darkHdr?"rgba(255,255,255,.35)":TM}}>●●●  ▶▶  ▓▓</span>
-    </div>
-  );
+  const submitRating=()=>{updateJob(vjid,{rated:true,stars,reviewTxt,hireAgain});setStars(0);setReviewTxt("");setHireAgain(null);goHome();};
 
   // ── BOTTOM NAV (fixed alignment: every icon in a matched 24x24 box) ────────
   // Single shared bottom-tab-bar renderer — one fixed style definition, no
@@ -628,12 +1081,18 @@ export default function App(){
   const bottomNav=()=>(
     <div style={{background:W,borderTop:`1px solid ${BD}`,paddingTop:10,paddingBottom:20,display:"flex",flexShrink:0}}>
       {[["home","🏠","Home"],["bookings","📋","Bookings"],["profile",null,"Profile"]].map(([id,ic,lb])=>{
-        const a=tab===id&&scr==="home";
+        const a=tab===id;
+        const ariaLabel = id==="profile" ? `Profile${unreadCount>0?`, ${unreadCount} unread notification${unreadCount!==1?"s":""}`:""}` : lb;
         return(
-          <button key={id} onClick={()=>goTab(id)} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:0}}>
+          <button key={id} onClick={()=>tabBarTap(id)} aria-label={ariaLabel} style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",gap:3,background:"none",border:"none",cursor:"pointer",padding:0}}>
             <div style={{width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",position:"relative"}}>
               {id==="profile"?<PersonIcon col={AM} sz={22}/>:<span style={{fontSize:21,lineHeight:1}}>{ic}</span>}
-              <div style={{position:"absolute",top:-2,right:-2,width:8,height:8,borderRadius:4,background:AM,opacity:(id==="bookings"&&hasActive)?1:0}}/>
+              <div style={{position:"absolute",top:-2,right:-2,width:8,height:8,borderRadius:4,background:AM,opacity:(id==="bookings"&&(hasActive||hasDraft))?1:0}}/>
+              {id==="profile"&&unreadCount>0&&(
+                <div style={{position:"absolute",top:-6,right:-10,minWidth:16,height:16,borderRadius:8,background:"#DC2626",display:"flex",alignItems:"center",justifyContent:"center",padding:"0 3px",boxShadow:`0 0 0 1.5px ${W}`}}>
+                  <span style={{fontSize:9,fontWeight:800,color:"#FFFFFF",lineHeight:1}}>{unreadCount>9?"9+":unreadCount}</span>
+                </div>
+              )}
             </div>
             <span style={{fontSize:11,fontWeight:a?700:400,color:a?N:TM}}>{lb}</span>
             <div style={{width:16,height:3,borderRadius:2,background:a?N:"transparent",marginTop:1}}/>
@@ -683,10 +1142,10 @@ export default function App(){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
           <div>
             <div style={{color:AM,fontSize:11,fontWeight:800,letterSpacing:2.5,marginBottom:6}}>HAVEN</div>
-            <div style={{color:"rgba(255,255,255,.5)",fontSize:11,marginBottom:2}}>📍 San Francisco, CA</div>
+            <div onClick={()=>goTo("addresses")} aria-label={primaryHome?`Current location: ${primaryHome.city}, ${primaryHome.state}. Tap to manage addresses.`:"No address saved. Tap to add one."} style={{color:"rgba(255,255,255,.5)",fontSize:11,marginBottom:2,cursor:"pointer"}}>📍 {primaryHome?`${primaryHome.city}, ${primaryHome.state}`:"Add an address"}</div>
             <div style={{color:W,fontSize:22,fontWeight:800,lineHeight:1.25}}>What do you<br/>need done?</div>
           </div>
-          <button onClick={goProfile} style={{width:40,height:40,borderRadius:20,background:AM,display:"flex",alignItems:"center",justifyContent:"center",border:"none",cursor:"pointer",overflow:"hidden"}}>
+          <button onClick={goProfile} aria-label="Profile" style={{width:40,height:40,borderRadius:20,background:AM,display:"flex",alignItems:"center",justifyContent:"center",border:"none",cursor:"pointer",overflow:"hidden",flexShrink:0}}>
             {profile.photo?<img src={profile.photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:<PersonIcon col={W} sz={22}/>}
           </button>
         </div>
@@ -718,7 +1177,7 @@ export default function App(){
             <div style={{fontWeight:700,fontSize:13,color:"#C2410C"}}>Urgent</div>
             <div style={{fontSize:10,color:"#C2410C",opacity:.75,marginTop:1}}>Fast help</div>
           </div>
-          <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);goTo("custom");}}
+          <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
             style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
             <div style={{fontSize:22,marginBottom:6}}>✏️</div>
             <div style={{fontWeight:700,fontSize:13,color:N}}>Not Listed?</div>
@@ -802,7 +1261,7 @@ export default function App(){
                 <div style={{fontSize:11,color:TM,marginTop:1}}>est. {t.t}</div>
               </div>
             ))}
-            <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);goTo("custom");}}
+            <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
               style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
               <div style={{fontSize:28,marginBottom:8}}>✏️</div>
               <div style={{fontWeight:700,fontSize:13,color:W,lineHeight:1.3,marginBottom:4}}>Post a custom job</div>
@@ -899,11 +1358,12 @@ export default function App(){
           const jtp=ALL_TIME_PREFS.find(t=>t.id===j.tpId);
           const jTotal=jt?jt.p+j.surge+(j.emergencyFee||0):0;
           const isPending=j.status==="posted";const isDone=j.status==="complete";
-          const statusLabel=isPending?"Waiting for pro":isDone?"Completed":SI[j.status]?.label||"Active";
-          const statusColor=isPending?AM:isDone?SC:N;
-          const statusBg=isPending?"#FEF3C7":isDone?SL:"#EEF2FF";
+          const isCancelPending=j.cancelStatus==="requested"&&!isDone;
+          const statusLabel=isCancelPending?"Pending Cancellation":isPending?"Waiting for pro":isDone?"Completed":SI[j.status]?.label||"Active";
+          const statusColor=isCancelPending?"#DC2626":isPending?AM:isDone?SC:N;
+          const statusBg=isCancelPending?"#FEF2F2":isPending?"#FEF3C7":isDone?SL:"#EEF2FF";
           return(
-            <div key={j.id} onClick={()=>{setVjid(j.id);goTo(isPending?"posted":"tracking");}} style={{background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:12,cursor:"pointer"}}>
+            <div key={j.id} onClick={()=>{setVjid(j.id);setShowCancelConfirm(false);setShowCancelRequest(false);goTo(isPending?"posted":"tracking");}} style={{background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:12,cursor:"pointer"}}>
               <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:12}}>
                 <div style={{width:50,height:50,borderRadius:25,background:"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{jt?.e||"🔧"}</div>
                 <div style={{flex:1}}>
@@ -920,7 +1380,7 @@ export default function App(){
                 </div>
                 {!isPending&&j.pro&&<span style={{fontSize:12,color:TS}}>Pro: {j.pro.n}</span>}
                 {isDone&&!j.rated&&<span style={{fontSize:12,color:AM,fontWeight:700}}>⭐ Rate now</span>}
-                {isDone&&j.rated&&<span style={{fontSize:12,color:SC,fontWeight:600}}>{"★".repeat(j.stars)} Reviewed</span>}
+                {isDone&&j.rated&&<span style={{fontSize:12,color:SC,fontWeight:600,display:"inline-flex",alignItems:"center",gap:4}}>{starDisplay(j.stars,11)} Reviewed</span>}
               </div>
             </div>
           );
@@ -944,7 +1404,7 @@ export default function App(){
         <span style={{color:"rgba(255,255,255,.6)",fontSize:12,fontWeight:600}}>Edit ›</span>
       </div>
 
-      {/* My Home entry — prominent */}
+      {/* My Home — large featured card */}
       <div onClick={openMyHome} style={{background:"linear-gradient(135deg,#FEF3C7,#FDE68A)",borderRadius:20,padding:18,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
         <div style={{width:48,height:48,borderRadius:24,background:"rgba(255,255,255,.55)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>🏡</div>
         <div style={{flex:1}}>
@@ -954,20 +1414,37 @@ export default function App(){
         <span style={{color:"#92400E",fontSize:18}}>›</span>
       </div>
 
+      {/* Notifications — large featured card, same weight as My Home, distinct notification-blue treatment */}
+      <div onClick={()=>goTo("notifCenter")} aria-label={unreadCount>0?`Notifications, ${unreadCount>9?"9+":unreadCount} unread`:"Notifications"} style={{background:`linear-gradient(135deg,${SELBG},${SELBORDER}33)`,border:`1px solid ${SELBORDER}`,borderRadius:20,padding:18,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+        <div style={{width:48,height:48,borderRadius:24,background:"rgba(255,255,255,.55)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>🔔</div>
+        <div style={{flex:1}}>
+          <div style={{display:"flex",alignItems:"center",gap:8}}>
+            <span style={{fontWeight:700,fontSize:15,color:N}}>Notifications</span>
+            {unreadCount>0&&<span style={{fontSize:11,fontWeight:800,color:W,background:"#DC2626",padding:"1px 7px",borderRadius:10,minWidth:18,textAlign:"center"}}>{unreadCount>9?"9+":unreadCount}</span>}
+          </div>
+          <div style={{fontSize:12,color:N,opacity:.75,marginTop:2}}>Job updates, messages & account alerts</div>
+        </div>
+        <span style={{color:N,fontSize:18}}>›</span>
+      </div>
+
       <div style={{background:W,borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
         {[
-          ["My bookings",()=>goTab("bookings"),false],
-          ["Payment methods",()=>goTo("payment"),false],
-          ["Saved addresses",()=>goTo("addresses"),false],
-          ["Notifications",()=>goTo("notifications"),false],
-          ["Help & support",()=>openHelp(),false],
-          ["Sign out (coming soon)",()=>{},true],
-        ].map(([item,fn,disabledItem],i,arr)=>(
-          <div key={item} onClick={disabledItem?undefined:fn} style={{padding:"16px 20px",borderBottom:i<arr.length-1?`1px solid ${BD}`:"none",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:disabledItem?"default":"pointer"}}>
+          ["Payment Methods",()=>goTo("payment"),false,null],
+          ["Saved Addresses",()=>goTo("addresses"),false,null],
+          ["Settings",()=>goTo("settings"),false,null],
+          ["Help & Support",()=>openHelp(),false,null],
+        ].map(([item,fn,disabledItem,badge],i,arr)=>(
+          <div key={item} onClick={disabledItem?undefined:fn} aria-label={badge?`${item}, ${badge} unread`:item} style={{padding:"16px 20px",borderBottom:`1px solid ${BD}`,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:disabledItem?"default":"pointer"}}>
             <span style={{fontWeight:500,fontSize:15,color:disabledItem?TM:TX}}>{item}</span>
-            {!disabledItem&&<span style={{color:TM,fontSize:18}}>›</span>}
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              {badge&&<span style={{fontSize:11,fontWeight:800,color:W,background:"#DC2626",padding:"1px 7px",borderRadius:10,minWidth:18,textAlign:"center"}}>{badge}</span>}
+              {!disabledItem&&<span style={{color:TM,fontSize:18}}>›</span>}
+            </div>
           </div>
         ))}
+        <div onClick={()=>{}} style={{padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"default"}}>
+          <span style={{fontWeight:500,fontSize:15,color:TM}}>Sign Out</span>
+        </div>
       </div>
       <div style={{textAlign:"center",marginTop:28}}>
         <div style={{fontSize:13,fontWeight:800,color:TM,letterSpacing:2.5}}>HAVEN</div>
@@ -980,6 +1457,23 @@ export default function App(){
     <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",gap:14}}>
       <button onClick={onBack} style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
       <span style={{fontWeight:700,fontSize:17,color:TX}}>{title}</span>
+    </div>
+  );
+
+  // Demo Pro Controls — a customer never sees this in a real deployment.
+  // Clearly separated (dashed border, distinct background, explicit label)
+  // from normal customer UI so it can never be mistaken for a real control.
+  // Every button here routes through the same centralized helpers (proAccepts,
+  // advance) a future real Pro app would call — no separate transition logic.
+  const demoProControlsPanel=(buttons)=>(
+    <div style={{margin:"0 20px 20px",background:"repeating-linear-gradient(135deg,#FFF7ED,#FFF7ED 10px,#FEF3C7 10px,#FEF3C7 20px)",border:"1.5px dashed #F59E0B",borderRadius:16,padding:14}}>
+      <div style={{fontSize:11,fontWeight:800,color:"#92400E",letterSpacing:.6,marginBottom:2}}>🛠️ DEMO — PRO CONTROLS</div>
+      <div style={{fontSize:11,color:"#92400E",opacity:.85,marginBottom:10}}>Stands in for the future Pro app. Not visible in a real customer build.</div>
+      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+        {buttons.map(([label,fn])=>(
+          <button key={label} onClick={fn} style={{padding:"9px 14px",borderRadius:10,border:"1.5px solid #F59E0B",background:"#FFFFFF",color:"#92400E",fontWeight:700,fontSize:12,cursor:"pointer"}}>{label}</button>
+        ))}
+      </div>
     </div>
   );
 
@@ -1021,18 +1515,63 @@ export default function App(){
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",gap:10,alignItems:"center",minWidth:0}}>
           <span style={{fontSize:16,flexShrink:0}}>📍</span>
-          <span style={{fontSize:13,color:TX,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{defaultAddress?.text||"No address saved"}</span>
+          <span style={{fontSize:13,color:selectedAddress?TX:N,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",cursor:selectedAddress?"default":"pointer"}} onClick={selectedAddress?undefined:()=>openAddressForm(null)}>{selectedAddress?formatAddress(selectedAddress):"No address saved — tap to add one"}</span>
         </div>
-        <span onClick={()=>goTo("addresses")} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10}}>Change</span>
+        {addresses.length>1&&<span onClick={()=>{setShowAddressPicker(v=>!v);setShowCardPicker(false);}} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10}}>Change</span>}
       </div>
+      {locationPermission==="never_requested"&&(
+        <div onClick={requestLocation} style={{marginTop:10,fontSize:11,color:TM,cursor:"pointer"}}>📡 Check my location to help prevent mistakes</div>
+      )}
+      {locationPermission==="requesting"&&(
+        <div style={{marginTop:10,fontSize:11,color:TM}}>📡 Checking your location…</div>
+      )}
+      {detectedCity!==null&&selectedAddress&&detectedCity!==selectedAddress.city&&!locationWarningDismissed&&(
+        <div style={{marginTop:12,background:"#FFF7ED",border:"1px solid #FDE9CC",borderRadius:14,padding:14}}>
+          <div style={{fontSize:12,color:"#92400E",lineHeight:1.5,marginBottom:10}}>
+            Your repair is booked for your {selectedAddress.label} property, but your phone appears to be in {detectedCity}.
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setLocationWarningDismissed(true)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"1.5px solid #FDE9CC",background:W,color:"#92400E",fontWeight:700,fontSize:12,cursor:"pointer"}}>Continue</button>
+            <button onClick={()=>{setShowAddressPicker(true);setLocationWarningDismissed(true);}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:"#F59E0B",color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Change Address</button>
+          </div>
+        </div>
+      )}
+      {detectedCity!==null&&selectedAddress&&detectedCity===selectedAddress.city&&(
+        <div style={{marginTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+          <span style={{fontSize:11,color:SC}}>📡 Location matches this property</span>
+          <span onClick={simulateDifferentLocation} style={{fontSize:10,color:TM,textDecoration:"underline",cursor:"pointer"}}>Simulate different location (demo)</span>
+        </div>
+      )}
+      {showAddressPicker&&(
+        <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
+          {sortedAddresses.map(a=>(
+            <div key={a.id} onClick={()=>{setSelectedAddressId(a.id);setShowAddressPicker(false);}}
+              style={{padding:"9px 10px",borderRadius:10,marginBottom:6,cursor:"pointer",background:a.id===selectedAddressId?"#EFF6FF":BG,border:`1.5px solid ${a.id===selectedAddressId?"#BFDBFE":"transparent"}`}}>
+              <div style={{fontSize:12,fontWeight:700,color:TX}}>{a.label}{a.isPrimary?" · Primary":""}</div>
+              <div style={{fontSize:11,color:TS,marginTop:1}}>{formatAddress(a)}</div>
+            </div>
+          ))}
+        </div>
+      )}
       <div style={{height:1,background:BD,margin:"12px 0"}}/>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
           <span style={{fontSize:16}}>💳</span>
-          <span style={{fontSize:13,color:TX,fontWeight:600}}>{defaultCard?`${defaultCard.brand} •••• ${defaultCard.last4}`:"No card saved"}</span>
+          <span style={{fontSize:13,color:TX,fontWeight:600}}>{selectedCard?`${selectedCard.brand} •••• ${selectedCard.last4}`:"No card saved"}</span>
         </div>
-        <span onClick={()=>goTo("payment")} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer"}}>Change</span>
+        {cards.length>1&&<span onClick={()=>{setShowCardPicker(v=>!v);setShowAddressPicker(false);}} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer"}}>Change</span>}
       </div>
+      {showCardPicker&&(
+        <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
+          {cards.map(c=>(
+            <div key={c.id} onClick={()=>{setSelectedCardId(c.id);setShowCardPicker(false);}}
+              style={{padding:"9px 10px",borderRadius:10,marginBottom:6,cursor:"pointer",background:c.id===selectedCardId?"#EFF6FF":BG,border:`1.5px solid ${c.id===selectedCardId?"#BFDBFE":"transparent"}`,display:"flex",justifyContent:"space-between"}}>
+              <span style={{fontSize:12,fontWeight:700,color:TX}}>{c.brand} •••• {c.last4}</span>
+              {c.isDefault&&<span style={{fontSize:10,color:TM}}>Default</span>}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
   // Inline horizontal photo row — optional, no separate screen required
@@ -1145,9 +1684,11 @@ export default function App(){
 
   // ── MY HOME ────────────────────────────────────────────────────────────────
   const completedJobs = jobs.filter(j=>j.status==="complete").slice().sort((a,b)=>(b.completedAt||b.id)-(a.completedAt||a.id));
+  const primaryAddressText = formatAddress(primaryHome);
+  const primaryCompletedJobs = completedJobs.filter(j=>!j.addressText||j.addressText===primaryAddressText);
   const maintSuggestions = (()=>{
     const seen=new Set(); const out=[];
-    completedJobs.forEach(j=>{
+    primaryCompletedJobs.forEach(j=>{
       const rule=j.taskId&&MAINT_RULES[j.taskId];
       if(rule&&!seen.has(j.taskId)){
         seen.add(j.taskId);
@@ -1157,8 +1698,41 @@ export default function App(){
     });
     return out;
   })();
+  const jobDisplayInfo=j=>{
+    const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
+    const jTotal=jt?jt.p+j.surge+(j.emergencyFee||0):0;
+    const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+    return {jt,jTotal,dateStr};
+  };
+  const starDisplay=(n,sz=13)=>(
+    <span style={{display:"inline-flex",gap:1,verticalAlign:"middle"}}>
+      {[1,2,3,4,5].map(i=>{
+        const fillPct=Math.max(0,Math.min(1,n-(i-1)))*100;
+        return(
+          <span key={i} style={{position:"relative",display:"inline-block",width:sz,height:sz,lineHeight:1}}>
+            <span style={{position:"absolute",inset:0,fontSize:sz,color:"#DDD"}}>★</span>
+            <span style={{position:"absolute",inset:0,width:`${fillPct}%`,overflow:"hidden",whiteSpace:"nowrap"}}><span style={{fontSize:sz,color:AM}}>★</span></span>
+          </span>
+        );
+      })}
+    </span>
+  );
 
-  const myhomeScreen=()=>(
+  const myhomeScreen=()=>{
+    if(!primaryHome){
+      return(
+        <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+          {subHeader("My Home")}
+          <div className="sc" style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
+            <div style={{fontSize:36,marginBottom:12}}>🏠</div>
+            <div style={{fontWeight:700,fontSize:16,color:TX,marginBottom:6}}>No property saved yet</div>
+            <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:240}}>Add a property to see your home overview, service history, and maintenance suggestions.</div>
+            <button onClick={()=>openAddressForm(null)} style={{padding:"13px 24px",borderRadius:14,border:"none",background:AM,color:W,fontWeight:700,fontSize:14,cursor:"pointer"}}>+ Add a property</button>
+          </div>
+        </div>
+      );
+    }
+    return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       {subHeader("My Home")}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:"20px 20px 32px"}}>
@@ -1167,11 +1741,11 @@ export default function App(){
         <div style={{background:W,borderRadius:20,padding:20,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Home overview</div>
-            <span onClick={openEditHome} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
+            <span onClick={()=>openAddressForm(primaryHome)} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
           </div>
-          <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:14,lineHeight:1.4}}>📍 {home.address}</div>
+          <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:14,lineHeight:1.4}}>📍 {formatAddress(primaryHome)}</div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            {[["Home type",home.type],["Year built",home.yearBuilt],["Square footage",`${home.sqft} sqft`],["Layout",formatLayout(home)]].map(([l,v])=>(
+            {[["Home type",primaryHome.propertyType||"Not set"],["Year built",primaryHome.yearBuilt||"Not set"],["Square footage",primaryHome.sqft?`${primaryHome.sqft} sqft`:"Not set"],["Layout",formatLayout(primaryHome)]].map(([l,v])=>(
               <div key={l} style={{background:BG,borderRadius:12,padding:"10px 12px"}}>
                 <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:2}}>{l}</div>
                 <div style={{fontSize:13,fontWeight:700,color:TX}}>{v}</div>
@@ -1180,22 +1754,20 @@ export default function App(){
           </div>
         </div>
 
-        {/* Service History */}
+        {/* Service History — compact preview only */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <span style={{fontWeight:700,fontSize:15,color:TX}}>Service history</span>
-          <span style={{fontSize:12,color:TM}}>{completedJobs.length} completed</span>
+          <span style={{fontSize:12,color:TM}}>{primaryCompletedJobs.length} completed</span>
         </div>
-        {completedJobs.length===0?(
-          <div style={{background:W,borderRadius:18,padding:20,marginBottom:20,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+        {primaryCompletedJobs.length===0?(
+          <div style={{background:W,borderRadius:18,padding:20,marginBottom:12,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:28,marginBottom:8}}>🗂️</div>
-            <div style={{fontSize:13,color:TS}}>Completed jobs will show up here as a timeline of everything done on your home.</div>
+            <div style={{fontSize:13,color:TS}}>No completed services yet. Completed jobs will show up here.</div>
           </div>
         ):(
-          <div style={{marginBottom:20}}>
-            {completedJobs.map(j=>{
-              const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
-              const jTotal=jt?jt.p+j.surge+(j.emergencyFee||0):0;
-              const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+          <div style={{marginBottom:12}}>
+            {primaryCompletedJobs.slice(0,2).map(j=>{
+              const {jt,jTotal,dateStr}=jobDisplayInfo(j);
               return(
                 <div key={j.id} style={{background:W,borderRadius:18,padding:16,marginBottom:10,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                   <div style={{display:"flex",gap:12,alignItems:"center",marginBottom:10}}>
@@ -1212,13 +1784,16 @@ export default function App(){
                   <div style={{display:"flex",gap:8}}>
                     <button onClick={()=>{setVjid(j.id);goTo("tracking");}} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:600,fontSize:12,cursor:"pointer"}}>View details</button>
                     <button onClick={()=>openReceipt(j.id)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:600,fontSize:12,cursor:"pointer"}}>View receipt</button>
-                    {j.taskId&&<button onClick={()=>hireAgainJob(j.taskId)} style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:N,color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Hire again</button>}
                   </div>
                 </div>
               );
             })}
           </div>
         )}
+        <div onClick={()=>goTo("serviceHistory")} style={{background:W,borderRadius:16,padding:14,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer",display:"flex",justifyContent:"center",alignItems:"center",gap:6}}>
+          <span style={{fontSize:13,fontWeight:700,color:N}}>View all service history</span>
+          <span style={{color:N,fontSize:16}}>›</span>
+        </div>
 
         {/* Maintenance Suggestions */}
         <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:12}}>Suggested maintenance</div>
@@ -1231,7 +1806,6 @@ export default function App(){
                   <div style={{fontSize:13,color:"#92400E",fontWeight:600,lineHeight:1.4}}>{s.msg}</div>
                   <div style={{fontSize:11,color:"#B45309",marginTop:2}}>{s.every}</div>
                 </div>
-                <button onClick={()=>hireAgainJob(s.taskId)} style={{padding:"8px 14px",borderRadius:10,border:"none",background:AM,color:W,fontWeight:700,fontSize:12,cursor:"pointer",flexShrink:0}}>Book again</button>
               </div>
             ))}
           </div>
@@ -1241,32 +1815,6 @@ export default function App(){
             <div style={{fontSize:13,color:TS,lineHeight:1.5}}>No suggestions yet — these appear automatically after you complete services like gutter cleaning, HVAC filter swaps, pest control, or pressure washing.</div>
           </div>
         )}
-
-        {/* Appliances */}
-        <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>Appliances</div>
-        <div style={{fontSize:11,color:TM,marginBottom:12}}>Customer-entered — not verified by Haven</div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
-          {APPLIANCES.map(a=>{
-            const count=completedJobs.filter(j=>j.taskId&&a.relatedIds.includes(j.taskId)).length;
-            const d=appliances[a.key];
-            const brandModel=d&&(d.brand||d.model)?[d.brand,d.model].filter(Boolean).join(" "):"Not added yet";
-            const installed=d&&d.installDate?d.installDate:"Not added yet";
-            const warranty=d&&d.warrantyExp?d.warrantyExp:"Not added yet";
-            return(
-              <div key={a.key} onClick={()=>openApplianceEdit(a.key,a.label)} style={{background:W,borderRadius:16,padding:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer"}}>
-                <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start"}}>
-                  <div style={{fontSize:22,marginBottom:8}}>{a.e}</div>
-                  <span style={{color:TM,fontSize:16}}>›</span>
-                </div>
-                <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6}}>{d?.type||a.label}</div>
-                <div style={{fontSize:11,color:TM,marginBottom:1}}>Brand/model: {brandModel}</div>
-                <div style={{fontSize:11,color:TM,marginBottom:1}}>Installed: {installed}</div>
-                <div style={{fontSize:11,color:TM,marginBottom:6}}>Warranty: {warranty}</div>
-                <div style={{fontSize:11,fontWeight:700,color:count>0?SC:TM}}>{count} service{count!==1?"s":""} on record</div>
-              </div>
-            );
-          })}
-        </div>
 
         {/* Documents */}
         <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:12}}>Documents</div>
@@ -1283,9 +1831,47 @@ export default function App(){
         {/* Home Report */}
         <div style={{background:"linear-gradient(135deg,#1C2B3A,#2E4359)",borderRadius:20,padding:20}}>
           <div style={{fontWeight:700,fontSize:15,color:W,marginBottom:6}}>📄 Home Report</div>
-          <div style={{fontSize:12,color:"rgba(255,255,255,.65)",lineHeight:1.5,marginBottom:14}}>Your Home Report will combine completed services, receipts, appliance records, and maintenance history into one clean record.</div>
+          <div style={{fontSize:12,color:"rgba(255,255,255,.65)",lineHeight:1.5,marginBottom:14}}>Your Home Report will combine completed services, receipts, and maintenance history into one clean record.</div>
           <button disabled style={{width:"100%",padding:13,borderRadius:14,border:"none",background:"rgba(255,255,255,.15)",color:"rgba(255,255,255,.7)",fontWeight:700,fontSize:13,cursor:"default"}}>Coming soon</button>
         </div>
+      </div>
+    </div>
+    );
+  };
+
+  // ── DEDICATED SERVICE HISTORY SCREEN ─────────────────────────────────────
+  const serviceHistoryScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Service History",()=>goTo("myhome"))}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        <div style={{fontSize:12,color:TS,marginBottom:16}}>📍 {primaryHome?.label||"Property"} · {primaryAddressText}</div>
+        {primaryCompletedJobs.length===0?(
+          <div style={{background:W,borderRadius:18,padding:24,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontSize:32,marginBottom:10}}>🗂️</div>
+            <div style={{fontSize:13,color:TS}}>No completed services yet</div>
+          </div>
+        ):primaryCompletedJobs.map(j=>{
+          const {jt,jTotal,dateStr}=jobDisplayInfo(j);
+          return(
+            <div key={j.id} style={{background:W,borderRadius:16,padding:14,marginBottom:10,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+              <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:10}}>
+                <div style={{width:36,height:36,borderRadius:18,background:SL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,flexShrink:0}}>{jt?.e||"🔧"}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:13,color:TX}}>{jt?.n||"Custom job"}</div>
+                  <div style={{fontSize:11,color:TS,marginTop:1}}>{dateStr} · {j.pro?.n||"Pro"}</div>
+                </div>
+                <div style={{textAlign:"right",flexShrink:0}}>
+                  <div style={{fontWeight:800,fontSize:14,color:AM}}>${jTotal}</div>
+                  {j.rated&&starDisplay(j.stars,11)}
+                </div>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>{setVjid(j.id);goTo("tracking");}} style={{flex:1,padding:"8px 0",borderRadius:9,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:600,fontSize:11,cursor:"pointer"}}>View details</button>
+                <button onClick={()=>openReceipt(j.id)} style={{flex:1,padding:"8px 0",borderRadius:9,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:600,fontSize:11,cursor:"pointer"}}>View receipt</button>
+              </div>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1297,10 +1883,23 @@ export default function App(){
     </div>
   );
   const selectStyle={width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0,appearance:"none",WebkitAppearance:"none"};
-  const homeSelect=(key,options)=>(
+  const addressSelect=(key,options)=>(
     <div style={{position:"relative"}}>
-      <select value={draftHome[key]} onChange={e=>setDraftHome(h=>({...h,[key]:e.target.value}))} style={selectStyle}>
+      <select value={draftAddress[key]} onChange={e=>setDraftAddress(h=>({...h,[key]:e.target.value}))} style={selectStyle}>
+        <option value="">Not set</option>
         {options.map(o=><option key={o} value={o}>{o}</option>)}
+      </select>
+      <span style={{position:"absolute",right:0,top:1,color:TM,fontSize:13,pointerEvents:"none"}}>▾</span>
+    </div>
+  );
+  // One shared state selector — reused across My Home, Saved Addresses, and
+  // the booking address flow (all three route through this same form).
+  // Stores the standard 2-letter abbreviation; prevents free-text spelling errors.
+  const stateSelect=()=>(
+    <div style={{position:"relative"}}>
+      <select value={draftAddress.state} onChange={e=>setDraftAddress(h=>({...h,state:e.target.value}))} style={selectStyle}>
+        <option value="">Select a state</option>
+        {US_STATES.map(([abbr,name])=><option key={abbr} value={abbr}>{abbr} — {name}</option>)}
       </select>
       <span style={{position:"absolute",right:0,top:1,color:TM,fontSize:13,pointerEvents:"none"}}>▾</span>
     </div>
@@ -1340,18 +1939,60 @@ export default function App(){
 
   const receiptScreen=()=>{
     if(!vj) return null;
+    // Intentional exception: receipts always render light, regardless of the
+    // app's current theme — a receipt reads as a fixed document (like a
+    // printed one), not a themed UI surface. Shadowing the token names here
+    // means the JSX below needs zero changes to get this behavior.
+    const BG="#F5F2ED", W="#FFFFFF", TX="#1C2B3A", TS="#5A6B78", TM="#9AAAB6", BD="#E5DED4", SL="#ECFDF5";
     const dateStr=new Date(vj.completedAt||vj.id).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+    const timeStr=new Date(vj.completedAt||vj.id).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
     const receiptId=`HVN-${String(vj.id).slice(-6).toUpperCase()}`;
     const lineItems=[
       ["Base price",`$${vjTask?vjTask.p:0}`],
       ...(vj.surge>0?[["ASAP surge",`+$${vj.surge}`]]:[]),
       ...(vj.emergency?[["Emergency priority fee",`+$${vj.emergencyFee}`]]:[]),
     ];
+    const serviceName=vjTask?vjTask.n:"Custom job";
+    const shareText=`Haven Receipt\n${serviceName}\nCompleted: ${dateStr} at ${timeStr}\nTotal paid: $${vjTotal}\nReceipt ID: ${receiptId}`;
+    const shareReceipt=()=>{
+      try{
+        if(typeof navigator!=="undefined"&&navigator.share){
+          navigator.share({title:"Haven Receipt",text:shareText}).catch(()=>{});
+        }else{
+          setShowShareFallback(true);
+        }
+      }catch{ setShowShareFallback(true); }
+    };
+    const printReceipt=()=>{
+      setShowShareFallback(false);
+      try{ if(typeof window!=="undefined"&&window.print) window.print(); }catch{}
+    };
+    const downloadReceipt=()=>{
+      try{
+        const blob=new Blob([shareText],{type:"text/plain"});
+        const url=URL.createObjectURL(blob);
+        const a=document.createElement("a");
+        a.href=url; a.download=`Haven-Receipt-${receiptId}.txt`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }catch{}
+      setShowShareFallback(false);
+    };
+    const copyReceiptDetails=()=>{
+      try{
+        if(typeof navigator!=="undefined"&&navigator.clipboard&&navigator.clipboard.writeText){
+          navigator.clipboard.writeText(shareText).then(()=>{
+            setShowCopiedToast(true); setTimeout(()=>setShowCopiedToast(false),2500);
+          }).catch(()=>{});
+        }
+      }catch{}
+      setShowShareFallback(false);
+    };
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
-        {subHeader("Receipt",()=>backFrom("receipt",{scr:"myhome",tab:"home"}))}
+        <div className="no-print" style={{flexShrink:0}}>{subHeader("Receipt",()=>backFrom("receipt",{scr:"myhome",tab:"home"}))}</div>
         <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-          <div style={{background:W,borderRadius:20,padding:22,boxShadow:"0 4px 20px rgba(28,43,58,.1)"}}>
+          <div className="receipt-print-area" style={{background:W,borderRadius:20,padding:22,boxShadow:"0 4px 20px rgba(28,43,58,.1)"}}>
             <div style={{textAlign:"center",marginBottom:18}}>
               <div style={{fontSize:13,fontWeight:800,color:N,letterSpacing:2.5}}>HAVEN</div>
               <div style={{fontSize:11,color:TM,marginTop:4}}>Job Receipt</div>
@@ -1361,8 +2002,8 @@ export default function App(){
               <span style={{fontSize:12,color:TX,fontWeight:700}}>{receiptId}</span>
             </div>
             <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
-              <span style={{fontSize:12,color:TS}}>Date completed</span>
-              <span style={{fontSize:12,color:TX,fontWeight:700}}>{dateStr}</span>
+              <span style={{fontSize:12,color:TS}}>Completed</span>
+              <span style={{fontSize:12,color:TX,fontWeight:700,textAlign:"right"}}>{dateStr}<br/>{timeStr}</span>
             </div>
 
             <div style={{borderTop:`1px dashed ${BD}`,marginBottom:16}}/>
@@ -1412,75 +2053,81 @@ export default function App(){
 
             <div style={{background:SL,borderRadius:14,padding:14,display:"flex",gap:10,alignItems:"center"}}>
               <span style={{fontSize:16}}>✅</span>
-              <span style={{fontSize:12,color:SC,fontWeight:600,lineHeight:1.4}}>
-                {vj.rated?`Rated ${"★".repeat(vj.stars)} — covered by Haven's satisfaction guarantee.`:"This job is covered by Haven's trust & safety guarantee."}
+              <span style={{fontSize:12,color:SC,fontWeight:600,lineHeight:1.4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                {vj.rated?<>Rated {starDisplay(vj.stars,13)} — covered by Haven's satisfaction guarantee.</>:"This job is covered by Haven's trust & safety guarantee."}
               </span>
             </div>
           </div>
+
+          <div className="no-print" style={{display:"flex",justifyContent:"flex-end",marginTop:16,paddingBottom:8}}>
+            <button onClick={shareReceipt} aria-label="Share Receipt" style={{display:"flex",alignItems:"center",gap:8,padding:"12px 20px",borderRadius:14,border:"none",background:N,color:"#FFFFFF",fontWeight:700,fontSize:14,cursor:"pointer",boxShadow:"0 4px 14px rgba(28,43,58,.2)"}}>
+              <span style={{fontSize:16}}>⬆️</span> Share Receipt
+            </button>
+          </div>
+
+          {showShareFallback&&(
+            <div className="no-print" onClick={()=>setShowShareFallback(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:20}}>
+              <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:"20px 20px 0 0",padding:20,width:"100%",paddingBottom:"max(20px, env(safe-area-inset-bottom))"}}>
+                <div style={{fontWeight:800,fontSize:15,color:"#1C2B3A",marginBottom:14,textAlign:"center"}}>Share Receipt</div>
+                <button onClick={printReceipt} style={{width:"100%",padding:14,borderRadius:12,border:"1.5px solid #E5DED4",background:"#FFFFFF",color:"#1C2B3A",fontWeight:600,fontSize:14,cursor:"pointer",marginBottom:8,textAlign:"left",display:"flex",alignItems:"center",gap:10}}>🖨️ Print Receipt</button>
+                <button onClick={downloadReceipt} style={{width:"100%",padding:14,borderRadius:12,border:"1.5px solid #E5DED4",background:"#FFFFFF",color:"#1C2B3A",fontWeight:600,fontSize:14,cursor:"pointer",marginBottom:8,textAlign:"left",display:"flex",alignItems:"center",gap:10}}>⬇️ Save or Download Receipt</button>
+                <button onClick={copyReceiptDetails} style={{width:"100%",padding:14,borderRadius:12,border:"1.5px solid #E5DED4",background:"#FFFFFF",color:"#1C2B3A",fontWeight:600,fontSize:14,cursor:"pointer",marginBottom:10,textAlign:"left",display:"flex",alignItems:"center",gap:10}}>📋 Copy Receipt Details</button>
+                <button onClick={()=>setShowShareFallback(false)} style={{width:"100%",padding:14,borderRadius:12,border:"none",background:"#F5F2ED",color:"#5A6B78",fontWeight:600,fontSize:14,cursor:"pointer"}}>Cancel</button>
+              </div>
+            </div>
+          )}
+          {showCopiedToast&&(
+            <div className="no-print" style={{position:"fixed",left:16,right:16,bottom:96,background:N,borderRadius:14,padding:"12px 16px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)",zIndex:21}}>
+              <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>Receipt details copied</span>
+            </div>
+          )}
         </div>
       </div>
     );
   };
 
-  // ── APPLIANCE DETAIL / EDIT ──────────────────────────────────────────────
-  const applianceFieldCard=(label,children)=>(
-    <div style={{background:W,borderRadius:18,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-      <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>{label}</div>
-      {children}
-    </div>
+  // ── UNIFIED ADDRESS EDIT (used by both My Home and Saved Addresses) ──────
+  const addressInput=(field,placeholder,extra={})=>(
+    <input value={draftAddress[field]} onChange={e=>setDraftAddress(d=>({...d,[field]:e.target.value}))} placeholder={placeholder}
+      style={{width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}} {...extra}/>
   );
-  const applianceInput=(field,placeholder)=>(
-    <input value={draftAppliance[field]} onChange={e=>setDraftAppliance(d=>({...d,[field]:e.target.value}))} placeholder={placeholder}
-      style={{width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}}/>
-  );
-  const applianceDetailScreen=()=>(
-    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
-      {subHeader("Appliance details",()=>goTo("myhome"))}
-      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-        <div style={{background:"#EFF6FF",border:"1px solid #BFDBFE",borderRadius:14,padding:"12px 14px",marginBottom:16,display:"flex",gap:10,alignItems:"flex-start"}}>
-          <span style={{fontSize:15,flexShrink:0}}>ℹ️</span>
-          <span style={{fontSize:12,color:"#1E40AF",lineHeight:1.5}}>This information is entered by you. Haven does not verify appliance brand, model, age, or warranty status.</span>
+  const addressEditScreen=()=>{
+    const isPrimaryEdit = editingAddressId===primaryHome?.id;
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        {subHeader(isPrimaryEdit?"Edit home details":editingAddressId?"Edit address":"Add address",()=>backFrom("addressEdit",{scr:"myhome",tab:"home"}))}
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+          {addressFormError&&(
+            <div style={{background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:14,padding:"12px 14px",marginBottom:16}}>
+              <span style={{fontSize:12,color:"#DC2626",fontWeight:600}}>{addressFormError}</span>
+            </div>
+          )}
+          {!isPrimaryEdit&&homeFieldCard("Label",addressInput("label","e.g. Work, Parents' house"))}
+          {homeFieldCard("Street address",addressInput("street","123 Main Street"))}
+          {homeFieldCard("Apartment, unit, suite, or building (optional)",addressInput("unit","Apt, unit, suite, or building"))}
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+            {homeFieldCard("City",addressInput("city","City"))}
+            {homeFieldCard("State",stateSelect())}
+          </div>
+          {homeFieldCard("ZIP code",addressInput("zip","ZIP code",{inputMode:"numeric"}))}
+          {homeFieldCard("Access notes (optional)",addressInput("accessNotes","Gate code, parking notes, etc."))}
+          {homeFieldCard("Property type",addressSelect("propertyType",HOME_TYPES))}
+          {isPrimaryEdit&&(
+            <>
+              {homeFieldCard("Year built", addressSelect("yearBuilt",YEAR_OPTIONS))}
+              {homeFieldCard("Square footage",addressInput("sqft","e.g. 1,150",{inputMode:"numeric"}))}
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:0}}>
+                {homeFieldCard("Bedrooms", addressSelect("beds",BEDROOM_OPTIONS))}
+                {homeFieldCard("Bathrooms", addressSelect("baths",BATHROOM_OPTIONS))}
+              </div>
+            </>
+          )}
+          <button onClick={saveAddressForm} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10,marginTop:8}}>Save changes</button>
+          <button onClick={()=>backFrom("addressEdit",{scr:"myhome",tab:"home"})} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
         </div>
-        {applianceFieldCard("Appliance type",applianceInput("type","Not added yet"))}
-        {applianceFieldCard("Brand",applianceInput("brand","Not added yet"))}
-        {applianceFieldCard("Model",applianceInput("model","Not added yet"))}
-        {applianceFieldCard("Serial number",applianceInput("serial","Not added yet"))}
-        {applianceFieldCard("Installation date (or approximate year)",applianceInput("installDate","Not added yet"))}
-        {applianceFieldCard("Warranty expiration (optional)",applianceInput("warrantyExp","Not added yet"))}
-        {applianceFieldCard("Notes (optional)",
-          <textarea value={draftAppliance.notes} onChange={e=>setDraftAppliance(d=>({...d,notes:e.target.value}))} maxLength={300} rows={3}
-            placeholder="Anything else worth remembering about this appliance"
-            style={{width:"100%",border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.5,outline:"none",padding:0}}/>
-        )}
-        <button onClick={saveAppliance} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Save changes</button>
-        <button onClick={()=>goTo("myhome")} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
       </div>
-    </div>
-  );
-
-  const editHomeScreen=()=>(
-    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
-      {subHeader("Edit home details",()=>goTo("myhome"))}
-      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-        {homeFieldCard("Address",
-          <input value={draftHome.address} onChange={e=>setDraftHome(h=>({...h,address:e.target.value}))}
-            style={{width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}}/>
-        )}
-        {homeFieldCard("Home type", homeSelect("type",HOME_TYPES))}
-        {homeFieldCard("Year built", homeSelect("yearBuilt",YEAR_OPTIONS))}
-        {homeFieldCard("Square footage",
-          <input value={draftHome.sqft} onChange={e=>setDraftHome(h=>({...h,sqft:e.target.value}))} inputMode="numeric" placeholder="e.g. 1,150"
-            style={{width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}}/>
-        )}
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:0}}>
-          {homeFieldCard("Bedrooms", homeSelect("beds",BEDROOM_OPTIONS))}
-          {homeFieldCard("Bathrooms", homeSelect("baths",BATHROOM_OPTIONS))}
-        </div>
-        <button onClick={saveHome} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10,marginTop:8}}>Save changes</button>
-        <button onClick={()=>goTo("myhome")} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
-      </div>
-    </div>
-  );
+    );
+  };
 
   // ── PAYMENT METHODS ───────────────────────────────────────────────────────
   const cardColors={Visa:N,Mastercard:"#EA580C",Card:"#5B21B6"};
@@ -1488,15 +2135,18 @@ export default function App(){
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       {subHeader("Payment methods",()=>backFrom("payment",{scr:"home",tab:"profile"}))}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-        {cards.map(c=>{
+        {sortedCards.map(c=>{
           const open=expandedCard===c.id;
           return(
-            <div key={c.id} style={{background:W,borderRadius:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",overflow:"hidden"}}>
+            <div key={c.id} style={{background:c.isDefault?"#EFF6FF":W,border:c.isDefault?"1.5px solid #BFDBFE":"1.5px solid transparent",borderRadius:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",overflow:"hidden"}}>
               <div onClick={()=>setExpandedCard(open?null:c.id)} style={{padding:16,display:"flex",alignItems:"center",gap:14,cursor:"pointer"}}>
                 <div style={{width:44,height:30,borderRadius:6,background:cardColors[c.brand]||N,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontSize:9,fontWeight:800,flexShrink:0}}>{c.brand.slice(0,4).toUpperCase()}</div>
                 <div style={{flex:1}}>
-                  <div style={{fontWeight:700,fontSize:14,color:TX}}>{c.brand} •••• {c.last4}</div>
-                  <div style={{fontSize:12,color:TS,marginTop:2}}>Expires {c.exp}{c.isDefault?" · Default":""}</div>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{c.brand} •••• {c.last4}</span>
+                    {c.isDefault&&<span style={{fontSize:10,fontWeight:700,color:N,background:"#DBEAFE",padding:"2px 8px",borderRadius:8}}>Default</span>}
+                  </div>
+                  <div style={{fontSize:12,color:TS,marginTop:2}}>Expires {c.exp}</div>
                 </div>
                 <span style={{color:TM,fontSize:16,transform:open?"rotate(90deg)":"none",display:"inline-block"}}>›</span>
               </div>
@@ -1561,54 +2211,47 @@ export default function App(){
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       {subHeader("Saved addresses",()=>backFrom("addresses",{scr:"home",tab:"profile"}))}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-        {addresses.map(a=>{
+        {sortedAddresses.map(a=>{
           const open=expandedAddr===a.id;
-          const editing=editingAddrId===a.id;
           return(
-            <div key={a.id} style={{background:W,borderRadius:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",overflow:"hidden"}}>
-              {editing?(
-                <div style={{padding:16}}>
-                  <input value={draftAddrLabel} onChange={e=>setDraftAddrLabel(e.target.value)} placeholder="Label (e.g. Home)"
-                    style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"9px 12px",fontSize:13,fontWeight:600,color:TX,marginBottom:8,outline:"none"}}/>
-                  <textarea value={draftAddrText} onChange={e=>setDraftAddrText(e.target.value)} placeholder="Full address"
-                    style={{width:"100%",minHeight:60,border:`1.5px solid ${BD}`,borderRadius:10,padding:"9px 12px",fontSize:13,color:TX,marginBottom:10,outline:"none",resize:"none"}}/>
+            <div key={a.id} style={{background:a.isPrimary?"#EFF6FF":W,border:a.isPrimary?"1.5px solid #BFDBFE":"1.5px solid transparent",borderRadius:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",overflow:"hidden"}}>
+              <div onClick={()=>setExpandedAddr(open?null:a.id)} style={{padding:16,display:"flex",gap:12,alignItems:"flex-start",cursor:"pointer"}}>
+                <span style={{fontSize:20}}>{a.isPrimary?"🏠":a.label==="Work"?"💼":"📍"}</span>
+                <div style={{flex:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{a.label}</span>
+                    {a.isPrimary&&<span style={{fontSize:10,fontWeight:700,color:N,background:"#DBEAFE",padding:"2px 8px",borderRadius:8}}>🏠 Primary</span>}
+                  </div>
+                  <div style={{fontSize:13,color:TS,marginTop:3,lineHeight:1.4}}>{formatAddress(a)}</div>
+                  {a.accessNotes&&<div style={{fontSize:11,color:TM,marginTop:2}}>Access notes: {a.accessNotes}</div>}
+                </div>
+                <span style={{color:TM,fontSize:16,transform:open?"rotate(90deg)":"none",display:"inline-block"}}>›</span>
+              </div>
+              {open&&(
+                <div style={{display:"flex",gap:8,padding:"0 16px 16px",flexWrap:"wrap"}}>
+                  {a.isPrimary?(
+                    <button disabled style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TM,fontWeight:600,fontSize:12,cursor:"default"}}>Primary</button>
+                  ):(
+                    <button onClick={()=>setPrimaryAddress(a.id)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:W,color:N,fontWeight:600,fontSize:12,cursor:"pointer"}}>Set as Primary</button>
+                  )}
+                  <button onClick={()=>openAddressForm(a)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:W,color:N,fontWeight:600,fontSize:12,cursor:"pointer"}}>Edit</button>
+                  <button onClick={()=>setConfirmDeleteAddrId(a.id)} style={{flex:1,padding:"9px 0",borderRadius:10,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:600,fontSize:12,cursor:"pointer"}}>Delete</button>
+                </div>
+              )}
+              {confirmDeleteAddrId===a.id&&(
+                <div style={{margin:"0 16px 16px",background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:14,padding:14}}>
+                  <div style={{fontWeight:700,fontSize:13,color:"#DC2626",marginBottom:4}}>Delete this property?</div>
+                  <div style={{fontSize:12,color:"#991B1B",marginBottom:12,lineHeight:1.4}}>This will remove it from Saved Addresses and My Home.</div>
                   <div style={{display:"flex",gap:8}}>
-                    <button onClick={()=>setEditingAddrId(null)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:12,cursor:"pointer"}}>Cancel</button>
-                    <button onClick={saveAddrEdit} style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:AM,color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Save</button>
+                    <button onClick={()=>setConfirmDeleteAddrId(null)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:W,color:TS,fontWeight:600,fontSize:12,cursor:"pointer"}}>Cancel</button>
+                    <button onClick={()=>removeAddr(a.id)} style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:"#DC2626",color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Delete Property</button>
                   </div>
                 </div>
-              ):(
-                <>
-                  <div onClick={()=>setExpandedAddr(open?null:a.id)} style={{padding:16,display:"flex",gap:12,alignItems:"flex-start",cursor:"pointer"}}>
-                    <span style={{fontSize:20}}>{a.label==="Home"?"🏠":a.label==="Work"?"💼":"📍"}</span>
-                    <div style={{flex:1}}><div style={{fontWeight:700,fontSize:14,color:TX}}>{a.label}</div><div style={{fontSize:13,color:TS,marginTop:3,lineHeight:1.4}}>{a.text}</div></div>
-                    <span style={{color:TM,fontSize:16,transform:open?"rotate(90deg)":"none",display:"inline-block"}}>›</span>
-                  </div>
-                  {open&&(
-                    <div style={{display:"flex",gap:8,padding:"0 16px 16px"}}>
-                      <button onClick={()=>startEditAddr(a)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:W,color:N,fontWeight:600,fontSize:12,cursor:"pointer"}}>Edit</button>
-                      <button onClick={()=>removeAddr(a.id)} style={{flex:1,padding:"9px 0",borderRadius:10,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:600,fontSize:12,cursor:"pointer"}}>Delete</button>
-                    </div>
-                  )}
-                </>
               )}
             </div>
           );
         })}
-        {addingAddr?(
-          <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <input value={draftAddrLabel} onChange={e=>setDraftAddrLabel(e.target.value)} placeholder="Label (e.g. Home, Work)"
-              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"9px 12px",fontSize:13,fontWeight:600,color:TX,marginBottom:8,outline:"none"}}/>
-            <textarea value={draftAddrText} onChange={e=>setDraftAddrText(e.target.value)} placeholder="Full address"
-              style={{width:"100%",minHeight:60,border:`1.5px solid ${BD}`,borderRadius:10,padding:"9px 12px",fontSize:13,color:TX,marginBottom:10,outline:"none",resize:"none"}}/>
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>{setAddingAddr(false);setDraftAddrLabel("");setDraftAddrText("");}} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:12,cursor:"pointer"}}>Cancel</button>
-              <button onClick={addAddress} disabled={!draftAddrText.trim()} style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:draftAddrText.trim()?AM:"#DDD9D2",color:W,fontWeight:700,fontSize:12,cursor:draftAddrText.trim()?"pointer":"default"}}>Add address</button>
-            </div>
-          </div>
-        ):(
-          <button onClick={()=>{setAddingAddr(true);setDraftAddrLabel("");setDraftAddrText("");}} style={{width:"100%",padding:15,borderRadius:16,border:`1.5px dashed ${BD}`,background:"transparent",color:N,fontWeight:700,fontSize:14,cursor:"pointer",marginTop:4}}>+ Add address</button>
-        )}
+        <button onClick={()=>openAddressForm(null)} style={{width:"100%",padding:15,borderRadius:16,border:`1.5px dashed ${BD}`,background:"transparent",color:N,fontWeight:700,fontSize:14,cursor:"pointer",marginTop:4}}>+ Add address</button>
       </div>
     </div>
   );
@@ -1622,22 +2265,145 @@ export default function App(){
       </div>
     </div>
   );
-  const notificationsScreen=()=>{
+  const settingsScreen=()=>{
+    const themeOptions=[
+      ["system","System","Match your device's setting"],
+      ["light","Light","Always use Haven's light appearance"],
+      ["dark","Dark","Always use Haven's dark appearance"],
+    ];
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
-        {subHeader("Notifications")}
+        {subHeader("Settings")}
         <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-          <div style={{background:W,borderRadius:18,padding:"4px 16px",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+          <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Notifications</div>
+          <div style={{background:W,borderRadius:18,padding:"4px 16px",boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:6}}>
             {notifRow("Push notifications","Enable notifications on this device","push")}
-            {notifRow("Job updates","Pro accepted, en route, arrived, done","jobUpdates")}
-            {notifRow("Messages","New chat messages from your pro","messages")}
-            {notifRow("Promotions","Deals and seasonal offers","promos")}
+            {notifRow("Job updates","Important booking and cancellation changes","jobUpdates")}
+            {notifRow("Messages","Messages from pros and Haven Support","messages")}
+            {notifRow("Offers and updates","Optional Haven promotions and product news","promos")}
             {notifRow("Email updates","Receipts and account activity","email")}
           </div>
+          <div style={{fontSize:11,color:TM,lineHeight:1.5,padding:"0 4px 20px"}}>Safety notices, payment issues, and essential cancellation updates are always delivered regardless of these settings.</div>
+
+          <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Appearance</div>
+          <div style={{background:W,borderRadius:18,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:6}}>
+            {themeOptions.map(([key,label,sub],i)=>{
+              const active=themePref===key;
+              return(
+                <div key={key} onClick={()=>setThemePref(key)} style={{padding:"16px 18px",borderBottom:i<themeOptions.length-1?`1px solid ${BD}`:"none",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
+                  <div>
+                    <div style={{fontWeight:700,fontSize:15,color:TX}}>{label}</div>
+                    <div style={{fontSize:12,color:TS,marginTop:2}}>{sub}</div>
+                  </div>
+                  <div style={{width:22,height:22,borderRadius:11,border:`2px solid ${active?N:BD}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    {active&&<div style={{width:11,height:11,borderRadius:6,background:N}}/>}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{fontSize:12,color:TM,lineHeight:1.5,padding:"0 4px"}}>Your appearance preference is saved on this device and applied throughout the app the next time you open it.</div>
         </div>
       </div>
     );
   };
+
+  const NOTIF_ICONS={JOB_UPDATE:"🔧",MESSAGE:"💬",CANCELLATION:"⚠️",RECEIPT:"🧾",PAYMENT:"💳",LOCATION:"📍",SUPPORT:"🎧",ACCOUNT:"👤"};
+  const notifTimeLabel=(ts)=>{
+    const d=new Date(ts), now=new Date();
+    const startOfToday=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
+    if(ts>=startOfToday) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    return d.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+  };
+  const groupNotifsByDate=(list)=>{
+    const now=new Date();
+    const startOfToday=new Date(now.getFullYear(),now.getMonth(),now.getDate()).getTime();
+    const startOfYesterday=startOfToday-86400000;
+    const today=[],yesterday=[],earlier=[];
+    list.forEach(n=>{
+      if(n.createdAt>=startOfToday) today.push(n);
+      else if(n.createdAt>=startOfYesterday) yesterday.push(n);
+      else earlier.push(n);
+    });
+    return [["Today",today],["Yesterday",yesterday],["Earlier",earlier]].filter(([,arr])=>arr.length>0);
+  };
+
+  const notifCenterScreen=()=>{
+    const sorted=notifications.slice().sort((a,b)=>b.createdAt-a.createdAt);
+    const groups=groupNotifsByDate(sorted);
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG,position:"relative"}}>
+        <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between",gap:14}}>
+          <div style={{display:"flex",alignItems:"center",gap:14}}>
+            <button onClick={()=>backFrom("notifCenter",{scr:"home",tab:"profile"})} style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+            <span style={{fontWeight:700,fontSize:17,color:TX}}>Notifications</span>
+          </div>
+          {unreadCount>0&&<button onClick={markAllNotifsRead} aria-label="Mark all notifications as read" style={{background:"none",border:"none",color:N,fontSize:13,fontWeight:700,cursor:"pointer",padding:0}}>Mark all as read</button>}
+        </div>
+        <div className="sc" onClick={()=>{setOpenSwipeId(null);setOpenSwipeDir(null);}} style={{flex:1,overflowY:"auto",padding:sorted.length?"12px 16px":20}}>
+          {sorted.length===0?(
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",textAlign:"center",paddingTop:40}}>
+              <div style={{fontSize:36,marginBottom:12}}>🔔</div>
+              <div style={{fontWeight:700,fontSize:16,color:TX,marginBottom:6}}>You're all caught up</div>
+              <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:240}}>Important booking, message, and account updates will appear here.</div>
+            </div>
+          ):groups.map(([label,list])=>(
+            <div key={label} style={{marginBottom:18}}>
+              <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>{label}</div>
+              {list.map(n=>{
+                const isOpen=openSwipeId===n.id;
+                const isDragging=swipeState.id===n.id&&swipeState.dragging&&swipeState.locked;
+                const liveOffset=isDragging?Math.max(-160,Math.min(160,swipeState.deltaX)):(isOpen?(openSwipeDir==="left"?-88:88):0);
+                return(
+                  <div key={n.id} style={{position:"relative",marginBottom:8,borderRadius:14,overflow:"hidden"}}>
+                    <div style={{position:"absolute",inset:0,display:"flex"}}>
+                      <button onClick={()=>markNotifRead(n.id,!n.isRead)} aria-label={n.isRead?"Mark as unread":"Mark as read"} style={{width:88,background:"#2563EB",border:"none",color:W,fontWeight:700,fontSize:11,cursor:"pointer"}}>{n.isRead?"Mark Unread":"Mark Read"}</button>
+                      <div style={{flex:1}}/>
+                      <button onClick={()=>deleteNotification(n.id)} aria-label="Delete notification" style={{width:88,background:"#DC2626",border:"none",color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Delete</button>
+                    </div>
+                    <div
+                      onClick={(e)=>{ if(Math.abs(swipeState.deltaX)>5)return; e.stopPropagation(); if(isOpen){setOpenSwipeId(null);setOpenSwipeDir(null);return;} openNotification(n); }}
+                      onPointerDown={e=>swipeDown(n.id,e)}
+                      onPointerMove={e=>swipeMove(n.id,e)}
+                      onPointerUp={()=>swipeUp(n.id)}
+                      onPointerLeave={()=>{ if(swipeState.id===n.id&&swipeState.dragging) swipeUp(n.id); }}
+                      style={{
+                        position:"relative",transform:`translateX(${liveOffset}px)`,
+                        transition:isDragging?"none":"transform .18s ease",
+                        background:n.isRead?W:SELBG,
+                        borderLeft:n.isRead?"none":`3px solid ${SELBORDER}`,
+                        padding:"12px 14px",display:"flex",gap:12,alignItems:"flex-start",cursor:"pointer",touchAction:"pan-y",
+                      }}>
+                      <div style={{width:36,height:36,borderRadius:18,background:n.isRead?BG:SELBORDER,display:"flex",alignItems:"center",justifyContent:"center",fontSize:16,flexShrink:0}}>{NOTIF_ICONS[n.type]||"🔔"}</div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",justifyContent:"space-between",gap:8}}>
+                          <span style={{fontWeight:700,fontSize:13,color:TX}}>{n.title}{!n.isRead&&<span style={{display:"inline-block",width:6,height:6,borderRadius:3,background:SELBORDER,marginLeft:6,verticalAlign:"middle"}}/>}</span>
+                          <span style={{fontSize:11,color:TM,flexShrink:0}}>{notifTimeLabel(n.createdAt)}</span>
+                        </div>
+                        <div style={{fontSize:12,color:TS,marginTop:2,lineHeight:1.4}}>{n.body}</div>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          ))}
+        </div>
+        {showUndoToast&&(
+          <div style={{position:"absolute",left:16,right:16,bottom:96,background:N,borderRadius:14,padding:"12px 16px",display:"flex",justifyContent:"space-between",alignItems:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)"}}>
+            <span style={{color:W,fontSize:13,fontWeight:600}}>Notification deleted</span>
+            <button onClick={undoDeleteNotification} style={{background:"none",border:"none",color:"#FBBF24",fontWeight:800,fontSize:13,cursor:"pointer"}}>Undo</button>
+          </div>
+        )}
+        {showUnavailableToast&&(
+          <div style={{position:"absolute",left:16,right:16,bottom:96,background:N,borderRadius:14,padding:"12px 16px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)"}}>
+            <span style={{color:W,fontSize:13,fontWeight:600}}>This item is no longer available.</span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
 
   // ── HELP & SUPPORT ────────────────────────────────────────────────────────
   const helpScreen=()=>{
@@ -1726,7 +2492,7 @@ export default function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
         <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
           <div style={{background:N,padding:"14px 20px 34px"}}>
-            <button onClick={()=>backFrom("task",{scr:"home",tab:"home"})} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:16,display:"inline-flex",alignItems:"center",gap:6}}>← Back</button>
+            <button onClick={()=>{if(hasDraft)setShowDiscardConfirm(true);else backFrom("task",{scr:"home",tab:"home"});}} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:16,display:"inline-flex",alignItems:"center",gap:6}}>← Back</button>
             <div style={{display:"flex",alignItems:"center",gap:14}}>
               <div style={{fontSize:38,flexShrink:0}}>{browsedTask.e}</div>
               <div style={{flex:1,minWidth:0}}>
@@ -1759,8 +2525,8 @@ export default function App(){
           </div>
         </div>
         <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
-          <button onClick={postJob} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:17,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`}}>
-            Post Job — ${total}
+          <button onClick={postJob} disabled={!selectedAddress} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:selectedAddress?AM:"#DDD9D2",color:selectedAddress?W:TM,fontWeight:800,fontSize:17,cursor:selectedAddress?"pointer":"default",boxShadow:selectedAddress?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
+            {selectedAddress?`Post Job — $${total}`:"Add an address to continue"}
           </button>
         </div>
       </div>
@@ -1769,12 +2535,12 @@ export default function App(){
 
   // ── CUSTOM JOB ─────────────────────────────────────────────────────────────
   const customScreen=()=>{
-    const canPost = ctitle.trim() && cprice;
+    const canPost = ctitle.trim() && cprice && selectedAddress;
     return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
         <div style={{background:N,padding:"14px 20px 30px"}}>
-          <button onClick={()=>backFrom("custom",{scr:"home",tab:"home"})} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:16,display:"inline-flex",alignItems:"center",gap:6}}>← Back</button>
+          <button onClick={()=>{if(hasDraft)setShowDiscardConfirm(true);else backFrom("custom",{scr:"home",tab:"home"});}} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,marginBottom:16,display:"inline-flex",alignItems:"center",gap:6}}>← Back</button>
           <div style={{fontWeight:800,fontSize:20,color:W,marginBottom:4}}>Post a custom job</div>
           <div style={{fontSize:13,color:"rgba(255,255,255,.6)"}}>Describe any job and local pros will respond.</div>
           {emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:4,background:"rgba(255,255,255,.15)",color:"#FFD4C7",fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:20,marginTop:8}}>🚨 Emergency</span>}
@@ -1822,7 +2588,7 @@ export default function App(){
       <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
         <button onClick={postJob} disabled={!canPost}
           style={{width:"100%",padding:18,borderRadius:18,border:"none",background:canPost?AM:"#DDD9D2",color:canPost?W:TM,fontWeight:800,fontSize:17,cursor:canPost?"pointer":"default",boxShadow:canPost?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
-          {canPost?`Post Job — $${total}`:"Add a title & budget to continue"}
+          {canPost?`Post Job — $${total}`:!selectedAddress?"Add an address to continue":"Add a title & budget to continue"}
         </button>
       </div>
     </div>
@@ -1867,12 +2633,21 @@ export default function App(){
               </div>
             ))}
           </div>
-          <div style={{textAlign:"center",marginBottom:14}}>
-            <button onClick={proAccepts} style={{background:SC,border:"none",color:W,padding:"14px 28px",borderRadius:16,fontWeight:700,fontSize:14,cursor:"pointer",boxShadow:`0 4px 16px rgba(5,150,105,.3)`}}>🎉 Simulate: a pro accepts</button>
-          </div>
-          <div style={{textAlign:"center"}}>
-            <button onClick={()=>{updateJob(vjid,{status:"cancelled"});goBookings();}} style={{background:"none",border:"none",color:TM,fontSize:13,cursor:"pointer",textDecoration:"underline",padding:"8px 0"}}>Cancel this job</button>
-          </div>
+          {demoProControlsPanel([["Accept job (start travel)",proAccepts]])}
+          {!showCancelConfirm?(
+            <div style={{textAlign:"center"}}>
+              <button onClick={()=>setShowCancelConfirm(true)} style={{background:"none",border:`1.5px solid #FCA5A5`,color:"#DC2626",fontSize:13,fontWeight:700,cursor:"pointer",padding:"10px 20px",borderRadius:12}}>Cancel Job</button>
+            </div>
+          ):(
+            <div style={{background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:16,padding:16,textAlign:"center"}}>
+              <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:4}}>Cancel this job?</div>
+              <div style={{fontSize:12,color:"#991B1B",marginBottom:12}}>No pro has accepted yet, so this cancels immediately with no fee.</div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>setShowCancelConfirm(false)} style={{flex:1,padding:"9px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:W,color:TS,fontWeight:600,fontSize:12,cursor:"pointer"}}>Keep job</button>
+                <button onClick={cancelJobDirect} style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:"#DC2626",color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Yes, cancel</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -1954,12 +2729,9 @@ export default function App(){
               </div>
               <span style={{color:TM,fontSize:18,alignSelf:"flex-start"}}>›</span>
             </div>
-            <div style={{display:"flex",gap:10}}>
-              <button onClick={()=>goTo("messages")} style={{flex:1,padding:"11px 0",borderRadius:14,border:`1.5px solid ${vj.status==="complete"?BD:N}`,background:vj.status==="complete"?BG:"rgba(28,43,58,.06)",color:vj.status==="complete"?TM:N,fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
-                💬 {vj.status==="complete"?"Chat (closed)":"Message"}
-              </button>
-              <button disabled style={{flex:1,padding:"11px 0",borderRadius:14,border:`1.5px solid ${BD}`,background:BG,color:TM,fontWeight:700,fontSize:14,cursor:"not-allowed",display:"flex",alignItems:"center",justifyContent:"center",gap:7,opacity:.6}}>📞 Call (soon)</button>
-            </div>
+            <button onClick={()=>goTo("messages")} style={{width:"100%",padding:"11px 0",borderRadius:14,border:`1.5px solid ${vj.status==="complete"?BD:N}`,background:vj.status==="complete"?BG:"rgba(28,43,58,.06)",color:vj.status==="complete"?TM:N,fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
+              💬 {vj.status==="complete"?"Chat (closed)":"Message"}
+            </button>
           </div>
           <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
@@ -1974,14 +2746,34 @@ export default function App(){
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div></div>}
           </div>
           {vj.status!=="complete"?(
-            <div style={{margin:"0 20px 24px",textAlign:"center"}}><button onClick={advance} style={{background:"none",border:`1px dashed ${BD}`,color:TM,padding:"10px 20px",borderRadius:12,fontSize:12,cursor:"pointer",fontWeight:500}}>▶ Advance status (demo)</button></div>
+            <>
+              {demoProControlsPanel([[{en_route:"Arrive",arrived:"Start work",in_progress:"Complete job"}[vj.status]||"Advance",advance]])}
+              {vj.cancelStatus==="requested"?(
+                <div style={{margin:"0 20px 24px",background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:16,padding:16,textAlign:"center"}}>
+                  <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:4}}>Pending Cancellation</div>
+                  <div style={{fontSize:12,color:"#991B1B",lineHeight:1.5}}>Haven Support will review timing and any work already performed, then follow up with you.</div>
+                </div>
+              ):!showCancelRequest?(
+                <div style={{margin:"0 20px 24px",textAlign:"center"}}>
+                  <button onClick={()=>setShowCancelRequest(true)} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:"8px 0"}}>Need to cancel this job?</button>
+                </div>
+              ):(
+                <div style={{margin:"0 20px 24px",background:W,borderRadius:18,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                  <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:6}}>Cancel this job?</div>
+                  <div style={{fontSize:12,color:TS,lineHeight:1.5,marginBottom:14}}>A pro has already accepted. Haven Support may need to review timing, work already performed, or applicable fees before this can be cancelled.</div>
+                  <button onClick={()=>setShowCancelRequest(false)} style={{width:"100%",padding:12,borderRadius:12,border:"none",background:AM,color:W,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Continue with job</button>
+                  <button onClick={requestCancellation} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Request cancellation</button>
+                  <button onClick={()=>{setShowCancelRequest(false);openHelp();}} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:13,cursor:"pointer"}}>Contact Haven Support</button>
+                </div>
+              )}
+            </>
           ):(
             <div style={{margin:"0 20px 24px"}}>
               {!vj.rated?(
                 <button onClick={openRating} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`,marginBottom:10}}>⭐ Rate {vjPname}</button>
               ):(
                 <div style={{background:SL,borderRadius:18,padding:16,textAlign:"center",marginBottom:10}}>
-                  <div style={{fontSize:22,marginBottom:4,color:AM}}>{"★".repeat(vj.stars)}</div>
+                  <div style={{marginBottom:4}}>{starDisplay(vj.stars,22)}</div>
                   <div style={{fontWeight:700,fontSize:14,color:SC}}>Review submitted — thanks!</div>
                 </div>
               )}
@@ -2010,12 +2802,29 @@ export default function App(){
           </div>
           <div style={{background:W,borderRadius:20,padding:"22px 20px",marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)",textAlign:"center"}}>
             <div style={{fontSize:13,fontWeight:600,color:TS,marginBottom:14}}>How was your experience?</div>
-            <div style={{display:"flex",gap:4,justifyContent:"center",marginBottom:10}}>
-              {[1,2,3,4,5].map(s=>(
-                <button key={s} onClick={()=>setStars(s)} style={{fontSize:38,background:"none",border:"none",cursor:"pointer",padding:"2px",color:s<=stars?AM:"#DDD",lineHeight:1}}>{s<=stars?"★":"☆"}</button>
-              ))}
+            <div
+              onPointerDown={()=>setStarDragging(true)}
+              onPointerUp={()=>setStarDragging(false)}
+              onPointerLeave={()=>setStarDragging(false)}
+              style={{position:"relative",display:"inline-flex",gap:4,justifyContent:"center",marginBottom:10,touchAction:"none",userSelect:"none"}}
+            >
+              {[1,2,3,4,5].map(s=>{
+                const filled = s<=Math.floor(stars);
+                const isHalfHere = !filled && s===Math.ceil(stars) && stars%1!==0;
+                return(
+                  <div key={s} style={{position:"relative",width:40,height:40,lineHeight:1}}>
+                    <span style={{position:"absolute",inset:0,color:"#DDD",fontSize:36}}>☆</span>
+                    {(filled||isHalfHere)&&<span style={{position:"absolute",inset:0,overflow:"hidden",width:isHalfHere?"50%":"100%"}}><span style={{color:AM,fontSize:36}}>★</span></span>}
+                    {/* Two invisible half-width hit zones per star — tap selects instantly, dragging/swiping across them live-updates the value continuously */}
+                    <div style={{position:"absolute",inset:0,display:"flex"}}>
+                      <div onClick={()=>setStars(s-0.5)} onPointerEnter={()=>{if(starDragging)setStars(s-0.5);}} style={{flex:1,cursor:"pointer"}}/>
+                      <div onClick={()=>setStars(s)} onPointerEnter={()=>{if(starDragging)setStars(s);}} style={{flex:1,cursor:"pointer"}}/>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
-            {stars>0&&<div style={{fontWeight:700,fontSize:17,color:AM}}>{STAR_LABELS[stars]}</div>}
+            {stars>0&&<div style={{fontWeight:700,fontSize:17,color:AM}}>{stars}★ · {STAR_LABELS[Math.round(stars)]||STAR_LABELS[Math.ceil(stars)]}</div>}
           </div>
           <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Leave a review (optional)</div>
@@ -2038,7 +2847,7 @@ export default function App(){
           <button onClick={submitRating} disabled={stars===0} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:stars>0?AM:"#DDD9D2",color:stars>0?W:TM,fontWeight:800,fontSize:17,cursor:stars>0?"pointer":"default",boxShadow:stars>0?`0 6px 20px rgba(245,158,11,.35)`:"none",marginBottom:12}}>
             {stars>0?"Submit review":"Select a rating first"}
           </button>
-          <button onClick={goBookings} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Skip for now</button>
+          <button onClick={goHome} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Skip for now</button>
         </div>
       </div>
     );
@@ -2066,7 +2875,14 @@ export default function App(){
         </div>
         {locked&&<div style={{background:"#FFF1F2",borderBottom:"1px solid #FCC",padding:"10px 20px",textAlign:"center",flexShrink:0}}><span style={{fontSize:12,color:"#E11D48",fontWeight:600}}>🔒 Chat closed — job completed successfully.</span></div>}
         <div className="sc" style={{flex:1,overflowY:"auto",padding:"16px 20px"}}>
-          <div style={{textAlign:"center",marginBottom:18}}><span style={{fontSize:11,color:TM,background:BD,padding:"4px 12px",borderRadius:12,fontWeight:500}}>Today</span></div>
+          {vjMsgs.length===0&&!typing?(
+            <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",textAlign:"center",paddingTop:40}}>
+              <div style={{fontSize:32,marginBottom:10}}>💬</div>
+              <div style={{fontSize:13,color:TS}}>{locked?"No messages were sent for this job.":"Send a message to your pro"}</div>
+            </div>
+          ):(
+            <div style={{textAlign:"center",marginBottom:18}}><span style={{fontSize:11,color:TM,background:BD,padding:"4px 12px",borderRadius:12,fontWeight:500}}>Today</span></div>
+          )}
           {vjMsgs.map(m=>{
             const mine=m.f==="cu";
             return(
@@ -2109,13 +2925,18 @@ export default function App(){
     );
   };
 
+  // Whether the current screen's top region is the dark navy hero style or
+  // a light header — used only to color the safe-area spacer so it blends
+  // seamlessly with whichever screen is showing (no visible seam at the top).
+  const topIsDark=["task","custom","diagnose","emergency"].includes(scr)||(scr==="home"&&tab==="home");
+
   // ── RENDER ─────────────────────────────────────────────────────────────────
   return(
     <>
       <style>{CSS}</style>
-      <div style={{minHeight:"100vh",background:"linear-gradient(155deg,#B8C6D1 0%,#C8BBA8 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"}}>
-        <div style={{width:390,height:844,background:BG,borderRadius:46,overflow:"hidden",boxShadow:"0 32px 80px rgba(28,43,58,.28),0 0 0 1px rgba(28,43,58,.09)",display:"flex",flexDirection:"column"}}>
-          {statusBar()}
+      <div className="haven-frame-outer" style={{minHeight:"100vh",background:"linear-gradient(155deg,#B8C6D1 0%,#C8BBA8 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"}}>
+        <div className="haven-frame-phone" style={{width:390,height:844,background:BG,borderRadius:46,overflow:"hidden",boxShadow:"0 32px 80px rgba(28,43,58,.28),0 0 0 1px rgba(28,43,58,.09)",display:"flex",flexDirection:"column"}}>
+          <div style={{flexShrink:0,paddingTop:"env(safe-area-inset-top)",background:topIsDark?N:W}}/>
           <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
             {scr==="home"     &&tab==="home"     &&homeScreen()}
             {scr==="browse"   &&browseScreen()}
@@ -2132,16 +2953,27 @@ export default function App(){
             {scr==="payment"  &&paymentScreen()}
             {scr==="editProfile" &&editProfileScreen()}
             {scr==="myhome"   &&myhomeScreen()}
+            {scr==="serviceHistory" &&serviceHistoryScreen()}
             {scr==="receiptList" &&receiptListScreen()}
             {scr==="receipt"  &&receiptScreen()}
-            {scr==="editHome" &&editHomeScreen()}
-            {scr==="applianceDetail" &&applianceDetailScreen()}
+            {scr==="addressEdit" &&addressEditScreen()}
             {scr==="proProfile" &&proProfileScreen()}
             {scr==="addresses"&&addressesScreen()}
-            {scr==="notifications"&&notificationsScreen()}
+            {scr==="notifCenter"&&notifCenterScreen()}
+            {scr==="settings"&&settingsScreen()}
             {scr==="help"     &&helpScreen()}
           </div>
           {bottomNav()}
+          {showDiscardConfirm&&(
+            <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:10}}>
+              <div style={{background:W,borderRadius:"20px 20px 0 0",padding:24,width:"100%"}}>
+                <div style={{fontWeight:800,fontSize:17,color:TX,marginBottom:6,textAlign:"center"}}>Discard draft?</div>
+                <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:18,textAlign:"center"}}>This booking hasn't been posted yet. Your progress will be lost.</div>
+                <button onClick={()=>setShowDiscardConfirm(false)} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:AM,color:W,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:10}}>Keep Editing</button>
+                <button onClick={()=>discardDraftAndGo(()=>backFrom(tid?"task":"custom",{scr:"home",tab:"home"}))} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:"#DC2626",fontWeight:700,fontSize:15,cursor:"pointer"}}>Discard Draft</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </>
