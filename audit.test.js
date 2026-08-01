@@ -16,14 +16,19 @@ global.HTMLInputElement = dom.window.HTMLInputElement;
 global.HTMLTextAreaElement = dom.window.HTMLTextAreaElement;
 global.Node = dom.window.Node;
 global.getComputedStyle = dom.window.getComputedStyle;
-let storedTheme = null;
-global.localStorage = { getItem: () => storedTheme, setItem: (k, v) => { storedTheme = v; }, removeItem: () => { storedTheme = null; } };
+const storedData = {};
+global.localStorage = {
+  getItem: (k) => (k in storedData ? storedData[k] : null),
+  setItem: (k, v) => { storedData[k] = v; },
+  removeItem: (k) => { delete storedData[k]; },
+};
+function storedNotifPrefsRaw(){ return storedData['haven_notif_prefs'] ?? null; }
 let appBadgeValue;
 global.navigator.setAppBadge = (n) => { appBadgeValue = n; return Promise.resolve(); };
 global.navigator.clearAppBadge = () => { appBadgeValue = 0; return Promise.resolve(); };
 global.navigator.clipboard = { writeText: () => Promise.resolve() };
 
-const { render, screen, fireEvent } = require('@testing-library/react');
+const { render, screen, fireEvent, cleanup } = require('@testing-library/react');
 const { act } = require('react-dom/test-utils');
 const babel = require('@babel/core');
 const fs = require('fs');
@@ -89,7 +94,8 @@ assert(typeof App === 'function', 'App component loaded from compiled source');
 assert(typeof ErrorBoundary === 'function', 'ErrorBoundary class loaded from compiled source');
 
 console.log('--- Running audit ---');
-act(() => { render(React.createElement(App)); });
+let mainContainer;
+act(() => { mainContainer = render(React.createElement(App)).container; });
 
 step('1. Profile — 3 large featured cards on top, standard list below, exact row order, no My Bookings', () => {
   click('Profile');
@@ -314,8 +320,119 @@ setTimeout(() => {
         click('Discard Draft');
       });
 
-      console.log(`\n--- Audit complete: ${pass} passing, ${fail} failing ---`);
-      if (fail > 0) process.exit(1);
+      step('12. Bug sweep — notification preferences actually persist (were previously never saved)', () => {
+        forceProfileRoot();
+        click('Settings');
+        const label = byText('Job updates');
+        const row = label.parentElement.parentElement;
+        const toggle = row.lastElementChild;
+        act(()=>{fireEvent.click(toggle);});
+        assert(storedNotifPrefsRaw()!==null, 'Notification preferences are now written to localStorage (previously never persisted at all)');
+        const saved = JSON.parse(storedNotifPrefsRaw());
+        assert(typeof saved.data.jobUpdates==='boolean', 'Persisted shape matches the real preference object (inside the versioned {__v, data} wrapper), not something else');
+        assert(saved.__v===1, 'Schema version is recorded alongside the data');
+        click('‹');
+      });
+
+      step('13. Bug sweep — rapid double-tap on Post Job cannot create a duplicate job', () => {
+        clickTab('Home'); click('Install smart lock');
+        const postBtn = screen.getAllByText(/Post Job/).slice(-1)[0];
+        act(()=>{ fireEvent.click(postBtn); fireEvent.click(postBtn); });
+        clickTab('Bookings');
+        assert(screen.queryAllByText('Install smart lock').length===1, 'Exactly one job created from a rapid double-tap, not two');
+      });
+
+      step('14. Reset Prototype Data — confirmation required, clears data, resets tab memory', () => {
+        forceProfileRoot();
+        click('Settings');
+        assert(existsRegex('Reset Prototype Data'), 'Reset Prototype Data present in Settings, clearly labeled as a testing utility');
+        click('Reset Prototype Data');
+        assert(existsRegex('Reset Prototype Data?'), 'Confirmation required — not an immediate destructive action');
+        assert(existsRegex(/every job, saved property, saved card/), 'Confirmation clearly states what will be cleared');
+        click('Cancel');
+        assert(!existsRegex('Reset Prototype Data?'), 'Cancel dismisses without resetting anything');
+        click('Reset Prototype Data');
+        clickRegex(/^Reset Prototype Data$/);
+        assert(existsRegex(/need done/), 'Reset returns to Home root');
+        clickTab('Bookings');
+        assert(!existsRegex('Install smart lock') && !existsRegex('Mount TV'), 'All jobs cleared after reset');
+        clickTab('Profile');
+        assert(existsRegex('Jane Doe'), 'Tapping Profile after reset lands on the actual Profile root, not a stale remembered sub-screen (this was a real bug found and fixed this slice)');
+        click('Saved Addresses');
+        assert(existsRegex(/🏠 Primary/), 'Addresses reset to the default seed, with a valid Primary');
+      });
+
+      console.log(`\n--- Interaction suite complete: ${pass} passing, ${fail} failing so far ---`);
+      runPersistenceAndCorruptStorageChecks();
     }, 2300);
   }, 2300);
 }, 2300);
+
+// ── PHASE 2: real persistence round-trip + corrupt-storage matrix ─────────
+// Runs after the interaction suite finishes (needs its own render lifecycle
+// — a genuine unmount/remount, and for the corrupt-storage part, directly
+// tampering with storedData before mounting — neither of which fits the
+// single continuous click-driven session above).
+function runPersistenceAndCorruptStorageChecks(){
+  step('15. Persistence survives a real unmount/remount (simulated PWA close/reopen)', () => {
+    act(()=>{ cleanup(); });
+    const keysAfterClose = Object.keys(storedData);
+    assert(keysAfterClose.includes('haven_jobs') && keysAfterClose.includes('haven_addresses') && keysAfterClose.includes('haven_cards') && keysAfterClose.includes('haven_profile'), 'All core domains were written to storage independently (not one blob) before close');
+
+    const container2 = document.createElement('div');
+    document.body.appendChild(container2);
+    act(()=>{ render(React.createElement(App), container2); });
+
+    click('Bookings');
+    assert(!existsRegex('Install smart lock') && !existsRegex('Mount TV'), 'The Reset Prototype Data from step 14 survived the remount — a fresh instance does not silently resurrect old jobs');
+    click('Profile'); click('Saved Addresses');
+    assert(existsRegex(/🏠 Primary/), 'Default seed address data (post-reset) survived the remount with a valid Primary');
+    click('‹'); click('Payment Methods');
+    assert(existsRegex('Default'), 'Default seed card data (post-reset) survived the remount with a valid Default');
+
+    act(()=>{ cleanup(); });
+  });
+
+  step('16. Corrupt/adversarial storage matrix — sanitized correctly, not just "doesn\'t crash"', () => {
+    // Deliberately corrupt every domain at once: duplicate primary, duplicate
+    // default, invalid job status, duplicate job id, missing id, garbage
+    // entry, wrong-typed prefs, unknown schema version, invalid JSON.
+    storedData['haven_addresses'] = JSON.stringify({__v:1, data:[
+      {id:1,label:"Home",isPrimary:true,street:"1 Main St",city:"SF",state:"CA",zip:"94103"},
+      {id:2,label:"Work",isPrimary:true,street:"2 Main St",city:"SF",state:"CA",zip:"94104"}, // duplicate primary
+    ]});
+    storedData['haven_cards'] = JSON.stringify({__v:1, data:[
+      {id:1,brand:"Visa",last4:"1111",exp:"01/30",isDefault:true},
+      {id:2,brand:"Amex",last4:"2222",exp:"02/30",isDefault:true}, // duplicate default
+    ]});
+    storedData['haven_jobs'] = JSON.stringify({__v:1, data:[
+      {id:100,status:"totally_invalid_status",taskId:50},
+      {id:100,status:"posted",taskId:49}, // duplicate id
+      {id:null}, // missing id
+      "not even an object", // garbage
+    ]});
+    storedData['haven_notif_prefs'] = '[1,2,3]'; // wrong type
+    storedData['haven_profile'] = JSON.stringify({__v:99, data:{name:"",bio:123,photo:{}}}); // unknown version + wrong types
+    storedData['haven_draft'] = '{{{not valid json';
+    storedData['haven_theme'] = '"not-a-real-theme"'; // legacy-unwrapped, invalid enum
+
+    const container3 = document.createElement('div');
+    document.body.appendChild(container3);
+    let crashed=false, crashMsg='';
+    try{
+      act(()=>{ render(React.createElement(App), container3); });
+    }catch(e){ crashed=true; crashMsg=e.message; }
+    assert(!crashed, `App boots successfully despite a full matrix of corrupt/adversarial storage data across every domain at once${crashed?': '+crashMsg:''}`);
+    assert(existsRegex(/need done/), 'Home screen renders normally after corrupt-storage boot');
+
+    click('Profile'); click('Saved Addresses');
+    assert(screen.queryAllByText(/🏠 Primary/).length===1, 'Duplicate-primary data resolved to exactly one Primary, deterministically — not left ambiguous or crashing');
+    click('‹'); click('Payment Methods');
+    assert(screen.queryAllByText('Default').length===1, 'Duplicate-default data resolved to exactly one Default');
+    click('‹'); clickTab('Bookings');
+    assert(!existsRegex('undefined') && !existsRegex('NaN'), 'Invalid/duplicate/malformed job entries produced no leaked error text in the UI');
+  });
+
+  console.log(`\n--- Audit complete: ${pass} passing, ${fail} failing ---`);
+  if (fail > 0) process.exit(1);
+}

@@ -142,7 +142,6 @@ const ENTRY_GROUPS=[
   {key:"outdoor", label:"Outdoor", e:"🌿", cats:["Landscaping","Maintenance"]},
   {key:"move",    label:"Move",    e:"📦", cats:["Moving"]},
 ];
-const EMERGENCY_CATS=["Repair","Plumbing","Electrical"];
 const EMERGENCY_FEE=35;
 // Emergency screen options — map to an existing catalog task where possible,
 // otherwise fall back to a custom-job flow (Locked out, Other).
@@ -282,8 +281,18 @@ const SI={
 };
 const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
 const PRO_REPLIES=["Got it! 👍","On it!","Thanks for the heads up!","Almost there!","Sounds good!","Will do!"];
-const PC=['#BFDBFE','#BBF7D0','#FDE68A','#FECACA','#DDD6FE'];
-const PE=['📺','🛋️','🔧','🖼️','🏠'];
+// Seed/default data — reused both for the initial useState value and by
+// "Reset Prototype Data". Cards only ever hold safe prototype display
+// fields (brand, last four digits, expiration, default flag) — never a
+// full card number, CVV, or any real payment credential.
+const DEFAULT_CARDS=[
+  {id:1,brand:"Visa",last4:"4242",exp:"08/28",isDefault:true},
+  {id:2,brand:"Mastercard",last4:"8821",exp:"02/27",isDefault:false},
+];
+const DEFAULT_ADDRESSES=[
+  {id:1,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
+  {id:2,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
+];
 
 const PersonIcon=({col=AM,sz=22})=>(
   <svg width={sz} height={sz} viewBox="0 0 24 24" fill={col} style={{display:"block"}}>
@@ -406,21 +415,67 @@ function makeNotification({
   };
 }
 
+// ── PERSISTENCE ───────────────────────────────────────────────────────────
+// One shared, defensive persistence pattern used by every persisted domain
+// (jobs, addresses, cards, profile, notifications, notification preferences,
+// appearance). Each domain gets its own storage key — never one giant blob —
+// and its own schema version, so a corrupt or outdated domain can reset
+// independently without wiping the rest of the app.
+//
+// Storage shape: {"__v": <schema version>, "data": <domain data>}
+// Legacy/pre-versioning data (a bare value with no {__v,data} wrapper) is
+// treated as version 0 and run through the same migrate() path, so nothing
+// already saved by an earlier Haven build gets silently discarded.
+function usePersistedState(key, initialValue, {version=1, migrate=null, validate=null}={}){
+  const getDefault = ()=> typeof initialValue==="function" ? initialValue() : initialValue;
+  const [state,setState] = useState(()=>{
+    try{
+      const raw = localStorage.getItem(key);
+      if(!raw) return getDefault();
+      const parsed = JSON.parse(raw);
+      let data, fromVersion;
+      if(parsed&&typeof parsed==="object"&&!Array.isArray(parsed)&&"__v" in parsed&&"data" in parsed){
+        data = parsed.data; fromVersion = parsed.__v;
+      }else{
+        data = parsed; fromVersion = 0; // legacy unwrapped data from before schema versioning
+      }
+      if(migrate&&fromVersion!==version){
+        try{ data = migrate(data, fromVersion); }
+        catch{ return getDefault(); } // irrecoverable migration failure — reset only this domain
+      }
+      if(validate){
+        const sanitized = validate(data);
+        if(sanitized===null||sanitized===undefined) return getDefault();
+        return sanitized;
+      }
+      return data;
+    }catch{
+      return getDefault(); // malformed JSON, etc. — never let a bad key block boot
+    }
+  });
+  useEffect(()=>{
+    try{ localStorage.setItem(key, JSON.stringify({__v:version, data:state})); }catch{}
+  },[state]);
+  return [state,setState];
+}
+// Clears every key this app persists — used by the "Reset Prototype Data"
+// testing utility. Kept as one list, next to the hook, so a newly-persisted
+// domain is easy to remember to add here too.
+const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft"];
+
 function App(){
   // Appearance — System / Light / Dark. Persisted so it survives reopening
   // the installed PWA. "Tokens, not per-screen styles": every screen in this
   // file already references BG/W/TX/TS/TM/BD/SL by name via closure, so
   // computing them once here (instead of as module-level constants) is
   // enough to theme the entire app — no screen's own JSX needs to change.
-  const [themePref,setThemePref]=useState(()=>{
-    try{ return localStorage.getItem("haven_theme")||"system"; }catch{ return "system"; }
+  const [themePref,setThemePref]=usePersistedState("haven_theme","system",{
+    version:1,
+    validate:v=>["system","light","dark"].includes(v)?v:"system",
   });
   const [systemDark,setSystemDark]=useState(()=>{
     try{ return typeof window!=="undefined"&&window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches; }catch{ return false; }
   });
-  useEffect(()=>{
-    try{ localStorage.setItem("haven_theme",themePref); }catch{}
-  },[themePref]);
   useEffect(()=>{
     if(typeof window==="undefined"||!window.matchMedia)return;
     const mq=window.matchMedia("(prefers-color-scheme: dark)");
@@ -460,7 +515,23 @@ function App(){
   const [ctitle,setCtitle] = useState("");
   const [ccat,setCcat]     = useState("Repair");
   const [cprice,setCprice] = useState("");
-  const [jobs,setJobs]     = useState([]);
+  const VALID_JOB_STATUSES=new Set(["posted","en_route","arrived","in_progress","complete","cancelled"]);
+  const [jobs,setJobs] = usePersistedState("haven_jobs",[],{
+    version:1,
+    validate:v=>{
+      if(!Array.isArray(v))return null;
+      const seenIds=new Set();
+      return v
+        .filter(j=>j&&typeof j==="object"&&typeof j.id!=="undefined")
+        .filter(j=>{ if(seenIds.has(j.id))return false; seenIds.add(j.id); return true; })
+        .map(j=>{
+          const full=makeJob(j); // fills in any missing/new fields with safe defaults
+          full.id=j.id; // preserve the original stable id — notifications reference jobId by it
+          if(!VALID_JOB_STATUSES.has(full.status))full.status="posted";
+          return full;
+        });
+    },
+  });
   const [vjid,setVjid]     = useState(null);
   const [scr,setScr]       = useState("home");
   const [tab,setTab]       = useState("home");
@@ -473,23 +544,19 @@ function App(){
   const [hireAgain,setHireAgain]= useState(null);
   const [minput,setMinput] = useState("");
   const [typing,setTyping] = useState(false);
-  const [notifPrefs,setNotifPrefs] = useState({push:true,jobUpdates:true,messages:true,promos:false,email:true});
+  const DEFAULT_NOTIF_PREFS={push:true,jobUpdates:true,messages:true,promos:false,email:true};
+  const [notifPrefs,setNotifPrefs] = usePersistedState("haven_notif_prefs",DEFAULT_NOTIF_PREFS,{
+    version:1,
+    validate:v=>(v&&typeof v==="object"&&!Array.isArray(v))?{...DEFAULT_NOTIF_PREFS,...v}:null,
+  });
   // Notification Center — persisted locally so read/unread state survives
   // closing and reopening the PWA. Defensive against malformed legacy data:
   // anything that isn't a well-formed array of objects with an id is dropped
   // rather than crashing the app.
-  const [notifications,setNotifications]=useState(()=>{
-    try{
-      const raw=localStorage.getItem("haven_notifications");
-      if(!raw)return [];
-      const parsed=JSON.parse(raw);
-      if(!Array.isArray(parsed))return [];
-      return parsed.filter(n=>n&&typeof n==="object"&&typeof n.id!=="undefined"&&typeof n.createdAt==="number");
-    }catch{ return []; }
+  const [notifications,setNotifications]=usePersistedState("haven_notifications",[],{
+    version:1,
+    validate:v=>Array.isArray(v)?v.filter(n=>n&&typeof n==="object"&&typeof n.id!=="undefined"&&typeof n.createdAt==="number"):null,
   });
-  useEffect(()=>{
-    try{ localStorage.setItem("haven_notifications",JSON.stringify(notifications)); }catch{}
-  },[notifications]);
   const [lastDeletedNotif,setLastDeletedNotif]=useState(null);
   const [showUndoToast,setShowUndoToast]=useState(false);
   const [showUnavailableToast,setShowUnavailableToast]=useState(false);
@@ -553,6 +620,26 @@ function App(){
     }catch{}
   };
   useEffect(()=>{ syncAppBadge(unreadCount); },[unreadCount]);
+  const [showResetConfirm,setShowResetConfirm]=useState(false);
+  // Testing utility only — clears every domain this app persists and
+  // returns all in-memory state to its clean defaults. Not a real
+  // customer-facing "sign out" or data-deletion feature.
+  const resetPrototypeData=()=>{
+    PERSISTED_KEYS.forEach(k=>{ try{ localStorage.removeItem(k); }catch{} });
+    setJobs([]); setVjid(null);
+    setAddresses(DEFAULT_ADDRESSES.map(a=>({...a})));
+    setCards(DEFAULT_CARDS.map(c=>({...c})));
+    setProfile({name:"Jane Doe",bio:"",photo:null});
+    setNotifications([]);
+    setNotifPrefs({push:true,jobUpdates:true,messages:true,promos:false,email:true});
+    setThemePref("system");
+    setTid(null);setTpid(null);setCtitle("");setCcat("Repair");setCprice("");setDesc("");setPhotos([]);setEmergency(false);
+    setSelectedAddressId(1);setSelectedCardId(1);
+    setTabScr({});
+    setShowResetConfirm(false);
+    syncAppBadge(0);
+    goHome();
+  };
   // Job updates and messages/support respect their own toggle; cancellation,
   // payment, location, and account notices are never suppressible.
   const notifAllowed=(type)=>{
@@ -684,16 +771,16 @@ function App(){
     });
   };
   const swipeUp=(id)=>{
-    setSwipeState(s=>{
-      if(s.id!==id||!s.locked){ return {id:null,startX:0,startY:0,deltaX:0,deltaY:0,dragging:false,locked:false}; }
+    const s=swipeState;
+    if(s.id===id&&s.locked){
       const n=notifications.find(x=>x.id===id);
       if(s.deltaX<=-SWIPE_COMMIT){ deleteNotification(id); }
       else if(s.deltaX<=-SWIPE_REVEAL){ setOpenSwipeId(id); setOpenSwipeDir("left"); }
       else if(s.deltaX>=SWIPE_COMMIT){ if(n)markNotifRead(id,!n.isRead); setOpenSwipeId(null); setOpenSwipeDir(null); }
       else if(s.deltaX>=SWIPE_REVEAL){ setOpenSwipeId(id); setOpenSwipeDir("right"); }
       else { setOpenSwipeId(null); setOpenSwipeDir(null); }
-      return {id:null,startX:0,startY:0,deltaX:0,deltaY:0,dragging:false,locked:false};
-    });
+    }
+    setSwipeState({id:null,startX:0,startY:0,deltaX:0,deltaY:0,dragging:false,locked:false});
   };
   const [catGroup,setCatGroup] = useState(null);   // {cats:[...], label} or null
   const [emergencyFlag,setEmergencyFlag] = useState(false);
@@ -701,15 +788,48 @@ function App(){
   const [diagResult,setDiagResult] = useState(null);
   const [navFrom,setNavFrom] = useState({}); // v0.13 — per-screen origin {scr,tab}, replaces cameFrom/proProfileFrom/receiptFrom/helpFrom
   // Profile
-  const [profile,setProfile]     = useState({name:"Jane Doe",bio:"",photo:null});
+  const DEFAULT_PROFILE={name:"Jane Doe",bio:"",photo:null};
+  const [profile,setProfile] = usePersistedState("haven_profile",DEFAULT_PROFILE,{
+    version:1,
+    validate:v=>{
+      if(!v||typeof v!=="object")return null;
+      return {
+        name:typeof v.name==="string"&&v.name.trim()?v.name:DEFAULT_PROFILE.name,
+        bio:typeof v.bio==="string"?v.bio:"",
+        photo:typeof v.photo==="string"?v.photo:null,
+      };
+    },
+  });
   const [draftName,setDraftName] = useState("");
   const [draftBio,setDraftBio]   = useState("");
   const [draftPhoto,setDraftPhoto]= useState(null);
   // Payment methods
-  const [cards,setCards] = useState([
-    {id:1,brand:"Visa",last4:"4242",exp:"08/28",isDefault:true},
-    {id:2,brand:"Mastercard",last4:"8821",exp:"02/27",isDefault:false},
-  ]);
+  const [cards,setCards] = usePersistedState("haven_cards",DEFAULT_CARDS,{
+    version:1,
+    validate:v=>{
+      if(!Array.isArray(v))return null;
+      const seen=new Set();
+      const cleaned=v
+        .filter(c=>c&&typeof c==="object"&&typeof c.id!=="undefined")
+        .filter(c=>{ if(seen.has(c.id))return false; seen.add(c.id); return true; })
+        .map(c=>({
+          id:c.id,
+          brand:typeof c.brand==="string"?c.brand:"Card",
+          last4:typeof c.last4==="string"?c.last4:"----",
+          exp:typeof c.exp==="string"?c.exp:"",
+          isDefault:!!c.isDefault,
+        }));
+      if(cleaned.length===0)return cleaned;
+      const defaults=cleaned.filter(c=>c.isDefault);
+      if(defaults.length>1){
+        let kept=false;
+        cleaned.forEach(c=>{ if(c.isDefault){ if(kept)c.isDefault=false; else kept=true; } });
+      }else if(defaults.length===0){
+        cleaned[0].isDefault=true;
+      }
+      return cleaned;
+    },
+  });
   const [expandedCard,setExpandedCard]=useState(null);
   const [addingCard,setAddingCard]=useState(false);
   const [newCardNum,setNewCardNum]=useState("");
@@ -723,10 +843,31 @@ function App(){
   // isPrimary:true; that entry IS "My Home" (no separate home/draftHome
   // state exists anymore — My Home reads/writes this same array so the two
   // screens can never drift out of sync with each other).
-  const [addresses,setAddresses]=useState([
-    {id:1,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
-    {id:2,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
-  ]);
+  const [addresses,setAddresses]=usePersistedState("haven_addresses",DEFAULT_ADDRESSES,{
+    version:1,
+    validate:v=>{
+      if(!Array.isArray(v))return null;
+      const seen=new Set();
+      const cleaned=v
+        .filter(a=>a&&typeof a==="object"&&typeof a.id!=="undefined")
+        .filter(a=>{ if(seen.has(a.id))return false; seen.add(a.id); return true; })
+        .map(a=>({
+          id:a.id, label:typeof a.label==="string"&&a.label?a.label:"Address", isPrimary:!!a.isPrimary,
+          street:a.street||"", unit:a.unit||"", city:a.city||"", state:a.state||"", zip:a.zip||"",
+          accessNotes:a.accessNotes||"", propertyType:a.propertyType||"",
+          yearBuilt:a.yearBuilt||"", sqft:a.sqft||"", beds:a.beds||"", baths:a.baths||"",
+        }));
+      if(cleaned.length===0)return cleaned; // zero properties is valid — booking will require adding one
+      const primaries=cleaned.filter(a=>a.isPrimary);
+      if(primaries.length>1){
+        let kept=false;
+        cleaned.forEach(a=>{ if(a.isPrimary){ if(kept)a.isPrimary=false; else kept=true; } });
+      }else if(primaries.length===0){
+        cleaned[0].isPrimary=true;
+      }
+      return cleaned;
+    },
+  });
   const [expandedAddr,setExpandedAddr]=useState(null);
   const [confirmDeleteAddrId,setConfirmDeleteAddrId]=useState(null);
   const [editingAddressId,setEditingAddressId]=useState(null); // null while adding a new address
@@ -873,6 +1014,45 @@ function App(){
   const goBookings =()=>goTab("bookings");
   const goProfile  =()=>goTab("profile");
   const hasDraft = tid!==null || ctitle.trim()!=="";
+  // Draft booking persistence — restored once on mount, saved as one
+  // combined snapshot (not scattered keys) whenever the draft's own content
+  // changes, and automatically cleared once hasDraft becomes false (posted
+  // or discarded). If the restored address/card no longer exists, the
+  // existing "no address/card saved" fallback UI already handles it —
+  // nothing extra needed here for that case.
+  const draftHydratedRef = useRef(false);
+  useEffect(()=>{
+    if(draftHydratedRef.current)return;
+    draftHydratedRef.current=true;
+    try{
+      const raw=localStorage.getItem("haven_draft");
+      if(!raw)return;
+      const parsed=JSON.parse(raw);
+      const d=(parsed&&typeof parsed==="object"&&"data" in parsed)?parsed.data:parsed;
+      if(!d||typeof d!=="object")return;
+      if(d.tid!=null)setTid(d.tid);
+      if(d.tpid!=null)setTpid(d.tpid);
+      if(typeof d.ctitle==="string")setCtitle(d.ctitle);
+      if(typeof d.ccat==="string")setCcat(d.ccat);
+      if(typeof d.cprice==="string")setCprice(d.cprice);
+      if(typeof d.desc==="string")setDesc(d.desc);
+      if(Array.isArray(d.photos))setPhotos(d.photos);
+      if(typeof d.emergency==="boolean")setEmergency(d.emergency);
+      if(d.selectedAddressId!=null)setSelectedAddressId(d.selectedAddressId);
+      if(d.selectedCardId!=null)setSelectedCardId(d.selectedCardId);
+    }catch{}
+  },[]);
+  useEffect(()=>{
+    if(!draftHydratedRef.current)return; // don't stomp storage with pre-hydration defaults on first render
+    try{
+      const currentlyDraft = tid!==null || ctitle.trim()!=="";
+      if(currentlyDraft){
+        localStorage.setItem("haven_draft",JSON.stringify({__v:1,data:{tid,tpid,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId}}));
+      }else{
+        localStorage.removeItem("haven_draft");
+      }
+    }catch{}
+  },[tid,tpid,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId]);
   // Bottom-tab-bar tap handler ONLY — every other internal "return to root"
   // call site (goHome/goBookings/goProfile, used as fixed-destination back
   // targets from many screens) still goes through the untouched goTab above,
@@ -925,9 +1105,11 @@ function App(){
     setSelectedCardId((cards.find(c=>c.isDefault)||cards[0])?.id);
     setShowAddressPicker(false);setShowCardPicker(false);
     setLocationPermission("never_requested");setDetectedCity(null);setLocationWarningDismissed(false);
+    isPostingRef.current=false; // re-arm the double-submission guard for this fresh draft
   };
   const openTask   =(id)=>{setTid(id);setTpid(2);setDesc("");setEmergency(false);resetBookingSelections();goTo("task");};
   const photoInputRef = useRef(null);
+  const isPostingRef = useRef(false); // synchronous guard against rapid-double-tap creating duplicate jobs
   const addPhoto   =()=>{ photoInputRef.current?.click(); };
   const handlePhotoFiles=(e)=>{
     const files=Array.from(e.target.files||[]).slice(0,4-photos.length);
@@ -1035,6 +1217,8 @@ function App(){
 
   const postJob=()=>{
     if(!currentTask||!tpid)return;
+    if(isPostingRef.current)return; // already posted this draft — a rapid second tap must not create a duplicate job
+    isPostingRef.current=true;
     const nj=makeJob({
       taskId:tid,
       custom:tid?null:{title:ctitle,cat:ccat,price:parseInt(cprice)||0},
@@ -1188,28 +1372,28 @@ function App(){
       <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,position:"relative",zIndex:1,padding:"20px 20px 24px"}}>
 
         {/* Describe the problem */}
-        <div onClick={openDiagnose} style={{background:W,borderRadius:20,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer",display:"flex",gap:14,alignItems:"center"}}>
+        <button onClick={openDiagnose} style={{width:"100%",textAlign:"left",font:"inherit",background:W,border:"none",borderRadius:20,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer",display:"flex",gap:14,alignItems:"center"}}>
           <div style={{width:48,height:48,borderRadius:24,background:"#EEF2FF",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>🔍</div>
           <div style={{flex:1}}>
             <div style={{fontWeight:700,fontSize:15,color:TX}}>What's going on at home?</div>
             <div style={{fontSize:12,color:TS,marginTop:2}}>Describe it — we'll find the right pro and price</div>
           </div>
           <span style={{color:TM,fontSize:20}}>›</span>
-        </div>
+        </button>
 
         {/* Emergency + Custom Job — compact side-by-side pair */}
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
-          <div onClick={()=>goTo("emergency")} style={{background:"#FFF1EE",border:"1.5px solid #FFD4C7",borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
+          <button onClick={()=>goTo("emergency")} style={{font:"inherit",background:"#FFF1EE",border:"1.5px solid #FFD4C7",borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
             <div style={{fontSize:22,marginBottom:6}}>🚨</div>
             <div style={{fontWeight:700,fontSize:13,color:"#C2410C"}}>Urgent</div>
             <div style={{fontSize:10,color:"#C2410C",opacity:.75,marginTop:1}}>Fast help</div>
-          </div>
-          <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
-            style={{background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
+          </button>
+          <button onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+            style={{font:"inherit",background:"#EFF6FF",border:"1.5px solid #BFDBFE",borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
             <div style={{fontSize:22,marginBottom:6}}>✏️</div>
             <div style={{fontWeight:700,fontSize:13,color:N}}>Not Listed?</div>
             <div style={{fontSize:10,color:TS,marginTop:1}}>Describe it</div>
-          </div>
+          </button>
         </div>
 
         {/* Entry tiles */}
@@ -1420,7 +1604,7 @@ function App(){
   const profileScreen=()=>(
     <div className="sc" style={{flex:1,overflowY:"auto",padding:"20px 20px 100px",background:BG}}>
       <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:20}}>Profile</div>
-      <div onClick={openEditProfile} style={{background:N,borderRadius:20,padding:20,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer"}}>
+      <button onClick={openEditProfile} style={{width:"100%",textAlign:"left",font:"inherit",background:N,border:"none",borderRadius:20,padding:20,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer"}}>
         <div style={{width:52,height:52,borderRadius:26,background:AM,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0,overflow:"hidden"}}>
           {profile.photo?<img src={profile.photo} alt="" style={{width:"100%",height:"100%",objectFit:"cover"}}/>:<PersonIcon col={W} sz={30}/>}
         </div>
@@ -1429,20 +1613,20 @@ function App(){
           <div style={{color:"rgba(255,255,255,.55)",fontSize:13,marginTop:2}}>{profile.bio||"Member since 2024"}</div>
         </div>
         <span style={{color:"rgba(255,255,255,.6)",fontSize:12,fontWeight:600}}>Edit ›</span>
-      </div>
+      </button>
 
       {/* My Home — large featured card */}
-      <div onClick={openMyHome} style={{background:"linear-gradient(135deg,#FEF3C7,#FDE68A)",borderRadius:20,padding:18,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+      <button onClick={openMyHome} style={{width:"100%",textAlign:"left",font:"inherit",background:"linear-gradient(135deg,#FEF3C7,#FDE68A)",border:"none",borderRadius:20,padding:18,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
         <div style={{width:48,height:48,borderRadius:24,background:"rgba(255,255,255,.55)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>🏡</div>
         <div style={{flex:1}}>
           <div style={{fontWeight:700,fontSize:15,color:"#92400E"}}>My Home</div>
           <div style={{fontSize:12,color:"#92400E",opacity:.8,marginTop:2}}>Service history, maintenance & more</div>
         </div>
         <span style={{color:"#92400E",fontSize:18}}>›</span>
-      </div>
+      </button>
 
       {/* Notifications — large featured card, same weight as My Home, distinct notification-blue treatment */}
-      <div onClick={()=>goTo("notifCenter")} aria-label={unreadCount>0?`Notifications, ${unreadCount>9?"9+":unreadCount} unread`:"Notifications"} style={{background:`linear-gradient(135deg,${SELBG},${SELBORDER}33)`,border:`1px solid ${SELBORDER}`,borderRadius:20,padding:18,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+      <button onClick={()=>goTo("notifCenter")} aria-label={unreadCount>0?`Notifications, ${unreadCount>9?"9+":unreadCount} unread`:"Notifications"} style={{width:"100%",textAlign:"left",font:"inherit",background:`linear-gradient(135deg,${SELBG},${SELBORDER}33)`,border:`1px solid ${SELBORDER}`,borderRadius:20,padding:18,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
         <div style={{width:48,height:48,borderRadius:24,background:"rgba(255,255,255,.55)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:24,flexShrink:0}}>🔔</div>
         <div style={{flex:1}}>
           <div style={{display:"flex",alignItems:"center",gap:8}}>
@@ -1452,7 +1636,7 @@ function App(){
           <div style={{fontSize:12,color:N,opacity:.75,marginTop:2}}>Job updates, messages & account alerts</div>
         </div>
         <span style={{color:N,fontSize:18}}>›</span>
-      </div>
+      </button>
 
       <div style={{background:W,borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
         {[
@@ -1484,6 +1668,20 @@ function App(){
     <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",gap:14}}>
       <button onClick={onBack} style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
       <span style={{fontWeight:700,fontSize:17,color:TX}}>{title}</span>
+    </div>
+  );
+  // Shared "referenced job no longer exists" fallback — used anywhere a
+  // screen depends on vjid resolving to a real job. Currently unreachable in
+  // practice (jobs are never removed from the jobs array), but a cheap
+  // defensive guard against a real dead-end (a blank screen with no way
+  // back) if that assumption ever stops holding.
+  const unavailableScreen=(title,onBack)=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader(title,onBack)}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
+        <div style={{fontSize:32,marginBottom:12}}>🔍</div>
+        <div style={{fontSize:13,color:TS}}>This item is no longer available.</div>
+      </div>
     </div>
   );
 
@@ -1965,7 +2163,7 @@ function App(){
   );
 
   const receiptScreen=()=>{
-    if(!vj) return null;
+    if(!vj) return unavailableScreen("Receipt",()=>backFrom("receipt",{scr:"myhome",tab:"home"}));
     // Intentional exception: receipts always render light, regardless of the
     // app's current theme — a receipt reads as a fixed document (like a
     // printed one), not a themed UI surface. Shadowing the token names here
@@ -2287,9 +2485,9 @@ function App(){
   const notifRow=(label,sub,k)=>(
     <div key={k} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 0",borderBottom:`1px solid ${BD}`}}>
       <div><div style={{fontWeight:600,fontSize:14,color:TX}}>{label}</div><div style={{fontSize:12,color:TS,marginTop:2}}>{sub}</div></div>
-      <div onClick={()=>toggleNotif(k)} style={{width:44,height:26,borderRadius:13,background:notifPrefs[k]?AM:BD,position:"relative",cursor:"pointer",flexShrink:0}}>
+      <button onClick={()=>toggleNotif(k)} role="switch" aria-checked={!!notifPrefs[k]} aria-label={label} style={{width:44,height:26,borderRadius:13,background:notifPrefs[k]?AM:BD,border:"none",padding:0,position:"relative",cursor:"pointer",flexShrink:0}}>
         <div style={{width:20,height:20,borderRadius:10,background:W,position:"absolute",top:3,left:notifPrefs[k]?21:3,transition:"left .15s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
-      </div>
+      </button>
     </div>
   );
   const settingsScreen=()=>{
@@ -2317,7 +2515,7 @@ function App(){
             {themeOptions.map(([key,label,sub],i)=>{
               const active=themePref===key;
               return(
-                <div key={key} onClick={()=>setThemePref(key)} style={{padding:"16px 18px",borderBottom:i<themeOptions.length-1?`1px solid ${BD}`:"none",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
+                <button key={key} onClick={()=>setThemePref(key)} role="radio" aria-checked={active} style={{width:"100%",textAlign:"left",font:"inherit",background:"none",border:"none",padding:"16px 18px",borderBottom:i<themeOptions.length-1?`1px solid ${BD}`:"none",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
                   <div>
                     <div style={{fontWeight:700,fontSize:15,color:TX}}>{label}</div>
                     <div style={{fontSize:12,color:TS,marginTop:2}}>{sub}</div>
@@ -2325,11 +2523,28 @@ function App(){
                   <div style={{width:22,height:22,borderRadius:11,border:`2px solid ${active?N:BD}`,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
                     {active&&<div style={{width:11,height:11,borderRadius:6,background:N}}/>}
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>
-          <div style={{fontSize:12,color:TM,lineHeight:1.5,padding:"0 4px"}}>Your appearance preference is saved on this device and applied throughout the app the next time you open it.</div>
+          <div style={{fontSize:12,color:TM,lineHeight:1.5,padding:"0 4px",marginBottom:24}}>Your appearance preference is saved on this device and applied throughout the app the next time you open it.</div>
+
+          <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Testing</div>
+          <button onClick={()=>setShowResetConfirm(true)} style={{width:"100%",padding:16,borderRadius:18,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:700,fontSize:14,cursor:"pointer",textAlign:"left"}}>Reset Prototype Data</button>
+          <div style={{fontSize:11,color:TM,lineHeight:1.5,padding:"8px 4px 0"}}>Prototype/testing utility — not a real customer-facing feature. Clears all locally saved Haven data on this device.</div>
+
+          {showResetConfirm&&(
+            <div className="no-print" onClick={()=>setShowResetConfirm(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:30}}>
+              <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:"20px 20px 0 0",padding:24,width:"100%",paddingBottom:"max(24px, env(safe-area-inset-bottom))"}}>
+                <div style={{fontWeight:800,fontSize:16,color:"#1C2B3A",marginBottom:8,textAlign:"center"}}>Reset Prototype Data?</div>
+                <div style={{fontSize:13,color:"#5A6B78",lineHeight:1.6,marginBottom:18,textAlign:"center"}}>
+                  This clears every job, saved property, saved card, profile edit, draft, notification, and preference stored on this device — and returns Haven to a clean default state. This cannot be undone.
+                </div>
+                <button onClick={resetPrototypeData} style={{width:"100%",padding:15,borderRadius:14,border:"none",background:"#DC2626",color:"#FFFFFF",fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:10}}>Reset Prototype Data</button>
+                <button onClick={()=>setShowResetConfirm(false)} style={{width:"100%",padding:14,borderRadius:14,border:"1.5px solid #E5DED4",background:"transparent",color:"#5A6B78",fontWeight:600,fontSize:14,cursor:"pointer"}}>Cancel</button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );
@@ -2514,7 +2729,7 @@ function App(){
   // address/payment (smart defaults), time, and optional photos. Tapping
   // "Post Job" posts immediately; no separate photo or confirmation screen.
   const taskScreen=()=>{
-    if(!browsedTask) return null;
+    if(!browsedTask) return unavailableScreen("Service",()=>backFrom("task",{scr:"home",tab:"home"}));
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
         <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
@@ -2623,7 +2838,7 @@ function App(){
 
   // ── POSTED / PENDING ────────────────────────────────────────────────────────
   const postedScreen=()=>{
-    if(!vj) return null;
+    if(!vj) return unavailableScreen("Booking",goBookings);
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div style={{background:N,padding:"14px 20px 20px",flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -2702,7 +2917,7 @@ function App(){
 
   // ── TRACKING ────────────────────────────────────────────────────────────────
   const trackingScreen=()=>{
-    if(!vj) return null;
+    if(!vj) return unavailableScreen("Tracking",goBookings);
     const info=SI[vj.status]||SI.en_route;
     const emBg={en_route:"#FEF3C7",arrived:"#DBEAFE",in_progress:"#FEF3C7",complete:SL}[vj.status]||"#FEF3C7";
     return(
@@ -2742,7 +2957,7 @@ function App(){
         <div className="sc" style={{flex:1,overflowY:"auto"}}>
           <div style={{margin:"14px 20px 0",background:W,borderRadius:20,padding:"16px 18px",boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:14,alignItems:"center"}}>
             <div style={{width:52,height:52,borderRadius:26,background:emBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{info.em}</div>
-            <div><div style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{info.label}</div><div style={{fontSize:13,color:TS}}>{vjPname} {info.sub}</div></div>
+            <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{info.label}</div><div style={{fontSize:13,color:TS}}>{vjPname} {info.sub}</div></div>
           </div>
           <div style={{margin:"12px 20px",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>{trackMap()}</div>
           <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
@@ -2814,7 +3029,7 @@ function App(){
 
   // ── RATING ─────────────────────────────────────────────────────────────────
   const ratingScreen=()=>{
-    if(!vj) return null;
+    if(!vj) return unavailableScreen("Rate your experience",goBookings);
     const HIRE=[["yes","Yes, definitely! 👍"],["maybe","Maybe"],["no","No"]];
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
@@ -2882,7 +3097,7 @@ function App(){
 
   // ── MESSAGES ────────────────────────────────────────────────────────────────
   const messagesScreen=()=>{
-    if(!vj) return null;
+    if(!vj) return unavailableScreen("Messages",goBookings);
     const locked=vj.status==="complete";
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
@@ -2901,7 +3116,7 @@ function App(){
           <div><div style={{fontSize:12,fontWeight:700,color:"#92400E"}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontSize:11,color:TS}}>{vjTp?vjTp.label:"—"} · ${vjTotal}</div></div>
         </div>
         {locked&&<div style={{background:"#FFF1F2",borderBottom:"1px solid #FCC",padding:"10px 20px",textAlign:"center",flexShrink:0}}><span style={{fontSize:12,color:"#E11D48",fontWeight:600}}>🔒 Chat closed — job completed successfully.</span></div>}
-        <div className="sc" style={{flex:1,overflowY:"auto",padding:"16px 20px"}}>
+        <div className="sc" role="log" aria-live="polite" aria-label="Conversation messages" style={{flex:1,overflowY:"auto",padding:"16px 20px"}}>
           {vjMsgs.length===0&&!typing?(
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",textAlign:"center",paddingTop:40}}>
               <div style={{fontSize:32,marginBottom:10}}>💬</div>
