@@ -131,6 +131,23 @@ const EMERGENCY_TIME_PREFS=[
 ];
 const ALL_TIME_PREFS=[...TIME_PREFS,...EMERGENCY_TIME_PREFS];
 const CATS=["All","Assembly","Installation","Smart Home","Plumbing","Electrical","Painting","Flooring","Cleaning","Landscaping","Moving","Repair","Maintenance","Appliance","Pest Control"];
+// Plain keyword table for now — deliberately kept as data, not logic, so a
+// future AI/NLP service is a drop-in replacement for matchSymptomToCategories
+// without any caller needing to change.
+const SYMPTOM_KEYWORDS=[
+  {cats:["Plumbing"],keywords:["leak","leaking","drip","dripping","water under","wet under","clog","clogged","toilet","faucet","running water","pipe burst","no hot water"]},
+  {cats:["Electrical"],keywords:["flicker","flickering","outlet","no power","power out","sparking","short circuit","breaker","won't charge","wont charge"]},
+  {cats:["Appliance","Smart Home"],keywords:["tv won't","tv wont","won't turn on","wont turn on","screen won't","screen wont","remote not working","not powering on"]},
+  {cats:["Assembly"],keywords:["shelves","shelf","assemble","assembly","build furniture","flat pack","put together"]},
+  {cats:["Repair"],keywords:["door won't","door wont","won't close","wont close","stuck door","broken","squeak","squeaky","cracked","hole in wall"]},
+  {cats:["Appliance"],keywords:["ac not","air conditioning","furnace","heater not","not cooling","not heating","thermostat","fridge not","dishwasher not","washer not","dryer not"]},
+  {cats:["Landscaping","Maintenance"],keywords:["lawn","yard","grass","weeds","overgrown","gutter","hedge","tree branch"]},
+  {cats:["Cleaning"],keywords:["dirty","stains","stained","mess","messy","smells","odor"]},
+  {cats:["Pest Control"],keywords:["bugs","ants","roaches","mice","rats","rodents","spiders","termites","pest"]},
+  {cats:["Painting"],keywords:["paint peeling","wall color","faded paint","chipped paint"]},
+  {cats:["Flooring"],keywords:["floor squeak","tile crack","carpet stain","scratched floor"]},
+  {cats:["Moving"],keywords:["moving out","moving in","relocate","haul"]},
+];
 const JOB_CATS=[...CATS.filter(c=>c!=="All"),"Other"];
 
 // Simplified home screen entry tiles — each maps to a group of categories
@@ -143,6 +160,10 @@ const ENTRY_GROUPS=[
   {key:"move",    label:"Move",    e:"📦", cats:["Moving"]},
 ];
 const EMERGENCY_FEE=35;
+// "Trusted Home" is purely informational — no points, levels, or rewards.
+// It simply reflects that a property has an established repair history
+// through Haven. Configurable threshold, not tied to any gamification.
+const TRUSTED_HOME_THRESHOLD=3;
 // Emergency screen options — map to an existing catalog task where possible,
 // otherwise fall back to a custom-job flow (Locked out, Other).
 const EMERGENCY_OPTIONS=[
@@ -305,6 +326,13 @@ const CSS=`
 .sc{-ms-overflow-style:none;scrollbar-width:none}
 *{box-sizing:border-box}
 button,input,textarea{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
+/* iOS Safari zooms the viewport on focus when a form control's computed
+   font-size is below 16px. Force a mobile-safe minimum everywhere rather
+   than special-casing individual fields — this is the standard fix and
+   deliberately does NOT touch user-scalable/maximum-scale, which would
+   disable the person's own pinch-zoom accessibility instead of fixing the
+   underlying cause. */
+input,textarea,select{font-size:16px!important;}
 @keyframes pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.5;transform:scale(.93)}}
 @keyframes bounce{0%{transform:translateY(0)}100%{transform:translateY(-5px)}}
 /* On an actual phone (or installed PWA) the app fills the real screen —
@@ -332,7 +360,7 @@ const SCREENS = new Set([
   "home","browse","diagnose","emergency","task","custom","posted","tracking",
   "messages","rating","payment","editProfile","myhome","receiptList","receipt",
   "addressEdit","proProfile","addresses","help","serviceHistory",
-  "notifCenter","settings",
+  "notifCenter","settings","tip","jobPreferences",
 ]);
 // Screens representing a temporary, single-use flow (the booking lifecycle,
 // and one-off editable forms) — these are never eligible for tab-memory
@@ -342,7 +370,7 @@ const SCREENS = new Set([
 // has already finished or explicitly navigated away from via a fixed
 // destination (e.g. Tracking's "← Bookings").
 const TRANSIENT_FLOW_SCREENS = new Set([
-  "task","custom","posted","tracking","messages","rating","receipt","addressEdit","editProfile",
+  "task","custom","posted","tracking","messages","rating","receipt","addressEdit","editProfile","tip",
 ]);
 
 // v0.13 — Fix 3: catches render errors that would otherwise produce a silent
@@ -382,6 +410,9 @@ function makeJob({
   addressText="—", addressLabel="", paymentBrand="Card", paymentLast4="----",
   completedAt=null, rated=false, stars=0, reviewTxt="", hireAgain=null,
   cancelStatus=null, cancellationRequestedAt=null, // null | "requested"
+  tipAmount=0, tipStatus="notAdded", tippedAt=null, // notAdded | processing | paid | failed
+  acceptedAt=null, // when status became en_route — anchors the arrival-window/ETA simulation
+  jobPreferences=[], // snapshot of enabled preference labels at booking time — the shape a future Pro-app surface would read
 }={}){
   return {
     id:Date.now(), // known limitation: two jobs in the same millisecond would collide — impossible via UI, fix when a backend exists
@@ -389,6 +420,9 @@ function makeJob({
     emergency, emergencyFee, addressText, addressLabel, paymentBrand, paymentLast4,
     completedAt, rated, stars, reviewTxt, hireAgain,
     cancelStatus, cancellationRequestedAt,
+    tipAmount, tipStatus, tippedAt,
+    acceptedAt,
+    jobPreferences,
   };
 }
 
@@ -461,7 +495,7 @@ function usePersistedState(key, initialValue, {version=1, migrate=null, validate
 // Clears every key this app persists — used by the "Reset Prototype Data"
 // testing utility. Kept as one list, next to the hook, so a newly-persisted
 // domain is easy to remember to add here too.
-const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft"];
+const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft","haven_job_prefs"];
 
 function App(){
   // Appearance — System / Light / Dark. Persisted so it survives reopening
@@ -549,6 +583,34 @@ function App(){
     version:1,
     validate:v=>(v&&typeof v==="object"&&!Array.isArray(v))?{...DEFAULT_NOTIF_PREFS,...v}:null,
   });
+  // Job Preferences — recurring instructions the customer would otherwise
+  // have to retype on every booking (shoe removal, gate codes, pets, etc).
+  // Enabled preferences are snapshotted onto each job at posting time (see
+  // postJob), which is also the shape a future Pro-app surface would read.
+  const DEFAULT_JOB_PREFS=[
+    {id:"remove_shoes",label:"Remove shoes before entering",enabled:false,custom:false},
+    {id:"text_not_call",label:"Text instead of calling",enabled:false,custom:false},
+    {id:"side_gate",label:"Side gate is unlocked",enabled:false,custom:false},
+    {id:"knock_not_ring",label:"Knock instead of ringing the doorbell",enabled:false,custom:false},
+    {id:"pets_inside",label:"Pets are inside",enabled:false,custom:false},
+  ];
+  const [jobPrefs,setJobPrefs]=usePersistedState("haven_job_prefs",DEFAULT_JOB_PREFS,{
+    version:1,
+    validate:v=>{
+      if(!Array.isArray(v))return null;
+      const seen=new Set();
+      return v.filter(p=>p&&typeof p==="object"&&typeof p.id!=="undefined"&&typeof p.label==="string")
+        .filter(p=>{ if(seen.has(p.id))return false; seen.add(p.id); return true; })
+        .map(p=>({id:p.id,label:p.label,enabled:!!p.enabled,custom:!!p.custom}));
+    },
+  });
+  const toggleJobPref=(id)=>setJobPrefs(ps=>ps.map(p=>p.id===id?{...p,enabled:!p.enabled}:p));
+  const addCustomJobPref=(label)=>{
+    const trimmed=label.trim();
+    if(!trimmed)return;
+    setJobPrefs(ps=>[...ps,{id:`custom_${Date.now()}`,label:trimmed,enabled:true,custom:true}]);
+  };
+  const removeJobPref=(id)=>setJobPrefs(ps=>ps.filter(p=>p.id!==id));
   // Notification Center — persisted locally so read/unread state survives
   // closing and reopening the PWA. Defensive against malformed legacy data:
   // anything that isn't a well-formed array of objects with an id is dropped
@@ -601,7 +663,7 @@ function App(){
     if(!live.isAppVisible) return true;
     if(type===NOTIF_TYPES.MESSAGE && live.scr==="messages" && conversationId!=null && live.vjid===conversationId) return false;
     if(type===NOTIF_TYPES.SUPPORT && live.scr==="help" && live.showSupportChat) return false;
-    if(type===NOTIF_TYPES.JOB_UPDATE && live.scr==="tracking" && jobId!=null && live.vjid===jobId) return false;
+    if(type===NOTIF_TYPES.JOB_UPDATE && (live.scr==="tracking"||live.scr==="posted") && jobId!=null && live.vjid===jobId) return false;
     if(type===NOTIF_TYPES.RECEIPT && live.scr==="receipt" && jobId!=null && live.vjid===jobId) return false;
     return true;
   };
@@ -629,9 +691,10 @@ function App(){
     setJobs([]); setVjid(null);
     setAddresses(DEFAULT_ADDRESSES.map(a=>({...a})));
     setCards(DEFAULT_CARDS.map(c=>({...c})));
-    setProfile({name:"Jane Doe",bio:"",photo:null});
+    setProfile({name:"Jane Doe",bio:"",photo:null,accountCreatedAt:Date.now()});
     setNotifications([]);
     setNotifPrefs({push:true,jobUpdates:true,messages:true,promos:false,email:true});
+    setJobPrefs(DEFAULT_JOB_PREFS.map(p=>({...p})));
     setThemePref("system");
     setTid(null);setTpid(null);setCtitle("");setCcat("Repair");setCprice("");setDesc("");setPhotos([]);setEmergency(false);
     setSelectedAddressId(1);setSelectedCardId(1);
@@ -788,7 +851,7 @@ function App(){
   const [diagResult,setDiagResult] = useState(null);
   const [navFrom,setNavFrom] = useState({}); // v0.13 — per-screen origin {scr,tab}, replaces cameFrom/proProfileFrom/receiptFrom/helpFrom
   // Profile
-  const DEFAULT_PROFILE={name:"Jane Doe",bio:"",photo:null};
+  const DEFAULT_PROFILE={name:"Jane Doe",bio:"",photo:null,accountCreatedAt:Date.now()};
   const [profile,setProfile] = usePersistedState("haven_profile",DEFAULT_PROFILE,{
     version:1,
     validate:v=>{
@@ -797,6 +860,10 @@ function App(){
         name:typeof v.name==="string"&&v.name.trim()?v.name:DEFAULT_PROFILE.name,
         bio:typeof v.bio==="string"?v.bio:"",
         photo:typeof v.photo==="string"?v.photo:null,
+        // Stable, one-time migration default: existing profiles from before
+        // this field existed get a fixed creation timestamp assigned once
+        // (now), which then persists — never regenerated on later boots.
+        accountCreatedAt:typeof v.accountCreatedAt==="number"?v.accountCreatedAt:Date.now(),
       };
     },
   });
@@ -939,9 +1006,24 @@ function App(){
   const customTask  = ctitle?{id:null,e:"🔧",n:ctitle,p:parseInt(cprice)||0,t:"Varies",c:ccat}:null;
   const currentTask = browsedTask||customTask;
   const total       = currentTask?currentTask.p+surge+(emergency?EMERGENCY_FEE:0):0;
+  // Symptom-to-category search — lets people search by PROBLEM ("water
+  // under sink") instead of needing to know the right service name. This
+  // function is the ONLY thing a future AI/NLP replacement would need to
+  // swap out — same contract (query string in, array of relevant category
+  // names out), every caller stays unchanged.
+  const matchSymptomToCategories=(query)=>{
+    const ql=query.toLowerCase().trim();
+    if(!ql)return [];
+    const matched=new Set();
+    SYMPTOM_KEYWORDS.forEach(({cats,keywords})=>{
+      if(keywords.some(k=>ql.includes(k)))cats.forEach(c=>matched.add(c));
+    });
+    return Array.from(matched);
+  };
+  const symptomCats=matchSymptomToCategories(q);
   const items       = TASKS.filter(t=>{
     const passCat = catGroup ? catGroup.cats.includes(t.c) : (cat==="All"||t.c===cat);
-    const passQ   = !q||t.n.toLowerCase().includes(q.toLowerCase());
+    const passQ   = !q||t.n.toLowerCase().includes(q.toLowerCase())||symptomCats.includes(t.c);
     return passCat&&passQ;
   });
 
@@ -952,9 +1034,64 @@ function App(){
   const vjPname=vjPro.n.split(" ")[0];
   const vjTotal=vjTask?vjTask.p+(vj?.surge||0)+(vj?.emergencyFee||0):0;
   const vjSIdx= vj?SF.indexOf(vj.status):-1;
+  // Progressively-tightening arrival estimate — deterministic, anchored to
+  // real elapsed time since the pro accepted (not random), so it always
+  // counts down smoothly and believably rather than jumping around.
+  const [etaTick,setEtaTick]=useState(0);
+  useEffect(()=>{
+    if(scr!=="tracking"||vj?.status!=="en_route")return;
+    const interval=setInterval(()=>setEtaTick(t=>t+1),3000);
+    return ()=>clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[scr,vj?.status,vj?.id]);
+  const getArrivalSim=(job)=>{
+    if(!job?.acceptedAt)return null;
+    const elapsedSec=(Date.now()-job.acceptedAt)/1000;
+    const minutesAway=Math.max(1,Math.round(18-elapsedSec/8));
+    const milesAway=Math.max(0.1,Math.round(minutesAway*0.22*10)/10);
+    const etaTime=new Date(Date.now()+minutesAway*60000).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    const fmt=(mins)=>new Date(Date.now()+mins*60000).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    let stage,windowLabel;
+    if(elapsedSec<15){ stage="broad"; windowLabel=`${fmt(Math.max(0,minutesAway-30))} – ${fmt(minutesAway+90)}`; }
+    else if(elapsedSec<35){ stage="medium"; windowLabel=`${fmt(Math.max(0,minutesAway-10))} – ${fmt(minutesAway+10)}`; }
+    else{ stage="tight"; windowLabel=null; }
+    return {minutesAway,milesAway,etaTime,stage,windowLabel};
+  };
+  const vjArrivalSim=vj?.status==="en_route"?getArrivalSim(vj):null;
   const vjMsgs= vj?.msgs||[];
   const proProfilePro = PROS.find(p=>p.i===proProfileId) || PROS[0];
   const formatAddress=a=>a?`${a.street}${a.unit?", "+a.unit:""}, ${a.city}, ${a.state} ${a.zip}`:"";
+  // Expected-duration model — replaces vague "Varies" text and giant
+  // best-/worst-case ranges with a single most-likely estimate, only
+  // surfacing the inspection caveat when the task is genuinely open-ended
+  // (not on every job). Derived from each task's existing rough duration
+  // string rather than requiring per-task field additions to the catalog.
+  const getExpectedDuration=(t)=>{
+    if(!t||t==="Varies")return {estimatedDurationMin:60,estimatedDurationMax:180,durationConfidence:"low",mayRequireInspection:true};
+    const m=/^(\d+)\s*(min|hr|hrs|hour|hours)$/i.exec(t.trim());
+    if(m){
+      const n=parseInt(m[1]);
+      const minutes=/hr|hour/i.test(m[2])?n*60:n;
+      return {estimatedDurationMin:Math.max(15,Math.round(minutes*0.8)),estimatedDurationMax:Math.round(minutes*1.3),durationConfidence:"high",mayRequireInspection:false};
+    }
+    return {estimatedDurationMin:30,estimatedDurationMax:120,durationConfidence:"medium",mayRequireInspection:false};
+  };
+  const formatDurationRange=(minM,maxM)=>{
+    const fmt=(mins)=>mins<60?`${mins} min`:(mins%60===0?`${mins/60} hr${mins/60>1?"s":""}`:`${Math.floor(mins/60)}h ${mins%60}m`);
+    if(Math.abs(maxM-minM)<15)return fmt(Math.round((minM+maxM)/2));
+    return `${fmt(minM)}–${fmt(maxM)}`;
+  };
+  // A property's icon is determined ONLY by its own label/type — never by
+  // whether it's currently Primary. Primary is communicated separately via
+  // the badge and highlight, not by swapping the icon.
+  const addressIcon=(a)=>{
+    const label=(a?.label||"").trim().toLowerCase();
+    if(label==="home")return "🏠";
+    if(label==="work")return "💼";
+    if(label==="rental")return "🔑";
+    if(label==="family")return "👨‍👩‍👧";
+    return "📍";
+  };
   const primaryHome = addresses.find(a=>a.isPrimary) || addresses[0];
   const sortedAddresses = addresses.slice().sort((a,b)=>(b.isPrimary?1:0)-(a.isPrimary?1:0));
   const sortedCards = cards.slice().sort((a,b)=>(b.isDefault?1:0)-(a.isDefault?1:0));
@@ -986,19 +1123,27 @@ function App(){
     }
     setScr(screen);
   };
-  const backFrom=(screen,fallback={scr:"home",tab:"home"})=>{
+  // The single rule for "where does Back from this screen go" — backFrom()
+  // uses it to actually navigate; the interactive back gesture uses the
+  // exact same computation to know what to render underneath while
+  // dragging, and calls backFrom() itself to commit. Never two systems.
+  const peekBackDestination=(screen,fallback={scr:"home",tab:"home"})=>{
     const o=navFrom[screen];
     const dest=(o&&SCREENS.has(o.scr))?o:fallback;
     const destTab=dest.scr==="home"?(dest.tab||"home"):tab;
+    return {scr:dest.scr,tab:destTab};
+  };
+  const backFrom=(screen,fallback={scr:"home",tab:"home"})=>{
+    const dest=peekBackDestination(screen,fallback);
     setTabScr(ts=>{
       const next={...ts};
-      if(dest.scr==="home"||TRANSIENT_FLOW_SCREENS.has(dest.scr)) delete next[destTab];
-      else next[destTab]=dest.scr;
+      if(dest.scr==="home"||TRANSIENT_FLOW_SCREENS.has(dest.scr)) delete next[dest.tab];
+      else next[dest.tab]=dest.scr;
       for(const k of Object.keys(next)) if(TRANSIENT_FLOW_SCREENS.has(next[k])) delete next[k];
       return next;
     });
     setScr(dest.scr);
-    if(dest.scr==="home")setTab(dest.tab||"home");
+    if(dest.scr==="home")setTab(dest.tab);
   };
   const goTab      =t=>{
     if(t==="home")setQ("");
@@ -1013,6 +1158,124 @@ function App(){
   const goHome     =()=>goTab("home");
   const goBookings =()=>goTab("bookings");
   const goProfile  =()=>goTab("profile");
+  // Interactive, reversible edge-swipe back gesture — the current screen
+  // visually follows the finger with a live parallax reveal of the
+  // destination screen underneath; releasing past the completion rule
+  // (distance OR velocity) commits via the exact same backFrom() a visible
+  // Back button uses; releasing early smoothly cancels back to rest. One
+  // state machine and one set of helpers — reduced motion simplifies only
+  // the rendering/timing below, it does not duplicate this tracking logic.
+  const canGoBack=()=>scr!=="home";
+  const prefersReducedMotion=()=>{
+    try{ return typeof window!=="undefined"&&window.matchMedia&&window.matchMedia("(prefers-reduced-motion: reduce)").matches; }catch{ return false; }
+  };
+  const EDGE_ZONE_PX=24;
+  const EDGE_COMMIT_PROGRESS=0.35; // commit past ~35% of viewport width
+  const EDGE_COMMIT_VELOCITY=0.55; // px/ms — a fast flick commits even if the drag was short
+  const IDLE_GESTURE={phase:"idle",startX:0,startY:0,dragX:0,velocityX:0,destScr:null,destTab:null,settleTo:0};
+  const [edgeBackGesture,setEdgeBackGesture]=useState(IDLE_GESTURE);
+  const edgeGestureMeta=useRef({lastX:0,lastT:0});
+  const canStartInteractiveBack=(x,y,target)=>{
+    if(!canGoBack())return false;
+    if(x>EDGE_ZONE_PX)return false;
+    // Never arm over a form control, or anything that declares its own
+    // gesture handling (notification swipe rows, the star-rating widget,
+    // carousels, image viewers, maps) — checking for an ancestor with
+    // data-no-edge-swipe lets any such surface opt out explicitly and
+    // centrally, without scattering conditionals here.
+    const tag=target?.tagName;
+    if(tag==="INPUT"||tag==="TEXTAREA"||tag==="SELECT")return false;
+    if(target?.closest?.("[data-no-edge-swipe]"))return false;
+    return true;
+  };
+  const beginInteractiveBack=(x,y)=>{
+    const dest=peekBackDestination(scr,{scr:"home",tab:"home"});
+    edgeGestureMeta.current={lastX:x,lastT:(typeof performance!=="undefined"?performance.now():Date.now())};
+    setEdgeBackGesture({phase:"tracking",startX:x,startY:y,dragX:0,velocityX:0,destScr:dest.scr,destTab:dest.tab,settleTo:0});
+  };
+  const updateInteractiveBack=(x,y)=>{
+    setEdgeBackGesture(g=>{
+      if(g.phase==="idle"||g.phase==="settling")return g;
+      const dx=x-g.startX, dy=y-g.startY;
+      if(g.phase==="tracking"){
+        if(Math.abs(dx)>10&&Math.abs(dx)>Math.abs(dy)){
+          // Direction-lock just engaged on THIS move — reset the velocity
+          // reference point to right now, not gesture start. Otherwise the
+          // very next move's velocity is measured against a stale, far-away
+          // reference and comes out wildly (and wrongly) inflated.
+          const now=(typeof performance!=="undefined"?performance.now():Date.now());
+          edgeGestureMeta.current={lastX:x,lastT:now};
+          const vw=(typeof window!=="undefined"&&window.innerWidth)?window.innerWidth:390;
+          return {...g,phase:"dragging",dragX:Math.max(0,Math.min(vw,dx))};
+        }
+        if(Math.abs(dy)>10)return IDLE_GESTURE; // predominantly vertical — hand off to normal scrolling entirely
+        return g;
+      }
+      const now=(typeof performance!=="undefined"?performance.now():Date.now());
+      const meta=edgeGestureMeta.current;
+      const dt=Math.max(1,now-meta.lastT);
+      const vx=(x-meta.lastX)/dt;
+      edgeGestureMeta.current={lastX:x,lastT:now};
+      const vw=(typeof window!=="undefined"&&window.innerWidth)?window.innerWidth:390;
+      return {...g,dragX:Math.max(0,Math.min(vw,dx)),velocityX:vx};
+    });
+  };
+  const cancelInteractiveBack=()=>{
+    setEdgeBackGesture(g=>(g.phase==="dragging"||g.phase==="tracking")?{...g,phase:"settling",settleTo:0}:IDLE_GESTURE);
+  };
+  const completeInteractiveBack=()=>{
+    setEdgeBackGesture(g=>g.phase==="dragging"?{...g,phase:"settling",settleTo:1}:g);
+  };
+  // After the settle animation finishes, either commit real navigation
+  // (through backFrom — never a second navigation path) or just reset.
+  // Reduced motion collapses the settle duration to 0, so this still fires
+  // immediately rather than needing a separate code path.
+  useEffect(()=>{
+    if(edgeBackGesture.phase!=="settling")return;
+    const duration=prefersReducedMotion()?0:280;
+    const t=setTimeout(()=>{
+      if(edgeBackGesture.settleTo===1) backFrom(scr,{scr:"home",tab:"home"});
+      setEdgeBackGesture(IDLE_GESTURE);
+    },duration);
+    return ()=>clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[edgeBackGesture.phase,edgeBackGesture.settleTo]);
+  useEffect(()=>{
+    if(typeof document==="undefined")return;
+    const onDown=(e)=>{
+      const x=e.clientX ?? e.touches?.[0]?.clientX;
+      const y=e.clientY ?? e.touches?.[0]?.clientY;
+      if(x==null||y==null)return;
+      if(!canStartInteractiveBack(x,y,e.target))return;
+      beginInteractiveBack(x,y);
+    };
+    const onMove=(e)=>{
+      const x=e.clientX ?? e.touches?.[0]?.clientX;
+      const y=e.clientY ?? e.touches?.[0]?.clientY;
+      if(x==null||y==null)return;
+      updateInteractiveBack(x,y);
+    };
+    const onUp=(e)=>{
+      setEdgeBackGesture(g=>{
+        if(g.phase!=="dragging")return g.phase==="idle"?g:IDLE_GESTURE;
+        const vw=(typeof window!=="undefined"&&window.innerWidth)?window.innerWidth:390;
+        const progress=g.dragX/vw;
+        const shouldCommit=progress>=EDGE_COMMIT_PROGRESS||g.velocityX>=EDGE_COMMIT_VELOCITY;
+        return {...g,phase:"settling",settleTo:shouldCommit?1:0};
+      });
+    };
+    document.addEventListener("pointerdown",onDown);
+    document.addEventListener("pointermove",onMove);
+    document.addEventListener("pointerup",onUp);
+    document.addEventListener("pointercancel",onUp);
+    return ()=>{
+      document.removeEventListener("pointerdown",onDown);
+      document.removeEventListener("pointermove",onMove);
+      document.removeEventListener("pointerup",onUp);
+      document.removeEventListener("pointercancel",onUp);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[scr]);
   const hasDraft = tid!==null || ctitle.trim()!=="";
   // Draft booking persistence — restored once on mount, saved as one
   // combined snapshot (not scattered keys) whenever the draft's own content
@@ -1132,14 +1395,27 @@ function App(){
     reader.readAsDataURL(file);
     e.target.value="";
   };
-  const saveProfile=()=>{setProfile({name:draftName.trim()||"Jane Doe",bio:draftBio.trim(),photo:draftPhoto});goProfile();};
+  const saveProfile=()=>{setProfile(p=>({...p,name:draftName.trim()||"Jane Doe",bio:draftBio.trim(),photo:draftPhoto}));goProfile();};
 
   // My Home / Addresses — one canonical model, one edit form for both contexts
   const openMyHome=()=>goTo("myhome");
-  const openAddressForm=(addr)=>{
+  const [highlightField,setHighlightField]=useState(null);
+  useEffect(()=>{
+    if(scr!=="addressEdit"||!highlightField)return;
+    const t1=setTimeout(()=>{
+      try{
+        const el=document.getElementById(`field-${highlightField}`);
+        if(el&&el.scrollIntoView)el.scrollIntoView({behavior:"smooth",block:"center"});
+      }catch{}
+    },80); // let the screen finish mounting before measuring/scrolling
+    const t2=setTimeout(()=>setHighlightField(null),2200); // brief highlight, then clear
+    return ()=>{ clearTimeout(t1); clearTimeout(t2); };
+  },[scr,highlightField]);
+  const openAddressForm=(addr,targetField=null)=>{
     setEditingAddressId(addr?addr.id:null);
     setDraftAddress(addr?{...addr}:{...emptyDraftAddress});
     setAddressFormError("");
+    setHighlightField(targetField);
     goTo("addressEdit");
   };
   const saveAddressForm=()=>{
@@ -1226,6 +1502,7 @@ function App(){
       emergency,emergencyFee:emergency?EMERGENCY_FEE:0,
       addressText:selectedAddress?formatAddress(selectedAddress):"—",addressLabel:selectedAddress?.label||"",
       paymentBrand:selectedCard?.brand||"Card",paymentLast4:selectedCard?.last4||"----",
+      jobPreferences:jobPrefs.filter(p=>p.enabled).map(p=>p.label),
     });
     setJobs(p=>[...p,nj]);setVjid(nj.id);
     setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
@@ -1245,7 +1522,7 @@ function App(){
 
   const proAccepts=()=>{
     const p=PROS[Math.floor(Math.random()*PROS.length)];
-    updateJob(vjid,{pro:p,status:"en_route",msgs:[],justAccepted:true});
+    updateJob(vjid,{pro:p,status:"en_route",msgs:[],justAccepted:true,acceptedAt:Date.now()});
     handleJobTransition(vjid,"en_route",p.n);
     goTo("tracking");
     setTimeout(()=>updateJob(vjid,{justAccepted:false}),3500);
@@ -1278,6 +1555,30 @@ function App(){
 
   const openRating=()=>{setStars(0);setReviewTxt("");setHireAgain(null);goTo("rating");};
   const submitRating=()=>{updateJob(vjid,{rated:true,stars,reviewTxt,hireAgain});setStars(0);setReviewTxt("");setHireAgain(null);goHome();};
+  // Tipping — fully optional, never blocks rating/receipt/job completion.
+  const [tipSelection,setTipSelection]=useState(null); // 5 | 10 | 15 | 20 | 'custom' | null
+  const [tipCustomAmount,setTipCustomAmount]=useState("");
+  const [tipError,setTipError]=useState("");
+  const isTippingRef=useRef(false); // synchronous guard against rapid-double-tap creating two tip charges
+  const openTip=()=>{ setTipSelection(null); setTipCustomAmount(""); setTipError(""); isTippingRef.current=false; goTo("tip"); };
+  // Single centralized write path for tip data — the only place any screen
+  // may modify a job's tip fields. Simulates a brief processing state, then
+  // resolves to paid; on failure, the amount is preserved for retry and
+  // neither the Receipt nor Pro earnings are touched (both are derived from
+  // tipStatus==="paid", so a failed/processing tip simply doesn't count yet).
+  const addTipToJob=(jobId,amount,{simulateFailure=false}={})=>{
+    if(isTippingRef.current)return;
+    isTippingRef.current=true;
+    setJobs(js=>js.map(j=>j.id===jobId?{...j,tipStatus:"processing"}:j));
+    setTimeout(()=>{
+      if(simulateFailure){
+        setJobs(js=>js.map(j=>j.id===jobId?{...j,tipStatus:"failed"}:j));
+      }else{
+        setJobs(js=>js.map(j=>j.id===jobId?{...j,tipAmount:amount,tipStatus:"paid",tippedAt:Date.now()}:j));
+      }
+      isTippingRef.current=false;
+    },900);
+  };
 
   // ── BOTTOM NAV (fixed alignment: every icon in a matched 24x24 box) ────────
   // Single shared bottom-tab-bar renderer — one fixed style definition, no
@@ -1461,6 +1762,9 @@ function App(){
           <span style={{fontWeight:700,fontSize:15,color:TX}}>{q?`"${q}"`:catGroup?catGroup.label:cat==="All"?"All services":cat}</span>
           <span style={{fontSize:12,color:TM}}>{items.length} services</span>
         </div>
+        {q&&symptomCats.length>0&&(
+          <div style={{padding:"0 20px 12px",fontSize:12,color:TS}}>Matched to {symptomCats.join(", ")}</div>
+        )}
         {items.length>0?(
           <div style={{padding:"0 20px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,paddingBottom:24}}>
             {items.map(t=>(
@@ -1469,7 +1773,7 @@ function App(){
                 <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{t.e}</div>
                 <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
                 <div style={{fontWeight:800,fontSize:20,color:AM}}>${t.p}</div>
-                <div style={{fontSize:11,color:TM,marginTop:1}}>est. {t.t}</div>
+                <div style={{fontSize:11,color:TM,marginTop:1}}>est. {formatDurationRange(getExpectedDuration(t.t).estimatedDurationMin,getExpectedDuration(t.t).estimatedDurationMax)}</div>
               </div>
             ))}
             <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
@@ -1482,8 +1786,10 @@ function App(){
         ):(
           <div style={{textAlign:"center",padding:"40px 20px"}}>
             <div style={{fontSize:48,marginBottom:12}}>🔍</div>
-            <div style={{fontWeight:600,color:TS,marginBottom:16}}>No services found</div>
-            <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:AM,border:"none",color:W,padding:"10px 20px",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14}}>Clear filters</button>
+            <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No exact matches for "{q}"</div>
+            <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:260,marginLeft:"auto",marginRight:"auto"}}>Describe what's going on and we'll match you with the right pro.</div>
+            <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:W,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
+            <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:"none",border:"none",color:TS,fontWeight:600,cursor:"pointer",fontSize:13,textDecoration:"underline"}}>Clear filters</button>
           </div>
         )}
       </div>
@@ -1527,7 +1833,7 @@ function App(){
                 <div style={{fontSize:28}}>{diagResult.task.e}</div>
                 <div style={{flex:1}}>
                   <div style={{fontWeight:700,fontSize:14,color:TX}}>{diagResult.task.n}</div>
-                  <div style={{fontSize:12,color:TS,marginTop:1}}>est. {diagResult.task.t}</div>
+                  <div style={{fontSize:12,color:TS,marginTop:1}}>est. {formatDurationRange(getExpectedDuration(diagResult.task.t).estimatedDurationMin,getExpectedDuration(diagResult.task.t).estimatedDurationMax)}</div>
                 </div>
                 <div style={{fontWeight:800,fontSize:18,color:AM}}>${diagResult.task.p}</div>
               </div>
@@ -1561,8 +1867,9 @@ function App(){
         </div>
         {shownJobs.length===0?(
           <div style={{textAlign:"center",padding:"40px 20px"}}>
-            <div style={{fontSize:40,marginBottom:12}}>{bFilter==="active"?"⏳":"✅"}</div>
-            <div style={{fontWeight:600,color:TS}}>{bFilter==="active"?"No active jobs":"No completed jobs yet"}</div>
+            <div style={{fontSize:40,marginBottom:12}}>{bFilter==="active"?"⏳":bFilter==="done"?"✅":"📋"}</div>
+            <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:6}}>{bFilter==="active"?"No active jobs":bFilter==="done"?"No completed jobs yet":"No bookings yet"}</div>
+            <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:240,margin:"0 auto"}}>{bFilter==="active"?"Jobs you book will appear here while they're in progress.":bFilter==="done"?"Finished jobs will show up here once they're done.":"Book a service from Home and it'll show up here."}</div>
           </div>
         ):shownJobs.map(j=>{
           const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
@@ -1610,7 +1917,7 @@ function App(){
         </div>
         <div style={{flex:1}}>
           <div style={{fontWeight:700,fontSize:16,color:W}}>{profile.name}</div>
-          <div style={{color:"rgba(255,255,255,.55)",fontSize:13,marginTop:2}}>{profile.bio||"Member since 2024"}</div>
+          <div style={{color:"rgba(255,255,255,.55)",fontSize:13,marginTop:2}}>{profile.bio||`Member since ${new Date(profile.accountCreatedAt).getFullYear()}`}</div>
         </div>
         <span style={{color:"rgba(255,255,255,.6)",fontSize:12,fontWeight:600}}>Edit ›</span>
       </button>
@@ -1929,14 +2236,26 @@ function App(){
     const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
     return {jt,jTotal,dateStr};
   };
+  // SVG-based star, not a text glyph — text-glyph stars (★) have
+  // inconsistent font-baseline/glyph-box positioning across browsers and
+  // OSes, which is what caused stars to appear clipped/offset/unclear
+  // before. An SVG path has a precise, predictable bounding box, so the
+  // fill-percentage overlay lines up exactly regardless of platform.
+  const STAR_PATH="M12 2.5l2.6 5.6 6.1.7-4.5 4.2 1.2 6-5.4-3-5.4 3 1.2-6-4.5-4.2 6.1-.7z";
   const starDisplay=(n,sz=13)=>(
-    <span style={{display:"inline-flex",gap:1,verticalAlign:"middle"}}>
+    <span style={{display:"inline-flex",gap:1,verticalAlign:"middle",lineHeight:0}}>
       {[1,2,3,4,5].map(i=>{
         const fillPct=Math.max(0,Math.min(1,n-(i-1)))*100;
         return(
-          <span key={i} style={{position:"relative",display:"inline-block",width:sz,height:sz,lineHeight:1}}>
-            <span style={{position:"absolute",inset:0,fontSize:sz,color:"#DDD"}}>★</span>
-            <span style={{position:"absolute",inset:0,width:`${fillPct}%`,overflow:"hidden",whiteSpace:"nowrap"}}><span style={{fontSize:sz,color:AM}}>★</span></span>
+          <span key={i} style={{position:"relative",display:"inline-block",width:sz,height:sz}}>
+            <svg width={sz} height={sz} viewBox="0 0 24 24" style={{display:"block",position:"absolute",inset:0}}>
+              <path d={STAR_PATH} fill="#DDD"/>
+            </svg>
+            <span style={{position:"absolute",inset:0,width:`${fillPct}%`,overflow:"hidden"}}>
+              <svg width={sz} height={sz} viewBox="0 0 24 24" style={{display:"block"}}>
+                <path d={STAR_PATH} fill={AM}/>
+              </svg>
+            </span>
           </span>
         );
       })}
@@ -1968,13 +2287,21 @@ function App(){
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Home overview</div>
             <span onClick={()=>openAddressForm(primaryHome)} style={{fontSize:12,color:N,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
           </div>
-          <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:14,lineHeight:1.4}}>📍 {formatAddress(primaryHome)}</div>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
+            <div style={{fontWeight:700,fontSize:15,color:TX,lineHeight:1.4}}>📍 {formatAddress(primaryHome)}</div>
+            {primaryCompletedJobs.length>=TRUSTED_HOME_THRESHOLD&&(
+              <span aria-label="Trusted Home — this property has an established repair history through Haven" style={{fontSize:11,fontWeight:700,color:SC,background:SL,padding:"3px 9px",borderRadius:10,whiteSpace:"nowrap"}}>🏡 Trusted Home</span>
+            )}
+          </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            {[["Home type",primaryHome.propertyType||"Not set"],["Year built",primaryHome.yearBuilt||"Not set"],["Square footage",primaryHome.sqft?`${primaryHome.sqft} sqft`:"Not set"],["Layout",formatLayout(primaryHome)]].map(([l,v])=>(
-              <div key={l} style={{background:BG,borderRadius:12,padding:"10px 12px"}}>
-                <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:2}}>{l}</div>
+            {[["Home type",primaryHome.propertyType||"Not set","propertyType"],["Year built",primaryHome.yearBuilt||"Not set","yearBuilt"],["Square footage",primaryHome.sqft?`${primaryHome.sqft} sqft`:"Not set","sqft"],["Layout",formatLayout(primaryHome),"beds"]].map(([l,v,fieldKey])=>(
+              <button key={l} onClick={()=>openAddressForm(primaryHome,fieldKey)} aria-label={`${l}: ${v}. Tap to edit.`} style={{textAlign:"left",font:"inherit",background:BG,border:"none",borderRadius:12,padding:"10px 12px",cursor:"pointer",position:"relative"}}>
+                <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:2,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span>{l}</span>
+                  <span style={{color:TM,fontSize:11}}>✎</span>
+                </div>
                 <div style={{fontSize:13,fontWeight:700,color:TX}}>{v}</div>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -1987,7 +2314,8 @@ function App(){
         {primaryCompletedJobs.length===0?(
           <div style={{background:W,borderRadius:18,padding:20,marginBottom:12,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:28,marginBottom:8}}>🗂️</div>
-            <div style={{fontSize:13,color:TS}}>No completed services yet. Completed jobs will show up here.</div>
+            <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:4}}>No completed jobs yet.</div>
+            <div style={{fontSize:12,color:TS,lineHeight:1.5}}>Completed repairs will automatically appear here.</div>
           </div>
         ):(
           <div style={{marginBottom:12}}>
@@ -2073,7 +2401,8 @@ function App(){
         {primaryCompletedJobs.length===0?(
           <div style={{background:W,borderRadius:18,padding:24,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:32,marginBottom:10}}>🗂️</div>
-            <div style={{fontSize:13,color:TS}}>No completed services yet</div>
+            <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:6}}>No completed jobs yet.</div>
+            <div style={{fontSize:13,color:TS,lineHeight:1.5}}>Completed repairs will automatically appear here.</div>
           </div>
         ):primaryCompletedJobs.map(j=>{
           const {jt,jTotal,dateStr}=jobDisplayInfo(j);
@@ -2101,8 +2430,8 @@ function App(){
     </div>
   );
 
-  const homeFieldCard=(label,children)=>(
-    <div style={{background:W,borderRadius:18,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+  const homeFieldCard=(label,children,fieldKey=null)=>(
+    <div id={fieldKey?`field-${fieldKey}`:undefined} style={{background:W,borderRadius:18,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",transition:"box-shadow .3s, border-color .3s",border:fieldKey&&highlightField===fieldKey?`2px solid ${AM}`:"2px solid transparent"}}>
       <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>{label}</div>
       {children}
     </div>
@@ -2132,17 +2461,18 @@ function App(){
 
   // ── RECEIPTS ───────────────────────────────────────────────────────────────
   const receiptListScreen=()=>(
-    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG,position:"relative"}}>
       {subHeader("Receipts",()=>goTo("myhome"))}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
         {completedJobs.length===0?(
           <div style={{background:W,borderRadius:18,padding:24,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:32,marginBottom:10}}>🧾</div>
-            <div style={{fontSize:13,color:TS,lineHeight:1.5}}>Receipts from completed jobs will appear here automatically.</div>
+            <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:6}}>No receipts yet.</div>
+            <div style={{fontSize:13,color:TS,lineHeight:1.5}}>Completed jobs automatically generate professional receipts.</div>
           </div>
         ):completedJobs.map(j=>{
           const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
-          const jTotal=jt?jt.p+j.surge+(j.emergencyFee||0):0;
+          const jTotal=(jt?jt.p+j.surge+(j.emergencyFee||0):0)+(j.tipAmount>0?j.tipAmount:0);
           const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
           return(
             <div key={j.id} style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
@@ -2154,14 +2484,110 @@ function App(){
                 </div>
                 <div style={{fontWeight:800,fontSize:15,color:AM}}>${jTotal}</div>
               </div>
-              <button onClick={()=>openReceipt(j.id)} style={{width:"100%",padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:12,cursor:"pointer"}}>View Receipt</button>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>openReceipt(j.id)} style={{flex:1,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:12,cursor:"pointer"}}>View Receipt</button>
+                <button onClick={()=>shareReceiptForJob(j)} aria-label="Share Receipt" style={{width:44,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontSize:14,cursor:"pointer"}}>⬆️</button>
+              </div>
             </div>
           );
         })}
       </div>
+
+      {listShareFallbackJobId!=null&&(()=>{
+        const job=completedJobs.find(j=>j.id===listShareFallbackJobId);
+        if(!job)return null;
+        const printThisReceipt=()=>{ openReceipt(job.id); setListShareFallbackJobId(null); setTimeout(()=>{ try{window.print();}catch{} },50); };
+        const downloadThisReceipt=()=>{
+          try{
+            const {text,receiptId}=buildReceiptShareText(job);
+            const blob=new Blob([text],{type:"text/plain"});
+            const url=URL.createObjectURL(blob);
+            const a=document.createElement("a");
+            a.href=url; a.download=`Haven-Receipt-${receiptId}.txt`;
+            document.body.appendChild(a); a.click(); document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }catch{}
+          setListShareFallbackJobId(null);
+        };
+        const copyThisReceipt=()=>{
+          try{
+            const {text}=buildReceiptShareText(job);
+            if(typeof navigator!=="undefined"&&navigator.clipboard&&navigator.clipboard.writeText){
+              navigator.clipboard.writeText(text).then(()=>{ setShowCopiedToast(true); setTimeout(()=>setShowCopiedToast(false),2500); }).catch(()=>{});
+            }
+          }catch{}
+          setListShareFallbackJobId(null);
+        };
+        return(
+          <div className="no-print" onClick={()=>setListShareFallbackJobId(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:20}}>
+            <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:"20px 20px 0 0",padding:20,width:"100%",paddingBottom:"max(20px, env(safe-area-inset-bottom))"}}>
+              <div style={{fontWeight:800,fontSize:15,color:"#1C2B3A",marginBottom:14,textAlign:"center"}}>Share Receipt</div>
+              <button onClick={printThisReceipt} style={{width:"100%",padding:14,borderRadius:12,border:"1.5px solid #E5DED4",background:"#FFFFFF",color:"#1C2B3A",fontWeight:600,fontSize:14,cursor:"pointer",marginBottom:8,textAlign:"left",display:"flex",alignItems:"center",gap:10}}>🖨️ Print Receipt</button>
+              <button onClick={downloadThisReceipt} style={{width:"100%",padding:14,borderRadius:12,border:"1.5px solid #E5DED4",background:"#FFFFFF",color:"#1C2B3A",fontWeight:600,fontSize:14,cursor:"pointer",marginBottom:8,textAlign:"left",display:"flex",alignItems:"center",gap:10}}>⬇️ Save or Download Receipt</button>
+              <button onClick={copyThisReceipt} style={{width:"100%",padding:14,borderRadius:12,border:"1.5px solid #E5DED4",background:"#FFFFFF",color:"#1C2B3A",fontWeight:600,fontSize:14,cursor:"pointer",marginBottom:10,textAlign:"left",display:"flex",alignItems:"center",gap:10}}>📋 Copy Receipt Details</button>
+              <button onClick={()=>setListShareFallbackJobId(null)} style={{width:"100%",padding:14,borderRadius:12,border:"none",background:"#F5F2ED",color:"#5A6B78",fontWeight:600,fontSize:14,cursor:"pointer"}}>Cancel</button>
+            </div>
+          </div>
+        );
+      })()}
+      {showCopiedToast&&(
+        <div className="no-print" style={{position:"fixed",left:16,right:16,bottom:96,background:N,borderRadius:14,padding:"12px 16px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)",zIndex:21}}>
+          <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>Receipt details copied</span>
+        </div>
+      )}
     </div>
   );
 
+  // Single source of truth for the receipt's shareable text representation
+  // — takes a job directly (not the currently-viewed vj) so both the
+  // individual Receipt screen and the Receipts-list Share action produce
+  // identical output without duplicating this formatting logic.
+  const buildReceiptShareText=(job)=>{
+    const jt=job.taskId?TASKS.find(t=>t.id===job.taskId):job.custom?{n:job.custom.title,p:job.custom.price}:null;
+    const jPro=job.pro||PROS[0];
+    const jTotal=(jt?jt.p:0)+(job.surge||0)+(job.emergencyFee||0);
+    const grandTotal=jTotal+(job.tipAmount>0?job.tipAmount:0);
+    const dateStr=new Date(job.completedAt||job.id).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+    const timeStr=new Date(job.completedAt||job.id).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+    const receiptId=`HVN-${String(job.id).slice(-6).toUpperCase()}`;
+    const lineItems=[
+      ["Labor",`$${jt?jt.p:(job.custom?.price||0)}`],
+      ...(job.surge>0?[["ASAP surge",`$${job.surge}`]]:[]),
+      ...(job.emergency?[["Emergency priority fee",`$${job.emergencyFee}`]]:[]),
+      ...(job.tipAmount>0?[[`Tip to ${jPro.n}`,`$${job.tipAmount.toFixed(2)}`]]:[]),
+    ];
+    return {
+      receiptId,
+      text:[
+        "HAVEN — RECEIPT",
+        `Receipt #${receiptId}   PAID`,
+        `Completed ${dateStr} at ${timeStr}`,
+        "",
+        `Customer: ${profile.name}`,
+        `Service address: ${job.addressText||"—"}`,
+        `Pro: ${jPro.n}`,
+        `Service: ${jt?jt.n:"Custom job"}`,
+        "",
+        ...lineItems.map(([l,v])=>`${l}: ${v}`),
+        `Total paid: $${grandTotal.toFixed(2)}`,
+        "",
+        `Payment method: ${job.paymentBrand||"Card"} •••• ${job.paymentLast4||"----"} — Paid`,
+        "",
+        "Haven Support: support@haven.app",
+      ].join("\n"),
+    };
+  };
+  const [listShareFallbackJobId,setListShareFallbackJobId]=useState(null);
+  const shareReceiptForJob=(job)=>{
+    const {text}=buildReceiptShareText(job);
+    try{
+      if(typeof navigator!=="undefined"&&navigator.share){
+        navigator.share({title:"Haven Receipt",text}).catch(()=>{});
+      }else{
+        setListShareFallbackJobId(job.id);
+      }
+    }catch{ setListShareFallbackJobId(job.id); }
+  };
   const receiptScreen=()=>{
     if(!vj) return unavailableScreen("Receipt",()=>backFrom("receipt",{scr:"myhome",tab:"home"}));
     // Intentional exception: receipts always render light, regardless of the
@@ -2172,17 +2598,19 @@ function App(){
     const dateStr=new Date(vj.completedAt||vj.id).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
     const timeStr=new Date(vj.completedAt||vj.id).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
     const receiptId=`HVN-${String(vj.id).slice(-6).toUpperCase()}`;
-    const lineItems=[
-      ["Base price",`$${vjTask?vjTask.p:0}`],
-      ...(vj.surge>0?[["ASAP surge",`+$${vj.surge}`]]:[]),
-      ...(vj.emergency?[["Emergency priority fee",`+$${vj.emergencyFee}`]]:[]),
-    ];
     const serviceName=vjTask?vjTask.n:"Custom job";
-    const shareText=`Haven Receipt\n${serviceName}\nCompleted: ${dateStr} at ${timeStr}\nTotal paid: $${vjTotal}\nReceipt ID: ${receiptId}`;
+    const lineItems=[
+      ["Labor",`$${vjTask?vjTask.p:(vj.custom?.price||0)}`],
+      ...(vj.surge>0?[["ASAP surge",`$${vj.surge}`]]:[]),
+      ...(vj.emergency?[["Emergency priority fee",`$${vj.emergencyFee}`]]:[]),
+      ...(vj.tipAmount>0?[[`Tip to ${vjPro.n}`,`$${vj.tipAmount.toFixed(2)}`]]:[]),
+    ];
+    const grandTotal=vjTotal+(vj.tipAmount>0?vj.tipAmount:0);
+    const {text:shareText}=buildReceiptShareText(vj);
     const shareReceipt=()=>{
       try{
         if(typeof navigator!=="undefined"&&navigator.share){
-          navigator.share({title:"Haven Receipt",text:shareText}).catch(()=>{});
+          navigator.share({title:`Haven Receipt ${receiptId}`,text:shareText}).catch(()=>{});
         }else{
           setShowShareFallback(true);
         }
@@ -2217,70 +2645,86 @@ function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div className="no-print" style={{flexShrink:0}}>{subHeader("Receipt",()=>backFrom("receipt",{scr:"myhome",tab:"home"}))}</div>
         <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-          <div className="receipt-print-area" style={{background:W,borderRadius:20,padding:22,boxShadow:"0 4px 20px rgba(28,43,58,.1)"}}>
-            <div style={{textAlign:"center",marginBottom:18}}>
-              <div style={{fontSize:13,fontWeight:800,color:N,letterSpacing:2.5}}>HAVEN</div>
-              <div style={{fontSize:11,color:TM,marginTop:4}}>Job Receipt</div>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}>
-              <span style={{fontSize:12,color:TS}}>Receipt ID</span>
-              <span style={{fontSize:12,color:TX,fontWeight:700}}>{receiptId}</span>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
-              <span style={{fontSize:12,color:TS}}>Completed</span>
-              <span style={{fontSize:12,color:TX,fontWeight:700,textAlign:"right"}}>{dateStr}<br/>{timeStr}</span>
-            </div>
+          <div className="receipt-print-area" style={{background:W,borderRadius:20,padding:28,boxShadow:"0 4px 20px rgba(28,43,58,.1)"}}>
 
-            <div style={{borderTop:`1px dashed ${BD}`,marginBottom:16}}/>
-
-            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
-              <div style={{width:44,height:44,borderRadius:22,background:SL,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:22}}>{vjTask?vjTask.e:"🔧"}</span></div>
-              <div style={{flex:1}}>
-                <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjTask?vjTask.n:"Custom job"}</div>
-                <div style={{fontSize:12,color:TS,marginTop:1}}>Completed by {vjPro.n}</div>
+            {/* Header: Haven wordmark top-left, RECEIPT/PAID/date top-right */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:22,paddingBottom:20,borderBottom:`2px solid ${TX}`}}>
+              <div>
+                <div style={{fontSize:20,fontWeight:800,color:N,letterSpacing:1.5}}>HAVEN</div>
+                <div style={{fontSize:10,color:TM,marginTop:2,letterSpacing:.5}}>Home Services, Done Right</div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:13,fontWeight:800,color:TX,letterSpacing:2}}>RECEIPT</div>
+                <div style={{fontSize:11,color:TS,marginTop:3}}>#{receiptId}</div>
+                <div style={{display:"inline-block",marginTop:5,padding:"2px 10px",borderRadius:8,background:SL,color:SC,fontSize:10,fontWeight:800,letterSpacing:.5}}>PAID</div>
+                <div style={{fontSize:11,color:TS,marginTop:5}}>{dateStr} · {timeStr}</div>
               </div>
             </div>
 
-            <div style={{marginBottom:8}}>
-              <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:8}}>SERVICE ADDRESS</div>
-              <div style={{fontSize:13,color:TX,marginBottom:16}}>{vj.addressText||"—"}</div>
+            {/* Customer & service info */}
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
+              <div>
+                <div style={{fontSize:10,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:4}}>BILLED TO</div>
+                <div style={{fontSize:13,fontWeight:700,color:TX}}>{profile.name}</div>
+                <div style={{fontSize:12,color:TS,marginTop:2,lineHeight:1.4}}>{vj.addressText||"—"}</div>
+                {vj.addressLabel&&<div style={{fontSize:11,color:TM,marginTop:1}}>{vj.addressLabel}</div>}
+              </div>
+              <div>
+                <div style={{fontSize:10,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:4}}>SERVICE PROVIDER</div>
+                <div style={{fontSize:13,fontWeight:700,color:TX}}>{vjPro.n}</div>
+                <div style={{fontSize:12,color:TS,marginTop:2}}>via Haven</div>
+              </div>
             </div>
 
-            <div style={{marginBottom:16}}>
-              <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:10}}>CHARGES</div>
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20,background:BG,borderRadius:14,padding:14}}>
+              <div style={{width:40,height:40,borderRadius:20,background:W,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontSize:20}}>{vjTask?vjTask.e:"🔧"}</span></div>
+              <div style={{flex:1}}>
+                <div style={{fontWeight:700,fontSize:14,color:TX}}>{serviceName}</div>
+                <div style={{fontSize:11,color:TS,marginTop:1}}>Job #{vj.id} · Completed {dateStr} at {timeStr}</div>
+              </div>
+            </div>
+
+            {vj.desc&&(
+              <div style={{marginBottom:20}}>
+                <div style={{fontSize:10,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:6}}>DESCRIPTION</div>
+                <div style={{fontSize:12,color:TS,lineHeight:1.5}}>{vj.desc}</div>
+              </div>
+            )}
+
+            {/* Payment breakdown */}
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:10,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:10}}>PAYMENT BREAKDOWN</div>
               {lineItems.map(([l,v])=>(
-                <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
+                <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}>
                   <span style={{fontSize:13,color:TS}}>{l}</span>
                   <span style={{fontSize:13,color:TX,fontWeight:600}}>{v}</span>
                 </div>
               ))}
-              <div style={{borderTop:`1px solid ${BD}`,marginTop:4,paddingTop:10,display:"flex",justifyContent:"space-between"}}>
+              <div style={{borderTop:`2px solid ${TX}`,marginTop:6,paddingTop:12,display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
                 <span style={{fontSize:14,color:TX,fontWeight:800}}>Total paid</span>
-                <span style={{fontSize:16,color:AM,fontWeight:900}}>${vjTotal}</span>
+                <span style={{fontSize:20,color:TX,fontWeight:900}}>${grandTotal.toFixed(2)}</span>
               </div>
             </div>
 
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:8}}>
-              <span style={{fontSize:12,color:TS}}>Payment method</span>
-              <span style={{fontSize:12,color:TX,fontWeight:700}}>{vj.paymentBrand||"Card"} •••• {vj.paymentLast4||"----"}</span>
-            </div>
-            <div style={{display:"flex",justifyContent:"space-between",marginBottom:16}}>
-              <span style={{fontSize:12,color:TS}}>Photos on file</span>
-              <span style={{fontSize:12,color:TX,fontWeight:700}}>{vj.photos?.length>0?`${vj.photos.length} attached`:"None"}</span>
-            </div>
-
-            {vj.desc&&(
-              <div style={{marginBottom:16}}>
-                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:6}}>JOB DESCRIPTION</div>
-                <div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div>
+            {/* Payment method */}
+            <div style={{background:BG,borderRadius:14,padding:14,marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+              <div>
+                <div style={{fontSize:10,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:3}}>PAYMENT METHOD</div>
+                <div style={{fontSize:13,color:TX,fontWeight:700}}>{vj.paymentBrand||"Card"} •••• {vj.paymentLast4||"----"}</div>
               </div>
-            )}
+              <div style={{padding:"3px 10px",borderRadius:8,background:SL,color:SC,fontSize:11,fontWeight:800}}>Paid</div>
+            </div>
 
-            <div style={{background:SL,borderRadius:14,padding:14,display:"flex",gap:10,alignItems:"center"}}>
+            <div style={{background:SL,borderRadius:14,padding:14,display:"flex",gap:10,alignItems:"center",marginBottom:20}}>
               <span style={{fontSize:16}}>✅</span>
               <span style={{fontSize:12,color:SC,fontWeight:600,lineHeight:1.4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
                 {vj.rated?<>Rated {starDisplay(vj.stars,13)} — covered by Haven's satisfaction guarantee.</>:"This job is covered by Haven's trust & safety guarantee."}
               </span>
+            </div>
+
+            <div style={{borderTop:`1px solid ${BD}`,paddingTop:14,textAlign:"center"}}>
+              <div style={{fontSize:11,color:TM,lineHeight:1.6}}>Questions about this receipt? Contact Haven Support at support@haven.app</div>
+              <div style={{fontSize:10,color:TM,marginTop:6}}>This receipt confirms a completed payment. No balance is owed.</div>
             </div>
           </div>
 
@@ -2336,14 +2780,14 @@ function App(){
           </div>
           {homeFieldCard("ZIP code",addressInput("zip","ZIP code",{inputMode:"numeric"}))}
           {homeFieldCard("Access notes (optional)",addressInput("accessNotes","Gate code, parking notes, etc."))}
-          {homeFieldCard("Property type",addressSelect("propertyType",HOME_TYPES))}
+          {homeFieldCard("Property type",addressSelect("propertyType",HOME_TYPES),"propertyType")}
           {isPrimaryEdit&&(
             <>
-              {homeFieldCard("Year built", addressSelect("yearBuilt",YEAR_OPTIONS))}
-              {homeFieldCard("Square footage",addressInput("sqft","e.g. 1,150",{inputMode:"numeric"}))}
+              {homeFieldCard("Year built", addressSelect("yearBuilt",YEAR_OPTIONS),"yearBuilt")}
+              {homeFieldCard("Square footage",addressInput("sqft","e.g. 1,150",{inputMode:"numeric"}),"sqft")}
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:0}}>
-                {homeFieldCard("Bedrooms", addressSelect("beds",BEDROOM_OPTIONS))}
-                {homeFieldCard("Bathrooms", addressSelect("baths",BATHROOM_OPTIONS))}
+                {homeFieldCard("Bedrooms", addressSelect("beds",BEDROOM_OPTIONS),"beds")}
+                {homeFieldCard("Bathrooms", addressSelect("baths",BATHROOM_OPTIONS),"baths")}
               </div>
             </>
           )}
@@ -2441,7 +2885,7 @@ function App(){
           return(
             <div key={a.id} style={{background:a.isPrimary?"#EFF6FF":W,border:a.isPrimary?"1.5px solid #BFDBFE":"1.5px solid transparent",borderRadius:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",overflow:"hidden"}}>
               <div onClick={()=>setExpandedAddr(open?null:a.id)} style={{padding:16,display:"flex",gap:12,alignItems:"flex-start",cursor:"pointer"}}>
-                <span style={{fontSize:20}}>{a.isPrimary?"🏠":a.label==="Work"?"💼":"📍"}</span>
+                <span style={{fontSize:20}}>{addressIcon(a)}</span>
                 <div style={{flex:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:6}}>
                     <span style={{fontWeight:700,fontSize:14,color:TX}}>{a.label}</span>
@@ -2490,6 +2934,34 @@ function App(){
       </button>
     </div>
   );
+  const [newJobPrefText,setNewJobPrefText]=useState("");
+  const jobPreferencesScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Job Preferences",()=>backFrom("jobPreferences",{scr:"settings",tab:"profile"}))}
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:18}}>These automatically accompany every future booking, so you don't have to retype the same instructions each time.</div>
+        <div style={{background:W,borderRadius:18,padding:"4px 16px",boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:20}}>
+          {jobPrefs.map((p,i)=>(
+            <div key={p.id} style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"14px 0",borderBottom:i<jobPrefs.length-1?`1px solid ${BD}`:"none",gap:10}}>
+              <span style={{fontSize:14,fontWeight:600,color:TX,flex:1}}>{p.label}</span>
+              {p.custom&&<button onClick={()=>removeJobPref(p.id)} aria-label={`Remove ${p.label}`} style={{background:"none",border:"none",color:TM,fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>}
+              <button onClick={()=>toggleJobPref(p.id)} role="switch" aria-checked={p.enabled} aria-label={p.label} style={{width:44,height:26,borderRadius:13,background:p.enabled?AM:BD,border:"none",padding:0,position:"relative",cursor:"pointer",flexShrink:0}}>
+                <div style={{width:20,height:20,borderRadius:10,background:W,position:"absolute",top:3,left:p.enabled?21:3,transition:"left .15s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
+              </button>
+            </div>
+          ))}
+        </div>
+
+        <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Add Custom Preference</div>
+        <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:10}}>
+          <input value={newJobPrefText} onChange={e=>setNewJobPrefText(e.target.value)} placeholder="e.g. Use the back entrance" maxLength={80}
+            style={{flex:1,border:"none",fontSize:14,fontWeight:500,color:TX,background:"transparent",outline:"none",padding:0}}/>
+          <button onClick={()=>{addCustomJobPref(newJobPrefText);setNewJobPrefText("");}} disabled={!newJobPrefText.trim()} style={{padding:"8px 16px",borderRadius:10,border:"none",background:newJobPrefText.trim()?AM:"#DDD9D2",color:newJobPrefText.trim()?W:TM,fontWeight:700,fontSize:13,cursor:newJobPrefText.trim()?"pointer":"default"}}>Add</button>
+        </div>
+        <div style={{fontSize:11,color:TM,lineHeight:1.5,padding:"10px 4px 0"}}>Your assigned pro will be able to see these preferences before starting the job.</div>
+      </div>
+    </div>
+  );
   const settingsScreen=()=>{
     const themeOptions=[
       ["system","System","Match your device's setting"],
@@ -2528,6 +3000,15 @@ function App(){
             })}
           </div>
           <div style={{fontSize:12,color:TM,lineHeight:1.5,padding:"0 4px",marginBottom:24}}>Your appearance preference is saved on this device and applied throughout the app the next time you open it.</div>
+
+          <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Booking</div>
+          <button onClick={()=>goTo("jobPreferences")} style={{width:"100%",textAlign:"left",font:"inherit",background:W,border:"none",borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer",display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:24}}>
+            <div>
+              <div style={{fontWeight:700,fontSize:15,color:TX}}>Job Preferences</div>
+              <div style={{fontSize:12,color:TS,marginTop:2}}>{jobPrefs.filter(p=>p.enabled).length>0?`${jobPrefs.filter(p=>p.enabled).length} active — attached to every booking`:"Instructions that automatically accompany every booking"}</div>
+            </div>
+            <span style={{color:TM,fontSize:18,flexShrink:0}}>›</span>
+          </button>
 
           <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Testing</div>
           <button onClick={()=>setShowResetConfirm(true)} style={{width:"100%",padding:16,borderRadius:18,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:700,fontSize:14,cursor:"pointer",textAlign:"left"}}>Reset Prototype Data</button>
@@ -2586,8 +3067,8 @@ function App(){
           {sorted.length===0?(
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",textAlign:"center",paddingTop:40}}>
               <div style={{fontSize:36,marginBottom:12}}>🔔</div>
-              <div style={{fontWeight:700,fontSize:16,color:TX,marginBottom:6}}>You're all caught up</div>
-              <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:240}}>Important booking, message, and account updates will appear here.</div>
+              <div style={{fontWeight:700,fontSize:16,color:TX,marginBottom:6}}>You're all caught up.</div>
+              <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:240}}>We'll let you know when something needs your attention.</div>
             </div>
           ):groups.map(([label,list])=>(
             <div key={label} style={{marginBottom:18}}>
@@ -2604,6 +3085,7 @@ function App(){
                       <button onClick={()=>deleteNotification(n.id)} aria-label="Delete notification" style={{width:88,background:"#DC2626",border:"none",color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Delete</button>
                     </div>
                     <div
+                      data-no-edge-swipe
                       onClick={(e)=>{ if(Math.abs(swipeState.deltaX)>5)return; e.stopPropagation(); if(isOpen){setOpenSwipeId(null);setOpenSwipeDir(null);return;} openNotification(n); }}
                       onPointerDown={e=>swipeDown(n.id,e)}
                       onPointerMove={e=>swipeMove(n.id,e)}
@@ -2740,7 +3222,7 @@ function App(){
               <div style={{flex:1,minWidth:0}}>
                 {emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:4,background:"rgba(255,255,255,.15)",color:"#FFD4C7",fontSize:10,fontWeight:700,padding:"3px 8px",borderRadius:20,marginBottom:5}}>🚨 Emergency</span>}
                 <div style={{color:W,fontWeight:800,fontSize:18,lineHeight:1.25}}>{browsedTask.n}</div>
-                <div style={{color:"rgba(255,255,255,.5)",fontSize:12,marginTop:2}}>Fixed price · est. {browsedTask.t}</div>
+                <div style={{color:"rgba(255,255,255,.5)",fontSize:12,marginTop:2}}>Fixed price</div>
               </div>
               <div style={{textAlign:"right",flexShrink:0}}>
                 <div style={{color:W,fontWeight:900,fontSize:24}}>${total}</div>
@@ -2751,6 +3233,20 @@ function App(){
 
           <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,padding:"18px 20px 16px",position:"relative",zIndex:1}}>
             {addressPaymentCard()}
+
+            {!emergency&&(()=>{
+              const dur=getExpectedDuration(browsedTask.t);
+              return(
+                <div style={{background:W,borderRadius:18,padding:16,marginBottom:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"flex-start"}}>
+                  <span style={{fontSize:20,flexShrink:0}}>⏱️</span>
+                  <div>
+                    <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:3}}>Expected time</div>
+                    <div style={{fontWeight:700,fontSize:15,color:TX}}>{formatDurationRange(dur.estimatedDurationMin,dur.estimatedDurationMax)}</div>
+                    {dur.mayRequireInspection&&<div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.4}}>Could take longer if hidden damage or additional materials are discovered.</div>}
+                  </div>
+                </div>
+              );
+            })()}
 
             <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:8}}>{emergency?"Emergency timing":"When do you need it?"}</div>
             {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10}}>Urgent issues, handled within 6 hours.</div>}
@@ -2909,7 +3405,7 @@ function App(){
         {vjSIdx<3&&<><circle cx={240} cy={83} r="18" fill={W} stroke={N} strokeWidth="2.5"/><text x="240" y="88" textAnchor="middle" fontSize="14">🏠</text></>}
         {vjSIdx===3&&<><circle cx={240} cy={83} r="22" fill={SL}/><circle cx={240} cy={83} r="16" fill={SC}/><text x="240" y="89" textAnchor="middle" fontSize="14" fill={W} fontWeight="900">✓</text></>}
         {showCar&&<><circle cx={px} cy={83} r="20" fill={N} opacity="0.12"/><circle cx={px} cy={83} r="14" fill={N}/><text x={px} y="88" textAnchor="middle" fontSize="13">🚗</text></>}
-        {vj?.status==="en_route"&&<><rect x={px-2} y="50" width="90" height="21" rx="10" fill={AM}/><text x={px+43} y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">12 min away</text></>}
+        {vj?.status==="en_route"&&<><rect x={px-2} y="50" width="90" height="21" rx="10" fill={AM}/><text x={px+43} y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">{vjArrivalSim?`${vjArrivalSim.minutesAway} min away`:"On the way"}</text></>}
         {vj?.status==="arrived"&&<><rect x="138" y="50" width="104" height="21" rx="10" fill={SC}/><text x="190" y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">{vjPname} is here!</text></>}
       </svg>
     );
@@ -2960,6 +3456,31 @@ function App(){
             <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{info.label}</div><div style={{fontSize:13,color:TS}}>{vjPname} {info.sub}</div></div>
           </div>
           <div style={{margin:"12px 20px",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>{trackMap()}</div>
+          {vjArrivalSim&&(
+            <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+              {vjArrivalSim.stage!=="tight"?(
+                <>
+                  <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:4}}>Arriving</div>
+                  <div aria-live="polite" style={{fontWeight:800,fontSize:20,color:TX}}>{vjArrivalSim.windowLabel}</div>
+                </>
+              ):(
+                <>
+                  <div aria-live="polite" style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
+                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Time remaining</span>
+                    <span style={{fontWeight:800,fontSize:18,color:TX}}>{vjArrivalSim.minutesAway} min away</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,paddingTop:10,borderTop:`1px solid ${BD}`}}>
+                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Distance remaining</span>
+                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{vjArrivalSim.milesAway} miles</span>
+                  </div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",paddingTop:10,borderTop:`1px solid ${BD}`}}>
+                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Estimated arrival</span>
+                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{vjArrivalSim.etaTime}</span>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
           <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div onClick={()=>openProProfile(vjPro,"tracking")} style={{display:"flex",gap:14,alignItems:"center",marginBottom:14,cursor:"pointer"}}>
               <div style={{width:50,height:50,borderRadius:25,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:800,fontSize:16,flexShrink:0}}>{vjPro.i}</div>
@@ -3019,6 +3540,11 @@ function App(){
                   <div style={{fontWeight:700,fontSize:14,color:SC}}>Review submitted — thanks!</div>
                 </div>
               )}
+              {vj.tipStatus==="paid"?(
+                <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:SC,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>✓ Tip sent: ${vj.tipAmount.toFixed(2)}</button>
+              ):(
+                <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>💛 Tip Pro</button>
+              )}
               <button onClick={()=>openReceipt(vj.id)} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:"pointer"}}>🧾 View Receipt</button>
             </div>
           )}
@@ -3028,6 +3554,92 @@ function App(){
   };
 
   // ── RATING ─────────────────────────────────────────────────────────────────
+  const tipScreen=()=>{
+    if(!vj) return unavailableScreen("Tip Pro",goBookings);
+    const presets=[5,10,15,20];
+    const parsedCustom=parseFloat(tipCustomAmount);
+    const customValid=tipCustomAmount.trim()!==""&&!isNaN(parsedCustom)&&parsedCustom>0&&parsedCustom<=2000;
+    const finalAmount=tipSelection==="custom"?(customValid?parsedCustom:null):tipSelection;
+    const canConfirm=finalAmount!=null&&finalAmount>0&&vj.tipStatus!=="processing";
+    const validateCustom=(val)=>{
+      setTipCustomAmount(val);
+      if(val.trim()===""){ setTipError(""); return; }
+      const n=parseFloat(val);
+      if(isNaN(n)){ setTipError("Enter a valid amount."); }
+      else if(n<=0){ setTipError("Tip must be greater than $0."); }
+      else if(n>2000){ setTipError("That amount seems unusually large — please double-check."); }
+      else{ setTipError(""); }
+    };
+    const confirmTip=()=>{
+      if(!canConfirm)return;
+      addTipToJob(vj.id,finalAmount);
+    };
+    const retryTip=()=>{
+      if(vj.tipAmount>0){ addTipToJob(vj.id,vj.tipAmount); } // preserve the amount that failed, for retry
+      else if(finalAmount!=null){ addTipToJob(vj.id,finalAmount); }
+    };
+    return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
+          <button onClick={()=>backFrom("tip",{scr:"tracking",tab:"bookings"})} style={{background:"none",border:"none",color:N,fontSize:14,fontWeight:700,cursor:"pointer",padding:0}}>← Back</button>
+        </div>
+        <div className="sc" style={{flex:1,overflowY:"auto",padding:"28px 22px"}}>
+          <div style={{textAlign:"center",marginBottom:24}}>
+            <div style={{width:64,height:64,borderRadius:32,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:800,fontSize:22,margin:"0 auto 12px"}}>{vjPro.i}</div>
+            <div style={{fontWeight:800,fontSize:20,color:TX,marginBottom:4}}>Tip {vjPname}</div>
+            <div style={{fontSize:13,color:TS}}>{vjTask?vjTask.n:"Custom job"} · Completed</div>
+          </div>
+
+          {vj.tipStatus==="paid"?(
+            <div style={{background:SL,borderRadius:18,padding:20,textAlign:"center"}}>
+              <div style={{fontSize:28,marginBottom:8}}>✓</div>
+              <div style={{fontWeight:800,fontSize:18,color:SC,marginBottom:4}}>Tip sent: ${vj.tipAmount.toFixed(2)}</div>
+              <div style={{fontSize:12,color:TS}}>100% of your tip goes to {vjPname}.</div>
+            </div>
+          ):vj.tipStatus==="failed"?(
+            <div style={{background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:18,padding:18,textAlign:"center",marginBottom:16}}>
+              <div style={{fontWeight:700,fontSize:14,color:"#DC2626",marginBottom:4}}>Tip couldn't be processed</div>
+              <div style={{fontSize:12,color:"#991B1B",marginBottom:14,lineHeight:1.4}}>Your card wasn't charged. You can try again.</div>
+              <button onClick={retryTip} style={{width:"100%",padding:13,borderRadius:12,border:"none",background:"#DC2626",color:W,fontWeight:700,fontSize:14,cursor:"pointer"}}>Retry Tip</button>
+            </div>
+          ):(
+            <>
+              <div style={{fontSize:13,color:TS,textAlign:"center",marginBottom:20,lineHeight:1.5}}>Recognize exceptional service with an optional tip.</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                {presets.map(amt=>(
+                  <button key={amt} onClick={()=>{setTipSelection(amt);setTipCustomAmount("");setTipError("");}}
+                    style={{padding:"16px 0",borderRadius:14,border:`2px solid ${tipSelection===amt?AM:BD}`,background:tipSelection===amt?"#FEF3C7":W,color:TX,fontWeight:800,fontSize:18,cursor:"pointer"}}>${amt}</button>
+                ))}
+              </div>
+              <button onClick={()=>setTipSelection("custom")} style={{width:"100%",padding:14,borderRadius:14,border:`2px solid ${tipSelection==="custom"?AM:BD}`,background:tipSelection==="custom"?"#FEF3C7":W,color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:tipSelection==="custom"?12:20}}>Custom amount</button>
+              {tipSelection==="custom"&&(
+                <div style={{marginBottom:20}}>
+                  <div style={{position:"relative"}}>
+                    <span style={{position:"absolute",left:16,top:"50%",transform:"translateY(-50%)",fontSize:16,fontWeight:700,color:TS}}>$</span>
+                    <input value={tipCustomAmount} onChange={e=>validateCustom(e.target.value)} placeholder="0.00" inputMode="decimal"
+                      style={{width:"100%",padding:"14px 16px 14px 30px",borderRadius:14,border:`1.5px solid ${tipError?"#FCA5A5":BD}`,fontSize:16,fontWeight:700,color:TX,outline:"none"}}/>
+                  </div>
+                  {tipError&&<div style={{fontSize:12,color:"#DC2626",marginTop:6}}>{tipError}</div>}
+                </div>
+              )}
+
+              {finalAmount!=null&&finalAmount>0&&(
+                <div style={{background:BG,borderRadius:14,padding:14,marginBottom:16,textAlign:"center"}}>
+                  <div style={{fontSize:12,color:TS,marginBottom:2}}>You're tipping</div>
+                  <div style={{fontSize:22,fontWeight:900,color:TX}}>${finalAmount.toFixed(2)}</div>
+                </div>
+              )}
+
+              <button onClick={confirmTip} disabled={!canConfirm} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:canConfirm?AM:"#DDD9D2",color:canConfirm?W:TM,fontWeight:800,fontSize:15,cursor:canConfirm?"pointer":"default",marginBottom:10,boxShadow:canConfirm?"0 6px 20px rgba(245,158,11,.3)":"none"}}>
+                {vj.tipStatus==="processing"?"Processing…":"Confirm Tip"}
+              </button>
+              <button onClick={()=>backFrom("tip",{scr:"tracking",tab:"bookings"})} style={{width:"100%",padding:14,borderRadius:16,border:"none",background:"transparent",color:TS,fontWeight:600,fontSize:14,cursor:"pointer"}}>Not Now</button>
+            </>
+          )}
+        </div>
+      </div>
+    );
+  };
   const ratingScreen=()=>{
     if(!vj) return unavailableScreen("Rate your experience",goBookings);
     const HIRE=[["yes","Yes, definitely! 👍"],["maybe","Maybe"],["no","No"]];
@@ -3045,6 +3657,7 @@ function App(){
           <div style={{background:W,borderRadius:20,padding:"22px 20px",marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)",textAlign:"center"}}>
             <div style={{fontSize:13,fontWeight:600,color:TS,marginBottom:14}}>How was your experience?</div>
             <div
+              data-no-edge-swipe
               onPointerDown={()=>setStarDragging(true)}
               onPointerUp={()=>setStarDragging(false)}
               onPointerLeave={()=>setStarDragging(false)}
@@ -3054,9 +3667,15 @@ function App(){
                 const filled = s<=Math.floor(stars);
                 const isHalfHere = !filled && s===Math.ceil(stars) && stars%1!==0;
                 return(
-                  <div key={s} style={{position:"relative",width:40,height:40,lineHeight:1}}>
-                    <span style={{position:"absolute",inset:0,color:"#DDD",fontSize:36}}>☆</span>
-                    {(filled||isHalfHere)&&<span style={{position:"absolute",inset:0,overflow:"hidden",width:isHalfHere?"50%":"100%"}}><span style={{color:AM,fontSize:36}}>★</span></span>}
+                  <div key={s} style={{position:"relative",width:40,height:40}}>
+                    <svg width={40} height={40} viewBox="0 0 24 24" style={{display:"block",position:"absolute",inset:0}}>
+                      <path d={STAR_PATH} fill="#DDD"/>
+                    </svg>
+                    {(filled||isHalfHere)&&<span style={{position:"absolute",inset:0,overflow:"hidden",width:isHalfHere?"50%":"100%"}}>
+                      <svg width={40} height={40} viewBox="0 0 24 24" style={{display:"block"}}>
+                        <path d={STAR_PATH} fill={AM}/>
+                      </svg>
+                    </span>}
                     {/* Two invisible half-width hit zones per star — tap selects instantly, dragging/swiping across them live-updates the value continuously */}
                     <div style={{position:"absolute",inset:0,display:"flex"}}>
                       <div onClick={()=>setStars(s-0.5)} onPointerEnter={()=>{if(starDragging)setStars(s-0.5);}} style={{flex:1,cursor:"pointer"}}/>
@@ -3120,7 +3739,8 @@ function App(){
           {vjMsgs.length===0&&!typing?(
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",textAlign:"center",paddingTop:40}}>
               <div style={{fontSize:32,marginBottom:10}}>💬</div>
-              <div style={{fontSize:13,color:TS}}>{locked?"No messages were sent for this job.":"Send a message to your pro"}</div>
+              <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:6}}>{locked?"No messages were sent.":"No messages yet."}</div>
+              <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:220}}>{locked?"This conversation is now closed.":`You'll be able to chat with ${vjPname} here now that the job's been accepted.`}</div>
             </div>
           ):(
             <div style={{textAlign:"center",marginBottom:18}}><span style={{fontSize:11,color:TM,background:BD,padding:"4px 12px",borderRadius:12,fontWeight:500}}>Today</span></div>
@@ -3172,6 +3792,43 @@ function App(){
   // seamlessly with whichever screen is showing (no visible seam at the top).
   const topIsDark=["task","custom","diagnose","emergency"].includes(scr)||(scr==="home"&&tab==="home");
 
+  // Parameterized render switch — identical to the old inline conditional
+  // block, just taking (targetScr, targetTab) instead of always reading the
+  // live scr/tab closure variables. The main render call passes the current
+  // scr/tab (byte-for-byte equivalent to before this existed); the
+  // interactive back gesture also calls this with the *destination*
+  // scr/tab so that screen can be shown live underneath while dragging.
+  const renderScreenFor=(targetScr,targetTab)=>(
+    <>
+      {targetScr==="home"     &&targetTab==="home"     &&homeScreen()}
+      {targetScr==="browse"   &&browseScreen()}
+      {targetScr==="diagnose" &&diagnoseScreen()}
+      {targetScr==="emergency" &&emergencyScreen()}
+      {targetScr==="home"     &&targetTab==="bookings" &&bookingsScreen()}
+      {targetScr==="home"     &&targetTab==="profile"  &&profileScreen()}
+      {targetScr==="task"     &&taskScreen()}
+      {targetScr==="custom"   &&customScreen()}
+      {targetScr==="posted"   &&postedScreen()}
+      {targetScr==="tracking" &&trackingScreen()}
+      {targetScr==="messages" &&messagesScreen()}
+      {targetScr==="rating"   &&ratingScreen()}
+      {targetScr==="tip"      &&tipScreen()}
+      {targetScr==="payment"  &&paymentScreen()}
+      {targetScr==="editProfile" &&editProfileScreen()}
+      {targetScr==="myhome"   &&myhomeScreen()}
+      {targetScr==="serviceHistory" &&serviceHistoryScreen()}
+      {targetScr==="receiptList" &&receiptListScreen()}
+      {targetScr==="receipt"  &&receiptScreen()}
+      {targetScr==="addressEdit" &&addressEditScreen()}
+      {targetScr==="proProfile" &&proProfileScreen()}
+      {targetScr==="addresses"&&addressesScreen()}
+      {targetScr==="notifCenter"&&notifCenterScreen()}
+      {targetScr==="settings"&&settingsScreen()}
+      {targetScr==="jobPreferences"&&jobPreferencesScreen()}
+      {targetScr==="help"     &&helpScreen()}
+    </>
+  );
+
   // ── RENDER ─────────────────────────────────────────────────────────────────
   return(
     <>
@@ -3179,32 +3836,31 @@ function App(){
       <div className="haven-frame-outer" style={{minHeight:"100vh",background:"linear-gradient(155deg,#B8C6D1 0%,#C8BBA8 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"}}>
         <div className="haven-frame-phone" style={{width:390,height:844,background:BG,borderRadius:46,overflow:"hidden",boxShadow:"0 32px 80px rgba(28,43,58,.28),0 0 0 1px rgba(28,43,58,.09)",display:"flex",flexDirection:"column"}}>
           <div style={{flexShrink:0,paddingTop:"env(safe-area-inset-top)",background:topIsDark?N:W}}/>
-          <div style={{flex:1,overflow:"hidden",display:"flex",flexDirection:"column"}}>
-            {scr==="home"     &&tab==="home"     &&homeScreen()}
-            {scr==="browse"   &&browseScreen()}
-            {scr==="diagnose" &&diagnoseScreen()}
-            {scr==="emergency" &&emergencyScreen()}
-            {scr==="home"     &&tab==="bookings" &&bookingsScreen()}
-            {scr==="home"     &&tab==="profile"  &&profileScreen()}
-            {scr==="task"     &&taskScreen()}
-            {scr==="custom"   &&customScreen()}
-            {scr==="posted"   &&postedScreen()}
-            {scr==="tracking" &&trackingScreen()}
-            {scr==="messages" &&messagesScreen()}
-            {scr==="rating"   &&ratingScreen()}
-            {scr==="payment"  &&paymentScreen()}
-            {scr==="editProfile" &&editProfileScreen()}
-            {scr==="myhome"   &&myhomeScreen()}
-            {scr==="serviceHistory" &&serviceHistoryScreen()}
-            {scr==="receiptList" &&receiptListScreen()}
-            {scr==="receipt"  &&receiptScreen()}
-            {scr==="addressEdit" &&addressEditScreen()}
-            {scr==="proProfile" &&proProfileScreen()}
-            {scr==="addresses"&&addressesScreen()}
-            {scr==="notifCenter"&&notifCenterScreen()}
-            {scr==="settings"&&settingsScreen()}
-            {scr==="help"     &&helpScreen()}
-          </div>
+          {(()=>{
+            const gestureVW=(typeof window!=="undefined"&&window.innerWidth)?window.innerWidth:390;
+            const reducedMotion=prefersReducedMotion();
+            const gestureActive=edgeBackGesture.phase!=="idle"&&!reducedMotion;
+            const isSettling=edgeBackGesture.phase==="settling";
+            const rawProgress=gestureVW>0?Math.max(0,Math.min(1,edgeBackGesture.dragX/gestureVW)):0;
+            const displayProgress=isSettling?edgeBackGesture.settleTo:rawProgress;
+            const renderedDragX=gestureActive?(isSettling?(edgeBackGesture.settleTo===1?gestureVW:0):edgeBackGesture.dragX):0;
+            const backgroundTranslateX=-0.25*gestureVW*(1-displayProgress);
+            const dimOpacity=0.18*(1-displayProgress);
+            const settleTransition=isSettling?"transform 280ms cubic-bezier(0.32,0.72,0,1)":"none";
+            return(
+              <div style={{flex:1,overflow:"hidden",position:"relative"}}>
+                {gestureActive&&edgeBackGesture.destScr&&(
+                  <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",transform:`translateX(${backgroundTranslateX}px)`,transition:settleTransition,zIndex:0}}>
+                    {renderScreenFor(edgeBackGesture.destScr,edgeBackGesture.destTab)}
+                    <div style={{position:"absolute",inset:0,background:"#000",opacity:dimOpacity,pointerEvents:"none",transition:settleTransition.replace("transform","opacity")}}/>
+                  </div>
+                )}
+                <div style={{position:gestureActive?"absolute":"relative",inset:0,display:"flex",flexDirection:"column",height:"100%",transform:gestureActive?`translateX(${renderedDragX}px)`:"none",transition:settleTransition,zIndex:1,background:BG,boxShadow:gestureActive&&renderedDragX>0?"-8px 0 24px rgba(0,0,0,.15)":"none"}}>
+                  {renderScreenFor(scr,tab)}
+                </div>
+              </div>
+            );
+          })()}
           {bottomNav()}
           {showDiscardConfirm&&(
             <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:10}}>
