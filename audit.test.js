@@ -79,6 +79,42 @@ function sleep(ms) { const end = Date.now() + ms; while (Date.now() < end) {} }
 function clickTab(text) { sleep(600); return click(text); }
 function forceProfileRoot() { click('Profile'); click('Profile'); } // double-tap resets to root regardless of tab-memory
 
+// ── Async test utilities ────────────────────────────────────────────────
+// Added to replace deeply-nested fixed-duration setTimeout chains with
+// flat, readable await sequences that resolve as soon as the real
+// condition is true — not after a blind worst-case wait. Named distinctly
+// from the synchronous sleep() above (which must stay synchronous — it's
+// load-bearing for clickTab's double-tap-avoidance timing and changing it
+// would require touching every clickTab call site in the file).
+async function waitForCondition(check, options = {}) {
+  const timeout = options.timeout ?? 3000;
+  const interval = options.interval ?? 20;
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < timeout) {
+    if (check()) return;
+    await new Promise(resolve => setTimeout(resolve, interval));
+  }
+  throw new Error(options.message ?? 'Timed out waiting for condition.');
+}
+async function nextTick() {
+  await new Promise(resolve => setTimeout(resolve, 0));
+}
+async function delay(ms) {
+  await new Promise(resolve => setTimeout(resolve, ms));
+}
+// Pro replies are randomly selected from a fixed set each time, so waiting
+// for "reply text exists" is unreliable once a conversation has more than
+// one reply in it (an earlier reply's text can still be on screen). This
+// waits for the *count* of matching bubbles to increase instead, which is
+// correct regardless of which random reply text lands.
+const REPLY_REGEX = /Got it|On it|Thanks for the heads up|Almost there|Sounds good|Will do/i;
+async function waitForNewReply(countBefore, msgOptions) {
+  await waitForCondition(
+    () => screen.queryAllByText(REPLY_REGEX).length > countBefore,
+    { message: 'Pro reply never arrived.', ...msgOptions }
+  );
+}
+
 const src = fs.readFileSync('home_services_app.jsx', 'utf8')
   .replace('import React, { useState, useRef, useEffect } from "react";', '')
   .replace('export default function App(){', 'function App(){');
@@ -243,16 +279,20 @@ step('6. Context-aware suppression — E: status change while viewing the exact 
   click('‹');
 });
 
+let replyCountBeforeStep7;
 step('7. Context-aware suppression — A: message live in the exact open conversation is suppressed', () => {
   clickTab('Bookings');
   act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
   click('💬 Message');
+  replyCountBeforeStep7 = screen.queryAllByText(REPLY_REGEX).length;
   const msgInput = screen.getByPlaceholderText(/Message .*/);
   act(()=>{fireEvent.change(msgInput,{target:{value:'hi'}});});
   act(()=>{fireEvent.keyDown(msgInput,{key:'Enter'});});
 });
 
-setTimeout(() => {
+(async () => {
+  await waitForNewReply(replyCountBeforeStep7, { message: 'Step 7: pro reply never arrived in the open conversation.' });
+
   step('7b. (continued) message appears live, no notification while conversation is open', () => {
     assert(existsRegex(/Got it|On it|Thanks|Almost there|Sounds good|Will do/i), 'Reply appears live in the open conversation');
     forceProfileRoot();
@@ -272,102 +312,109 @@ setTimeout(() => {
     clickTab('Home'); // different screen before the reply lands
   });
 
-  setTimeout(() => {
-    step('8b. (continued) notification created for the different-screen case', () => {
-      forceProfileRoot();
-      click('Notifications');
-      assert(existsRegex('New message from'), 'Reply arriving while on a different screen creates a notification');
-      click('‹');
-    });
+  // Unlike step 7, this navigates away from the messages screen before the
+  // reply lands — the reply's only observable effect at that point is a
+  // notification, not any visible message-bubble text, so there's no DOM
+  // condition to poll. An honest, tight, elapsed-time wait (matching the
+  // app's real 2000ms reply delay) is the correct approach here, not a
+  // workaround — just precise instead of the original's generous 2300ms.
+  await delay(2100);
 
-    step('9. Context-aware suppression — D: backgrounded app never suppresses', () => {
-      clickTab('Bookings');
-      act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
-      click('💬 Message');
-      Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-      act(()=>{ document.dispatchEvent(new dom.window.Event('visibilitychange')); });
-      const msgInput3 = screen.getByPlaceholderText(/Message .*/);
-      act(()=>{fireEvent.change(msgInput3,{target:{value:'one more'}});});
-      act(()=>{fireEvent.keyDown(msgInput3,{key:'Enter'});});
-    });
+  step('8b. (continued) notification created for the different-screen case', () => {
+    forceProfileRoot();
+    click('Notifications');
+    assert(existsRegex('New message from'), 'Reply arriving while on a different screen creates a notification');
+    click('‹');
+  });
 
-    setTimeout(() => {
-      step('9b. (continued) backgrounded-app notification confirmed', () => {
-        Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-        act(()=>{ document.dispatchEvent(new dom.window.Event('visibilitychange')); });
-        click('‹');
-        forceProfileRoot();
-        click('Notifications');
-        assert(existsRegex(/2 new messages/), 'Backgrounded app still created/grouped the notification even while "viewing" the exact conversation');
-      });
+  step('9. Context-aware suppression — D: backgrounded app never suppresses', () => {
+    clickTab('Bookings');
+    act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
+    click('💬 Message');
+    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
+    act(()=>{ document.dispatchEvent(new dom.window.Event('visibilitychange')); });
+    const msgInput3 = screen.getByPlaceholderText(/Message .*/);
+    act(()=>{fireEvent.change(msgInput3,{target:{value:'one more'}});});
+    act(()=>{fireEvent.keyDown(msgInput3,{key:'Enter'});});
+  });
 
-      step('10. Regression — Notification Center core features still work', () => {
-        assert(existsRegex('Mark all as read'), 'Mark all as read present while an unread notification exists');
-        const row = byRegex(/2 new messages/);
-        const rowEl = row.parentElement.parentElement;
-        act(()=>{fireEvent.pointerDown(rowEl,{clientX:0,clientY:0});});
-        act(()=>{fireEvent.pointerMove(rowEl,{clientX:130,clientY:2});});
-        act(()=>{fireEvent.pointerUp(rowEl,{clientX:130,clientY:2});});
-        assert(existsRegex(/Mark Unread/), 'Swipe-right mark-as-read still works, reciprocal Mark Unread available');
-        assert(!existsRegex('Mark all as read'), 'Mark all as read correctly disappears once that swipe marked the only unread notification as read (zero unread remaining)');
-      });
+  // Same reasoning as step 8 above — backgrounded, no visible signal to poll.
+  await delay(2100);
 
-      step('11. Regression — tab persistence and draft booking still work', () => {
-        clickTab('Home'); click('Assemble bed');
-        clickTab('Bookings');
-        assert(existsRegex(/Post Job/), 'Draft booking still persists across a tab switch');
-        click('← Back');
-        assert(existsRegex('Discard draft?'), 'Discard confirmation still works');
-        click('Discard Draft');
-      });
+  step('9b. (continued) backgrounded-app notification confirmed', () => {
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    act(()=>{ document.dispatchEvent(new dom.window.Event('visibilitychange')); });
+    click('‹');
+    forceProfileRoot();
+    click('Notifications');
+    assert(existsRegex(/2 new messages/), 'Backgrounded app still created/grouped the notification even while "viewing" the exact conversation');
+  });
 
-      step('12. Bug sweep — notification preferences actually persist (were previously never saved)', () => {
-        forceProfileRoot();
-        click('Settings');
-        const label = byText('Job updates');
-        const row = label.parentElement.parentElement;
-        const toggle = row.lastElementChild;
-        act(()=>{fireEvent.click(toggle);});
-        assert(storedNotifPrefsRaw()!==null, 'Notification preferences are now written to localStorage (previously never persisted at all)');
-        const saved = JSON.parse(storedNotifPrefsRaw());
-        assert(typeof saved.data.jobUpdates==='boolean', 'Persisted shape matches the real preference object (inside the versioned {__v, data} wrapper), not something else');
-        assert(saved.__v===1, 'Schema version is recorded alongside the data');
-        click('‹');
-      });
+  step('10. Regression — Notification Center core features still work', () => {
+    assert(existsRegex('Mark all as read'), 'Mark all as read present while an unread notification exists');
+    const row = byRegex(/2 new messages/);
+    const rowEl = row.parentElement.parentElement;
+    act(()=>{fireEvent.pointerDown(rowEl,{clientX:0,clientY:0});});
+    act(()=>{fireEvent.pointerMove(rowEl,{clientX:130,clientY:2});});
+    act(()=>{fireEvent.pointerUp(rowEl,{clientX:130,clientY:2});});
+    assert(existsRegex(/Mark Unread/), 'Swipe-right mark-as-read still works, reciprocal Mark Unread available');
+    assert(!existsRegex('Mark all as read'), 'Mark all as read correctly disappears once that swipe marked the only unread notification as read (zero unread remaining)');
+  });
 
-      step('13. Bug sweep — rapid double-tap on Post Job cannot create a duplicate job', () => {
-        clickTab('Home'); click('Install smart lock');
-        const postBtn = screen.getAllByText(/Post Job/).slice(-1)[0];
-        act(()=>{ fireEvent.click(postBtn); fireEvent.click(postBtn); });
-        clickTab('Bookings');
-        assert(screen.queryAllByText('Install smart lock').length===1, 'Exactly one job created from a rapid double-tap, not two');
-      });
+  step('11. Regression — tab persistence and draft booking still work', () => {
+    clickTab('Home'); click('Assemble bed');
+    clickTab('Bookings');
+    assert(existsRegex(/Post Job/), 'Draft booking still persists across a tab switch');
+    click('← Back');
+    assert(existsRegex('Discard draft?'), 'Discard confirmation still works');
+    click('Discard Draft');
+  });
 
-      step('14. Reset Prototype Data — confirmation required, clears data, resets tab memory', () => {
-        forceProfileRoot();
-        click('Settings');
-        assert(existsRegex('Reset Prototype Data'), 'Reset Prototype Data present in Settings, clearly labeled as a testing utility');
-        click('Reset Prototype Data');
-        assert(existsRegex('Reset Prototype Data?'), 'Confirmation required — not an immediate destructive action');
-        assert(existsRegex(/every job, saved property, saved card/), 'Confirmation clearly states what will be cleared');
-        click('Cancel');
-        assert(!existsRegex('Reset Prototype Data?'), 'Cancel dismisses without resetting anything');
-        click('Reset Prototype Data');
-        clickRegex(/^Reset Prototype Data$/);
-        assert(existsRegex(/need done/), 'Reset returns to Home root');
-        clickTab('Bookings');
-        assert(!existsRegex('Install smart lock') && !existsRegex('Mount TV'), 'All jobs cleared after reset');
-        clickTab('Profile');
-        assert(existsRegex('Jane Doe'), 'Tapping Profile after reset lands on the actual Profile root, not a stale remembered sub-screen (this was a real bug found and fixed this slice)');
-        click('Saved Addresses');
-        assert(existsRegex(/🏠 Primary/), 'Addresses reset to the default seed, with a valid Primary');
-      });
+  step('12. Bug sweep — notification preferences actually persist (were previously never saved)', () => {
+    forceProfileRoot();
+    click('Settings');
+    const label = byText('Job updates');
+    const row = label.parentElement.parentElement;
+    const toggle = row.lastElementChild;
+    act(()=>{fireEvent.click(toggle);});
+    assert(storedNotifPrefsRaw()!==null, 'Notification preferences are now written to localStorage (previously never persisted at all)');
+    const saved = JSON.parse(storedNotifPrefsRaw());
+    assert(typeof saved.data.jobUpdates==='boolean', 'Persisted shape matches the real preference object (inside the versioned {__v, data} wrapper), not something else');
+    assert(saved.__v===1, 'Schema version is recorded alongside the data');
+    click('‹');
+  });
 
-      console.log(`\n--- Interaction suite complete: ${pass} passing, ${fail} failing so far ---`);
-      runPersistenceAndCorruptStorageChecks();
-    }, 2300);
-  }, 2300);
-}, 2300);
+  step('13. Bug sweep — rapid double-tap on Post Job cannot create a duplicate job', () => {
+    clickTab('Home'); click('Install smart lock');
+    const postBtn = screen.getAllByText(/Post Job/).slice(-1)[0];
+    act(()=>{ fireEvent.click(postBtn); fireEvent.click(postBtn); });
+    clickTab('Bookings');
+    assert(screen.queryAllByText('Install smart lock').length===1, 'Exactly one job created from a rapid double-tap, not two');
+  });
+
+  step('14. Reset Prototype Data — confirmation required, clears data, resets tab memory', () => {
+    forceProfileRoot();
+    click('Settings');
+    assert(existsRegex('Reset Prototype Data'), 'Reset Prototype Data present in Settings, clearly labeled as a testing utility');
+    click('Reset Prototype Data');
+    assert(existsRegex('Reset Prototype Data?'), 'Confirmation required — not an immediate destructive action');
+    assert(existsRegex(/every job, saved property, saved card/), 'Confirmation clearly states what will be cleared');
+    click('Cancel');
+    assert(!existsRegex('Reset Prototype Data?'), 'Cancel dismisses without resetting anything');
+    click('Reset Prototype Data');
+    clickRegex(/^Reset Prototype Data$/);
+    assert(existsRegex(/need done/), 'Reset returns to Home root');
+    clickTab('Bookings');
+    assert(!existsRegex('Install smart lock') && !existsRegex('Mount TV'), 'All jobs cleared after reset');
+    clickTab('Profile');
+    assert(existsRegex('Jane Doe'), 'Tapping Profile after reset lands on the actual Profile root, not a stale remembered sub-screen (this was a real bug found and fixed this slice)');
+    click('Saved Addresses');
+    assert(existsRegex(/🏠 Primary/), 'Addresses reset to the default seed, with a valid Primary');
+  });
+
+  console.log(`\n--- Interaction suite complete: ${pass} passing, ${fail} failing so far ---`);
+  runPersistenceAndCorruptStorageChecks();
+})();
 
 // ── PHASE 2: real persistence round-trip + corrupt-storage matrix ─────────
 // Runs after the interaction suite finishes (needs its own render lifecycle
@@ -543,17 +590,36 @@ function runUxImprovementChecks(){
     click('‹');
   });
 
-  step('24. Search by symptom — non-technical wording routes to the right category, never leaves the user stuck', () => {
+  step('24. Search by symptom — intent-based matching routes to the specific right service, never leaves the user stuck', () => {
     clickTab('Home');
     const searchInput = screen.getByPlaceholderText('Search 50+ services...');
     act(()=>{fireEvent.focus(searchInput);});
     const realInput = screen.getByPlaceholderText('Search services...');
     act(()=>{fireEvent.change(realInput,{target:{value:'water under sink'}});});
-    assert(existsRegex('Matched to Plumbing'), '"water under sink" correctly routes to Plumbing');
+    assert(existsRegex('Recommended for you') && existsRegex('Unclog Sink'), '"water under sink" correctly recommends the specific Unclog Sink service, not just a category');
     act(()=>{fireEvent.change(realInput,{target:{value:'my lights flicker'}});});
-    assert(existsRegex('Matched to Electrical'), '"my lights flicker" correctly routes to Electrical');
+    assert(existsRegex('Recommended for you') && existsRegex('Electrical troubleshooting'), '"my lights flicker" correctly recommends a specific electrical service');
+    act(()=>{fireEvent.change(realInput,{target:{value:'clogged toilet'}});});
+    assert(existsRegex('Install/repair toilet') && !existsRegex('Fix Leaky Pipe'), 'The original reported bug is fixed: "clogged toilet" recommends the toilet service, not Fix Leaky Pipe');
     act(()=>{fireEvent.change(realInput,{target:{value:'gibberish query xyz123'}});});
     assert(existsRegex('Post a custom job') && existsRegex(/No exact matches/), 'Non-technical/unmatched wording never leaves the user with zero guidance');
+  });
+
+  step('24b. Search by symptom — negative matching prevents false positives between similar intents', () => {
+    const realInput = screen.getByPlaceholderText('Search services...');
+    act(()=>{fireEvent.change(realInput,{target:{value:'running toilet'}});});
+    assert(existsRegex('Recommended for you') && !existsRegex(/unclog/i), '"running toilet" recommends the running-toilet fix, not the unclog service, despite both containing "toilet"');
+    act(()=>{fireEvent.change(realInput,{target:{value:"toilet won't flush"}});});
+    assert(existsRegex('Install/repair toilet'), "toilet won't flush still correctly recommends the toilet service");
+  });
+
+  step('24c. Search by symptom — genuinely ambiguous input asks one clarifying question instead of guessing', () => {
+    const realInput = screen.getByPlaceholderText('Search services...');
+    act(()=>{fireEvent.change(realInput,{target:{value:'toilet issue'}});});
+    assert(existsRegex('What best describes the problem?'), 'A vague toilet query triggers the clarification question rather than guessing wrong');
+    assert(existsRegex('Overflowing')&&existsRegex('Keeps running')&&existsRegex('Water leaking')&&existsRegex('Something else'), 'All clarification options are present');
+    click('Keeps running');
+    assert(existsRegex('Install/repair toilet'), 'Selecting a clarification option navigates directly to that specific service');
   });
 
   runInteractiveBackChecks();
@@ -565,13 +631,25 @@ function runUxImprovementChecks(){
 // moves in Node have ~0ms elapsed time, which artificially inflates the
 // computed velocity and would give false signal on the velocity-based
 // completion rule.
-function runInteractiveBackChecks(){
+async function runInteractiveBackChecks(){
   const container6 = document.createElement('div');
   document.body.appendChild(container6);
   act(()=>{ render(React.createElement(App), container6); });
   function pdown(x,y){ act(()=>{ document.dispatchEvent(new dom.window.PointerEvent('pointerdown',{clientX:x,clientY:y,bubbles:true})); }); }
   function pmove(x,y){ act(()=>{ document.dispatchEvent(new dom.window.PointerEvent('pointermove',{clientX:x,clientY:y,bubbles:true})); }); }
   function pup(x,y){ act(()=>{ document.dispatchEvent(new dom.window.PointerEvent('pointerup',{clientX:x,clientY:y,bubbles:true})); }); }
+  // The gesture's background reveal layer only renders while phase!=="idle"
+  // (see the app's own gestureActive check) — so "no destination content
+  // in the DOM" is a real, observable signal that the settle animation has
+  // actually finished, not a guess about how long it should take.
+  const waitForSettleIdle = (msg) => waitForCondition(
+    () => !document.body.innerHTML.includes('Jane Doe') || existsRegex('Home overview'),
+    { timeout: 2000, message: msg }
+  );
+  const waitForCommitted = (msg) => waitForCondition(
+    () => existsRegex('Jane Doe') && !existsRegex('Home overview'),
+    { timeout: 2000, message: msg }
+  );
 
   step('25. Interactive back gesture — follows the finger, reveals destination underneath, reversible before release', () => {
     click('Profile'); click('My Home');
@@ -584,77 +662,78 @@ function runInteractiveBackChecks(){
     pup(80,302);
   });
 
-  setTimeout(() => {
-    step('26. Releasing before the completion threshold cancels — no navigation', () => {
-      assert(existsRegex('Home overview'), 'Released under threshold: cancelled, still on the original screen');
-      assert(!document.body.innerHTML.includes('Jane Doe') || existsRegex('Home overview'), 'No stray destination content left behind after cancel');
-    });
+  await waitForSettleIdle('Step 25/26: cancel settle animation never finished.');
 
-    step('27. Releasing past the completion threshold commits navigation', () => {
-      pdown(5,300); pmove(60,301); pmove(200,302);
-      pup(200,302);
-    });
+  step('26. Releasing before the completion threshold cancels — no navigation', () => {
+    assert(existsRegex('Home overview'), 'Released under threshold: cancelled, still on the original screen');
+    assert(!document.body.innerHTML.includes('Jane Doe') || existsRegex('Home overview'), 'No stray destination content left behind after cancel');
+  });
 
-    setTimeout(() => {
-      step('27b. (continued) navigation committed via the centralized backFrom path', () => {
-        assert(existsRegex('Jane Doe') && !existsRegex('Home overview'), 'Past-threshold release completed navigation to the correct destination');
-      });
+  step('27. Releasing past the completion threshold commits navigation', () => {
+    pdown(5,300); pmove(60,301); pmove(200,302);
+    pup(200,302);
+  });
 
-      step('28. A fast flick commits even with a short drag distance (velocity rule)', () => {
-        click('My Home');
-        pdown(5,300); pmove(25,301);
-      });
+  await waitForCommitted('Step 27/27b: commit settle animation never finished.');
 
-      setTimeout(() => {
-        pmove(100,302); // large jump after a real ~16ms gap = high velocity, short total distance (~26% of 390px, under the 35% rule)
-        pup(100,302);
+  step('27b. (continued) navigation committed via the centralized backFrom path', () => {
+    assert(existsRegex('Jane Doe') && !existsRegex('Home overview'), 'Past-threshold release completed navigation to the correct destination');
+  });
 
-        setTimeout(() => {
-          step('28b. (continued) short-distance fast flick still completed via velocity', () => {
-            assert(existsRegex('Jane Doe') && !existsRegex('Home overview'), 'Fast flick under the distance threshold still committed');
-          });
+  step('28. A fast flick commits even with a short drag distance (velocity rule)', () => {
+    click('My Home');
+    pdown(5,300); pmove(25,301);
+  });
 
-          step('29. A slow short swipe (low velocity, short distance) cancels', () => {
-            click('My Home');
-            pdown(5,300); pmove(20,301);
-          });
+  // These two gaps are the simulated finger speed itself (real elapsed
+  // time is what makes the velocity calculation realistic — see the app's
+  // own note about synchronous back-to-back events inflating velocity
+  // artificially), not something to poll for, so they stay real delays.
+  await delay(16); // large jump after a short real gap = high velocity
+  pmove(100,302); // short total distance (~26% of 390px, under the 35% rule)
+  pup(100,302);
 
-          setTimeout(() => {
-            pmove(35,301);
-            setTimeout(() => {
-              pmove(50,302);
-              pup(50,302);
+  await waitForCommitted('Step 28/28b: fast-flick commit settle animation never finished.');
 
-              setTimeout(() => {
-                step('29b. (continued) slow short swipe correctly cancelled', () => {
-                  assert(existsRegex('Home overview'), 'Slow short swipe (under both distance and velocity rules) cancelled — still on the original screen');
-                });
+  step('28b. (continued) short-distance fast flick still completed via velocity', () => {
+    assert(existsRegex('Jane Doe') && !existsRegex('Home overview'), 'Fast flick under the distance threshold still committed');
+  });
 
-                step('30. Gesture conflict protections — notification swipe rows still opt out and work independently', () => {
-                  forceProfileRoot();
-                  click('Notifications');
-                  // The Notification Center's own swipe rows declare
-                  // data-no-edge-swipe; confirm the screen is reachable and
-                  // its own swipe mechanics aren't hijacked by the edge
-                  // gesture (already covered structurally by the shared
-                  // opt-out attribute — this just confirms nothing crashed
-                  // when the two systems are both present on screen).
-                  assert(existsRegex('Today')||existsRegex("caught up"), 'Notification Center still reachable and renders normally alongside the edge-back gesture system');
-                });
+  step('29. A slow short swipe (low velocity, short distance) cancels', () => {
+    click('My Home');
+    pdown(5,300); pmove(20,301);
+  });
 
-                step('31. Visible Back buttons still navigate to the identical destination as the gesture', () => {
-                  const backBtn = screen.queryAllByText('‹').slice(-1)[0];
-                  if(backBtn) act(()=>{fireEvent.click(backBtn);});
-                  assert(existsRegex('Jane Doe'), 'Visible Back button reaches the same destination the interactive gesture would');
-                });
+  await delay(60);
+  pmove(35,301);
+  await delay(60);
+  pmove(50,302);
+  pup(50,302);
 
-                console.log(`\n--- Audit complete: ${pass} passing, ${fail} failing ---`);
-                if (fail > 0) process.exit(1);
-              }, 350);
-            }, 60);
-          }, 60);
-        }, 350);
-      }, 16);
-    }, 350);
-  }, 350);
+  await waitForSettleIdle('Step 29/29b: slow-swipe cancel settle animation never finished.');
+
+  step('29b. (continued) slow short swipe correctly cancelled', () => {
+    assert(existsRegex('Home overview'), 'Slow short swipe (under both distance and velocity rules) cancelled — still on the original screen');
+  });
+
+  step('30. Gesture conflict protections — notification swipe rows still opt out and work independently', () => {
+    forceProfileRoot();
+    click('Notifications');
+    // The Notification Center's own swipe rows declare
+    // data-no-edge-swipe; confirm the screen is reachable and
+    // its own swipe mechanics aren't hijacked by the edge
+    // gesture (already covered structurally by the shared
+    // opt-out attribute — this just confirms nothing crashed
+    // when the two systems are both present on screen).
+    assert(existsRegex('Today')||existsRegex("caught up"), 'Notification Center still reachable and renders normally alongside the edge-back gesture system');
+  });
+
+  step('31. Visible Back buttons still navigate to the identical destination as the gesture', () => {
+    const backBtn = screen.queryAllByText('‹').slice(-1)[0];
+    if(backBtn) act(()=>{fireEvent.click(backBtn);});
+    assert(existsRegex('Jane Doe'), 'Visible Back button reaches the same destination the interactive gesture would');
+  });
+
+  console.log(`\n--- Audit complete: ${pass} passing, ${fail} failing ---`);
+  if (fail > 0) process.exit(1);
 }

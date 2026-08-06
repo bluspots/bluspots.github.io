@@ -75,6 +75,12 @@ const TASKS=[
   {id:52,e:"🌀",n:"Garbage disposal repair",p:89,  t:"40 min", c:"Plumbing"},
   {id:53,e:"🌡️",n:"AC/heating repair visit", p:99,  t:"Varies", c:"Repair"},
   {id:54,e:"⚡",n:"Electrical troubleshooting",p:89, t:"Varies", c:"Electrical"},
+  // Added for search-by-symptom intent coverage — these are genuine repair
+  // needs that had no non-install-only task to route to.
+  {id:55,e:"🔧",n:"Appliance repair visit",p:89, t:"Varies", c:"Appliance"},
+  {id:56,e:"🪟",n:"Window repair",         p:89, t:"Varies", c:"Repair"},
+  {id:57,e:"🌀",n:"Ceiling fan repair",    p:69, t:"Varies", c:"Electrical"},
+  {id:58,e:"🚪",n:"Door repair",           p:79, t:"Varies", c:"Repair"},
 ];
 const PROS=[
   {i:"MT",n:"Marcus T.",r:4.97,j:543,s:"TV Mount Pro",   col:"#1E40AF",
@@ -107,20 +113,319 @@ const CATS=["All","Assembly","Installation","Smart Home","Plumbing","Electrical"
 // Plain keyword table for now — deliberately kept as data, not logic, so a
 // future AI/NLP service is a drop-in replacement for matchSymptomToCategories
 // without any caller needing to change.
-const SYMPTOM_KEYWORDS=[
-  {cats:["Plumbing"],keywords:["leak","leaking","drip","dripping","water under","wet under","clog","clogged","toilet","faucet","running water","pipe burst","no hot water"]},
-  {cats:["Electrical"],keywords:["flicker","flickering","outlet","no power","power out","sparking","short circuit","breaker","won't charge","wont charge"]},
-  {cats:["Appliance","Smart Home"],keywords:["tv won't","tv wont","won't turn on","wont turn on","screen won't","screen wont","remote not working","not powering on"]},
-  {cats:["Assembly"],keywords:["shelves","shelf","assemble","assembly","build furniture","flat pack","put together"]},
-  {cats:["Repair"],keywords:["door won't","door wont","won't close","wont close","stuck door","broken","squeak","squeaky","cracked","hole in wall"]},
-  {cats:["Appliance"],keywords:["ac not","air conditioning","furnace","heater not","not cooling","not heating","thermostat","fridge not","dishwasher not","washer not","dryer not"]},
-  {cats:["Landscaping","Maintenance"],keywords:["lawn","yard","grass","weeds","overgrown","gutter","hedge","tree branch"]},
-  {cats:["Cleaning"],keywords:["dirty","stains","stained","mess","messy","smells","odor"]},
-  {cats:["Pest Control"],keywords:["bugs","ants","roaches","mice","rats","rodents","spiders","termites","pest"]},
-  {cats:["Painting"],keywords:["paint peeling","wall color","faded paint","chipped paint"]},
-  {cats:["Flooring"],keywords:["floor squeak","tile crack","carpet stain","scratched floor"]},
-  {cats:["Moving"],keywords:["moving out","moving in","relocate","haul"]},
+// ── SEARCH-BY-SYMPTOM: INTENT-BASED MATCHING ENGINE ─────────────────────
+// Architecture: Search UI -> matchRepairIntent() -> INTENT_LIBRARY -> results.
+// matchRepairIntent() is the ONLY thing a future AI/NLP service would need
+// to replace — same input (a query string) and output shape (tier +
+// ranked matches + optional clarification), so the UI never needs to know
+// whether a result came from this keyword/phrase engine or a future model.
+//
+// Each intent is DATA, not logic: id, display label, parent category, an
+// optional link to a real bookable task, phrases (synonyms + example
+// phrasings people actually type), exclude (phrases that veto this intent
+// even if a phrase partially matches), and an optional clarifyGroup for
+// when several sibling intents are genuinely too close to call.
+const INTENT_LIBRARY=[
+  // Plumbing
+  {id:"unclog_toilet",label:"Unclog Toilet",category:"Plumbing",taskId:16,
+    phrases:["clogged toilet","blocked toilet","toilet backed up","toilet won't flush","toilet wont flush","water rises when flushed","commode clogged","toilet not flushing","toilet overflow when flushed","toilet clog","toilet stopped up"],
+    exclude:["running constantly","runs constantly","leaking at base","leaking from tank","install","new toilet"],clarifyGroup:"toilet_issue"},
+  {id:"running_toilet",label:"Fix Running Toilet",category:"Plumbing",taskId:16,
+    phrases:["running toilet","toilet keeps running","toilet won't stop running","toilet wont stop running","toilet runs constantly","toilet tank running","phantom flush","toilet running non stop"],
+    exclude:["clogged","blocked","backed up","overflow","won't flush","wont flush"],clarifyGroup:"toilet_issue"},
+  {id:"overflowing_toilet",label:"Fix Overflowing Toilet",category:"Plumbing",taskId:16,
+    phrases:["overflowing toilet","toilet overflowing","toilet overflows","water on floor from toilet","toilet spilling over"],
+    exclude:["running constantly","runs constantly","leak at base"],clarifyGroup:"toilet_issue"},
+  {id:"leaking_toilet",label:"Fix Leaking Toilet",category:"Plumbing",taskId:16,
+    phrases:["toilet leaking","toilet leaking at base","water under toilet","toilet base leak","toilet leaks when flushed"],
+    exclude:["clogged","won't flush","wont flush","overflow","running"],clarifyGroup:"toilet_issue"},
+  {id:"toilet_installation",label:"Toilet Installation",category:"Plumbing",taskId:16,
+    phrases:["install toilet","new toilet installation","replace toilet","toilet installation","need a new toilet installed"],
+    exclude:["clogged","running","overflow","leak","won't flush"]},
+  {id:"clogged_sink",label:"Unclog Sink",category:"Plumbing",taskId:19,
+    phrases:["clogged sink","blocked sink","sink backing up","sink won't drain","sink wont drain","slow drain","water under sink","wet under sink","kitchen sink clogged","bathroom sink clogged"],
+    exclude:["toilet"]},
+  {id:"leaky_pipe",label:"Fix Leaky Pipe",category:"Plumbing",taskId:19,
+    phrases:["leaky pipe","leaking pipe","pipe leak","dripping pipe","pipe burst","burst pipe","water damage from pipe","pipe under sink leaking","leak under sink","leaking under sink","leak under the sink"],
+    exclude:["toilet","sink clogged","sink backing up","sink won't drain"]},
+  {id:"low_water_pressure",label:"Low Water Pressure",category:"Plumbing",taskId:19,
+    phrases:["low water pressure","weak water pressure","water pressure low","barely any water pressure","water trickling out"],
+    exclude:["toilet","clogged"]},
+  {id:"water_heater_issue",label:"Water Heater Issue",category:"Plumbing",taskId:19,
+    phrases:["no hot water","water heater not working","water heater broken","water heater leaking","cold water only","hot water ran out"],
+    exclude:["toilet"]},
+  {id:"install_faucet",label:"Replace Faucet",category:"Plumbing",taskId:15,
+    phrases:["install faucet","replace faucet","new faucet","faucet installation","old faucet replacement"],
+    exclude:["leak","drip","dripping"]},
+  {id:"install_dishwasher",label:"Install Dishwasher",category:"Plumbing",taskId:17,
+    phrases:["install dishwasher","new dishwasher installation","dishwasher hookup"],
+    exclude:["leaking","not draining","broken","won't start"]},
+  {id:"dishwasher_repair",label:"Dishwasher Repair",category:"Appliance",taskId:55,
+    phrases:["dishwasher leaking","dishwasher not draining","dishwasher won't start","dishwasher wont start","dishwasher broken","dishwasher not cleaning dishes"],
+    exclude:["install","new dishwasher","hookup"]},
+  {id:"garbage_disposal_issue",label:"Garbage Disposal Repair",category:"Plumbing",taskId:52,
+    phrases:["garbage disposal not working","disposal jammed","disposal humming","disposal won't turn on","disposal wont turn on","disposal leaking","garbage disposal stuck"],
+    exclude:["install","new disposal"]},
+  {id:"install_garbage_disposal",label:"Install Garbage Disposal",category:"Plumbing",taskId:18,
+    phrases:["install garbage disposal","new disposal installation","new garbage disposal"],
+    exclude:["not working","jammed","broken","humming"]},
+  // Electrical
+  {id:"lights_flickering",label:"Lights Flickering",category:"Electrical",taskId:54,
+    phrases:["lights flicker","lights flickering","light flickers","lights blink","lights dim","flickering lights","light bulb flickering","lights keep flickering"],
+    exclude:["outlet not working","no power","dead outlet"]},
+  {id:"outlet_not_working",label:"Outlet Not Working",category:"Electrical",taskId:54,
+    phrases:["outlet not working","dead outlet","outlet no power","plug not working","socket not working","outlet stopped working"],
+    exclude:["install new outlet","flicker","flickering"]},
+  {id:"install_outlet",label:"Install Outlet/Switch",category:"Electrical",taskId:22,
+    phrases:["install outlet","new outlet installation","add an outlet","install switch","install light switch"],
+    exclude:["not working","dead","broken","stopped working"]},
+  {id:"power_out_partial",label:"Electrical Troubleshooting",category:"Electrical",taskId:54,
+    phrases:["no power in room","breaker keeps tripping","circuit breaker trips","power out in part of house","lost power to outlet","breaker won't reset"],
+    exclude:[]},
+  {id:"ceiling_fan_wobble",label:"Ceiling Fan Repair",category:"Electrical",taskId:57,
+    phrases:["ceiling fan wobbles","ceiling fan wobbling","fan making noise","ceiling fan shaking","ceiling fan not working properly","fan wobbling loudly"],
+    exclude:["install new fan","install ceiling fan"]},
+  {id:"install_ceiling_fan",label:"Install Ceiling Fan",category:"Electrical",taskId:21,
+    phrases:["install ceiling fan","new ceiling fan installation","add a ceiling fan"],
+    exclude:["wobble","wobbling","noise","shaking"]},
+  {id:"install_light_fixture",label:"Replace Light Fixture",category:"Electrical",taskId:20,
+    phrases:["replace light fixture","install light fixture","new light fixture","change light fixture"],
+    exclude:["flicker","flickering"]},
+  {id:"ev_charger",label:"Install EV Charger Outlet",category:"Electrical",taskId:23,
+    phrases:["install ev charger","electric car charger installation","ev charging outlet","install car charger"],
+    exclude:[]},
+  // HVAC / Appliance
+  {id:"ac_not_cooling",label:"AC/Heating Repair Visit",category:"Repair",taskId:53,
+    phrases:["ac blowing warm air","ac not cooling","air conditioning not cold","ac not working","air conditioner broken","ac blowing hot air"],
+    exclude:["heat not working","furnace","no heat"]},
+  {id:"heater_not_working",label:"AC/Heating Repair Visit",category:"Repair",taskId:53,
+    phrases:["furnace not working","heater not working","no heat","heating not working","thermostat not responding","furnace won't turn on"],
+    exclude:["ac","cooling","warm air","blowing hot"]},
+  {id:"hvac_filter",label:"HVAC Filter Swap",category:"Maintenance",taskId:45,
+    phrases:["change hvac filter","replace air filter","furnace filter swap","need new air filter"],
+    exclude:[]},
+  {id:"washer_issue",label:"Appliance Repair Visit",category:"Appliance",taskId:55,
+    phrases:["washing machine shaking","washer shaking","washing machine leaking","washer not draining","washer won't start","washer wont start","washing machine noisy","washer making noise"],
+    exclude:["install","new washer","hookup"]},
+  {id:"dryer_issue",label:"Appliance Repair Visit",category:"Appliance",taskId:55,
+    phrases:["dryer not heating","dryer won't start","dryer wont start","dryer making noise","dryer not drying clothes","dryer squeaking"],
+    exclude:["install","new dryer","hookup"]},
+  {id:"install_washer_dryer",label:"Washer/Dryer Installation",category:"Appliance",taskId:49,
+    phrases:["install washer","install dryer","washer dryer installation","new washer hookup","new dryer hookup"],
+    exclude:["not working","broken","shaking","leaking","won't start"]},
+  {id:"fridge_issue",label:"Appliance Repair Visit",category:"Appliance",taskId:55,
+    phrases:["fridge not cooling","refrigerator not working","fridge making noise","freezer not freezing","fridge running warm"],
+    exclude:["install","new fridge","hookup"]},
+  {id:"install_fridge",label:"Refrigerator Installation",category:"Appliance",taskId:50,
+    phrases:["install refrigerator","new fridge installation","fridge hookup","new refrigerator delivery"],
+    exclude:["not cooling","broken","not working","making noise"]},
+  // Doors / Windows / Drywall
+  {id:"door_wont_close",label:"Door Repair",category:"Repair",taskId:58,
+    phrases:["door won't close","door wont close","door won't latch","door wont latch","sticking door","door sticks","misaligned door","door won't shut","door wont shut"],
+    exclude:["garage"]},
+  {id:"door_hardware_install",label:"Install Door Hardware",category:"Installation",taskId:10,
+    phrases:["install door handle","install door knob","new door hardware","install deadbolt","replace door lock"],
+    exclude:["won't close","wont close","stuck","broken","won't latch"]},
+  {id:"garage_door_wont_open",label:"Garage Door Repair",category:"Repair",taskId:43,
+    phrases:["garage door won't open","garage door wont open","garage door stuck","garage door not working","garage door opener broken","garage door won't close"],
+    exclude:[]},
+  {id:"window_stuck_or_broken",label:"Window Repair",category:"Repair",taskId:56,
+    phrases:["window won't open","window wont open","window stuck","cracked window","broken window glass","broken window","window screen torn","window won't close","window wont close"],
+    exclude:[]},
+  {id:"drywall_hole",label:"Drywall Patch/Repair",category:"Repair",taskId:44,
+    phrases:["hole in wall","drywall hole","drywall crack","dent in wall","wall patch needed","hole in drywall"],
+    exclude:[]},
+  {id:"fence_repair",label:"Fence Repair",category:"Repair",taskId:42,
+    phrases:["fence broken","fence repair needed","fence board loose","fence leaning","fence panel damaged"],
+    exclude:[]},
+  // Flooring
+  {id:"floor_squeak",label:"Repair Squeaky Floor",category:"Flooring",taskId:29,
+    phrases:["squeaky floor","floor squeaks","creaky floorboard","floor creaking","floorboard squeaks"],
+    exclude:["install new floor","new flooring"]},
+  {id:"install_tile",label:"Install Tile Flooring",category:"Flooring",taskId:27,
+    phrases:["install tile flooring","new tile floor","tile installation","lay tile floor"],
+    exclude:["squeak","crack"]},
+  {id:"install_laminate",label:"Install Laminate/Vinyl Flooring",category:"Flooring",taskId:28,
+    phrases:["install laminate flooring","vinyl flooring installation","new laminate floor","lay vinyl floor"],
+    exclude:["squeak"]},
+  // Painting
+  {id:"paint_room",label:"Paint a Room",category:"Painting",taskId:24,
+    phrases:["paint a room","need a room painted","interior painting","paint bedroom","paint living room","repaint room"],
+    exclude:["peeling","touch up","chipped"]},
+  {id:"paint_accent_wall",label:"Paint an Accent Wall",category:"Painting",taskId:25,
+    phrases:["paint an accent wall","accent wall painting","feature wall paint"],
+    exclude:[]},
+  {id:"paint_touch_up",label:"Paint Doors/Trim",category:"Painting",taskId:26,
+    phrases:["paint peeling","chipped paint","faded paint","touch up paint","paint doors trim","trim needs paint"],
+    exclude:["whole room","entire room","paint a room"]},
+  // Assembly / TV Mounting / Smart Home
+  {id:"assemble_furniture",label:"Assemble Furniture",category:"Assembly",taskId:1,
+    phrases:["assemble furniture","put together furniture","flat pack assembly","furniture assembly needed"],
+    exclude:["bed frame","sofa","office desk","home gym"]},
+  {id:"assemble_bed",label:"Assemble Bed",category:"Assembly",taskId:2,
+    phrases:["assemble bed frame","build a bed","bed frame assembly","put together bed"],
+    exclude:[]},
+  {id:"build_shelves",label:"Install Shelving",category:"Installation",taskId:9,
+    phrases:["need shelves built","install shelves","shelf installation","build shelving","mount shelves","put up shelves"],
+    exclude:[]},
+  {id:"mount_tv",label:"Mount TV",category:"Installation",taskId:6,
+    phrases:["mount tv","tv wall mount","hang tv on wall","tv mounting","install tv bracket","put tv on wall"],
+    exclude:["won't turn on","wont turn on","not working","broken","black screen"]},
+  {id:"tv_not_turning_on",label:"Electrical Troubleshooting",category:"Electrical",taskId:54,
+    phrases:["tv won't turn on","tv wont turn on","tv screen black","tv not powering on","tv remote not working","tv has no power"],
+    exclude:["mount","wall mount","install bracket"]},
+  {id:"install_smart_lock",label:"Install Smart Lock",category:"Smart Home",taskId:11,
+    phrases:["install smart lock","smart lock installation","keyless entry install"],
+    exclude:[]},
+  {id:"install_doorbell_camera",label:"Install Doorbell Camera",category:"Smart Home",taskId:12,
+    phrases:["install doorbell camera","video doorbell installation","ring doorbell install"],
+    exclude:[]},
+  {id:"install_smart_thermostat",label:"Install Smart Thermostat",category:"Smart Home",taskId:13,
+    phrases:["install smart thermostat","nest thermostat installation","smart thermostat setup"],
+    exclude:[]},
+  {id:"install_smart_lighting",label:"Install Smart Lighting",category:"Smart Home",taskId:14,
+    phrases:["install smart lighting","smart bulbs setup","smart light installation"],
+    exclude:[]},
+  // Outdoor / Cleaning / Moving
+  {id:"lawn_mowing",label:"Lawn Mowing",category:"Landscaping",taskId:34,
+    phrases:["lawn mowing","mow the lawn","grass cutting","yard mowing needed"],exclude:[]},
+  {id:"hedge_trimming",label:"Hedge Trimming",category:"Landscaping",taskId:35,
+    phrases:["hedge trimming","trim bushes","trim hedges"],exclude:[]},
+  {id:"leaf_removal",label:"Leaf Removal",category:"Landscaping",taskId:36,
+    phrases:["leaf removal","rake leaves","yard leaves cleanup"],exclude:[]},
+  {id:"gutter_cleaning",label:"Gutter Cleaning",category:"Maintenance",taskId:46,
+    phrases:["gutter cleaning","clean gutters","clogged gutters","gutters overflowing"],exclude:[]},
+  {id:"pressure_washing",label:"Pressure Washing",category:"Maintenance",taskId:47,
+    phrases:["pressure washing","power wash driveway","clean patio","wash the deck"],exclude:[]},
+  {id:"deep_clean",label:"Deep Clean",category:"Cleaning",taskId:30,
+    phrases:["deep clean house","deep cleaning needed","full house cleaning"],exclude:["move out","moving out"]},
+  {id:"move_out_clean",label:"Move-Out Cleaning",category:"Cleaning",taskId:31,
+    phrases:["move out cleaning","moving out clean","end of lease cleaning"],exclude:[]},
+  {id:"window_washing_interior",label:"Window Washing (Interior)",category:"Cleaning",taskId:32,
+    phrases:["window washing interior","clean windows inside"],exclude:["exterior","outside"]},
+  {id:"window_washing_exterior",label:"Window Washing (Exterior)",category:"Maintenance",taskId:48,
+    phrases:["window washing exterior","clean windows outside"],exclude:["interior","inside"]},
+  {id:"carpet_cleaning",label:"Carpet/Upholstery Cleaning",category:"Cleaning",taskId:33,
+    phrases:["carpet cleaning","upholstery cleaning","clean carpet stains"],exclude:[]},
+  {id:"pest_control",label:"Pest Control Treatment",category:"Pest Control",taskId:51,
+    phrases:["ants in house","roaches","mice in house","rats in house","spiders everywhere","termites","pest problem","bugs everywhere"],exclude:[]},
+  {id:"furniture_moving",label:"Furniture Moving",category:"Moving",taskId:38,
+    phrases:["move furniture","furniture moving single item","help moving couch","move a couch"],exclude:["truck","load","unload"]},
+  {id:"moving_truck_help",label:"Load/Unload Moving Truck",category:"Moving",taskId:39,
+    phrases:["load moving truck","unload moving truck","help with moving truck"],exclude:[]},
+  {id:"junk_removal",label:"Junk Removal",category:"Moving",taskId:40,
+    phrases:["junk removal","haul away junk","remove old furniture","junk hauling"],exclude:[]},
 ];
+
+const CLARIFICATION_GROUPS={
+  toilet_issue:{
+    question:"What best describes the problem?",
+    options:[
+      {label:"Won't flush",intentId:"unclog_toilet"},
+      {label:"Overflowing",intentId:"overflowing_toilet"},
+      {label:"Keeps running",intentId:"running_toilet"},
+      {label:"Water leaking",intentId:"leaking_toilet"},
+      {label:"Something else",intentId:null},
+    ],
+  },
+};
+
+// Scoring: word-level overlap weighted by inverse document frequency (a
+// word that appears in many intents' phrase lists — "toilet", "water" —
+// counts for much less than a word specific to one or two intents) feeds
+// into a directly interpretable confidence tier, rather than a raw score
+// normalized against a self-computed ceiling — an intent whose own phrases
+// happen to overlap each other (e.g. "lights flicker" is a substring of
+// "lights flickering") would otherwise get an inconsistently inflated
+// ceiling relative to intents with sparser phrase lists, quietly
+// mis-scoring real queries. An exact phrase match is unambiguous (100%);
+// containing a known phrase's content words (in any order, with filler
+// words allowed anywhere — real users rarely type a stored phrase
+// verbatim, e.g. "i need my lawn mowed" vs. the stored "lawn mowing") is
+// strong signal on its own (80-100%, nudged by word specificity);
+// word-overlap with no real phrase match is capped well below high
+// confidence — this is what actually enforces "a single word can never
+// dominate a result on its own." A lightweight suffix-based stem (not a
+// full stemmer, just enough for common English inflections) lets "mowed"
+// match stored "mowing", "leaking" match stored "leak", etc.
+const _STOP_WORDS=new Set(["a","an","the","is","are","was","were","my","your","his","her","its","our","their","and","or","but","with","without","for","of","to","in","on","at","from","by","this","that","these","those","it","its","i","me","we","us","you","he","she","they","them","not","no","so","up","down","out","just","really","very","quite","kind","sort","some","any","all","problem","issue","trouble","having","got","have","has"]);
+function _stem(w){
+  if(w.length<=3) return w;
+  if(w.endsWith("ies")&&w.length>4) return w.slice(0,-3)+"y";
+  if(w.endsWith("ing")&&w.length>5) return w.slice(0,-3);
+  if(w.endsWith("ed")&&w.length>4) return w.slice(0,-2);
+  if(w.endsWith("es")&&w.length>4) return w.slice(0,-2);
+  if(w.endsWith("s")&&!w.endsWith("ss")&&w.length>3) return w.slice(0,-1);
+  return w;
+}
+function _tokenize(s){ return (s||"").toLowerCase().replace(/[^a-z0-9\s]/g," ").split(/\s+/).filter(w=>w&&!_STOP_WORDS.has(w)).map(_stem); }
+const _intentPhraseWordSets=INTENT_LIBRARY.map(intent=>intent.phrases.map(p=>new Set(_tokenize(p))));
+const _intentWordSets=_intentPhraseWordSets.map(phraseSets=>{
+  const words=new Set();
+  phraseSets.forEach(set=>set.forEach(w=>words.add(w)));
+  return words;
+});
+const _docFreq=(()=>{
+  const df={};
+  _intentWordSets.forEach(set=>{ set.forEach(w=>{ df[w]=(df[w]||0)+1; }); });
+  return df;
+})();
+const _excludeWordSets=INTENT_LIBRARY.map(intent=>intent.exclude.map(ex=>new Set(_tokenize(ex))));
+function _confidenceFor(query,queryWordSet,intent,wordSet,phraseWordSets,excludeWordSets){
+  const isExcluded = excludeWordSets.some(ews=>ews.size>0&&[...ews].every(w=>queryWordSet.has(w)));
+  if(isExcluded) return 0; // hard veto
+
+  if(intent.phrases.some(p=>p===query)) return 100; // exact known phrasing
+
+  let wordScore=0;
+  queryWordSet.forEach(w=>{ if(wordSet.has(w)) wordScore += 1/(_docFreq[w]||1); });
+  const wordRatio = queryWordSet.size>0 ? Math.min(1, wordScore/queryWordSet.size) : 0;
+
+  const containsKnownPhrase = phraseWordSets.some(pws=>pws.size>0&&[...pws].every(w=>queryWordSet.has(w)));
+  if(containsKnownPhrase) return Math.round(Math.min(100, 80 + wordRatio*20));
+
+  return Math.round(Math.min(65, wordRatio*65));
+}
+
+// The single swappable entry point — a future AI/NLP service replaces
+// only this function's internals. Same contract: a query string in,
+// {tier, matches, clarification} out.
+function matchRepairIntent(query){
+  const q=(query||"").toLowerCase().trim();
+  if(!q) return {tier:"none",matches:[],clarification:null};
+  const qWordSet=new Set(_tokenize(q));
+  const scored=INTENT_LIBRARY.map((intent,i)=>({
+    intent,confidence:_confidenceFor(q,qWordSet,intent,_intentWordSets[i],_intentPhraseWordSets[i],_excludeWordSets[i]),
+  })).filter(m=>m.confidence>0).sort((a,b)=>b.confidence-a.confidence);
+
+  const matches=scored.map(({intent,confidence})=>({
+    intentId:intent.id,label:intent.label,category:intent.category,taskId:intent.taskId,confidence,
+  }));
+
+  if(matches.length===0) return {tier:"low",matches:[],clarification:null};
+
+  const top=matches[0];
+  const second=matches[1];
+  const tooClose = second && (top.confidence-second.confidence)<20;
+
+  // Clarify only when genuinely needed: several sibling intents from the
+  // same clarify group are close enough that guessing would be a real risk.
+  const topIntent=INTENT_LIBRARY.find(i=>i.id===top.intentId);
+  if(topIntent?.clarifyGroup && (top.confidence<70 || tooClose)){
+    const siblingsInTop=matches.slice(0,4).filter(m=>{
+      const mi=INTENT_LIBRARY.find(i=>i.id===m.intentId);
+      return mi?.clarifyGroup===topIntent.clarifyGroup;
+    });
+    if(siblingsInTop.length>=2){
+      return {tier:"low",matches,clarification:CLARIFICATION_GROUPS[topIntent.clarifyGroup]||null};
+    }
+  }
+
+  if(top.confidence>=70 && !tooClose) return {tier:"high",matches:matches.slice(0,3)};
+  if(top.confidence>=35) return {tier:"medium",matches:matches.slice(0,3)};
+  return {tier:"low",matches:matches.slice(0,3),clarification:null};
+}
+
 const JOB_CATS=[...CATS.filter(c=>c!=="All"),"Other"];
 
 // Simplified home screen entry tiles — each maps to a group of categories
@@ -997,24 +1302,14 @@ export default function App(){
   const customTask  = ctitle?{id:null,e:"🔧",n:ctitle,p:parseInt(cprice)||0,t:"Varies",c:ccat}:null;
   const currentTask = browsedTask||customTask;
   const total       = currentTask?currentTask.p+surge+(emergency?EMERGENCY_FEE:0):0;
-  // Symptom-to-category search — lets people search by PROBLEM ("water
-  // under sink") instead of needing to know the right service name. This
-  // function is the ONLY thing a future AI/NLP replacement would need to
-  // swap out — same contract (query string in, array of relevant category
-  // names out), every caller stays unchanged.
-  const matchSymptomToCategories=(query)=>{
-    const ql=query.toLowerCase().trim();
-    if(!ql)return [];
-    const matched=new Set();
-    SYMPTOM_KEYWORDS.forEach(({cats,keywords})=>{
-      if(keywords.some(k=>ql.includes(k)))cats.forEach(c=>matched.add(c));
-    });
-    return Array.from(matched);
-  };
-  const symptomCats=matchSymptomToCategories(q);
+  // Search-by-symptom now runs through matchRepairIntent() (module-level,
+  // see INTENT_LIBRARY above) instead of category-level keywords. Category
+  // browsing via the chips below is completely unaffected — it never
+  // touches intent matching at all, only a live query does.
+  const intentResult = q ? matchRepairIntent(q) : {tier:"none",matches:[],clarification:null};
   const items       = TASKS.filter(t=>{
     const passCat = catGroup ? catGroup.cats.includes(t.c) : (cat==="All"||t.c===cat);
-    const passQ   = !q||t.n.toLowerCase().includes(q.toLowerCase())||symptomCats.includes(t.c);
+    const passQ   = !q||t.n.toLowerCase().includes(q.toLowerCase());
     return passCat&&passQ;
   });
 
@@ -1751,12 +2046,77 @@ export default function App(){
         </div>
         <div style={{padding:"4px 20px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontWeight:700,fontSize:15,color:TX}}>{q?`"${q}"`:catGroup?catGroup.label:cat==="All"?"All services":cat}</span>
-          <span style={{fontSize:12,color:TM}}>{items.length} services</span>
+          {!q&&<span style={{fontSize:12,color:TM}}>{items.length} services</span>}
         </div>
-        {q&&symptomCats.length>0&&(
-          <div style={{padding:"0 20px 12px",fontSize:12,color:TS}}>Matched to {symptomCats.join(", ")}</div>
-        )}
-        {items.length>0?(
+        {q?(
+          intentResult.tier==="high"?(()=>{
+            const top=intentResult.matches[0];
+            const task=TASKS.find(t=>t.id===top.taskId);
+            return (
+              <div style={{padding:"0 20px 24px"}}>
+                <div style={{fontSize:11,fontWeight:700,color:TS,letterSpacing:.4,textTransform:"uppercase",marginBottom:10}}>Recommended for you</div>
+                {task&&(
+                  <div onClick={()=>openTask(task.id)} style={{background:W,borderRadius:20,padding:18,cursor:"pointer",boxShadow:"0 4px 16px rgba(28,43,58,.1)",border:`2px solid ${AM}`,marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
+                    <div style={{fontSize:38,lineHeight:1,flexShrink:0}}>{task.e}</div>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:2}}>{task.n}</div>
+                      <div style={{fontSize:12,color:TS}}>Matched to "{top.label}"</div>
+                    </div>
+                    <div style={{fontWeight:800,fontSize:19,color:AM,flexShrink:0}}>${task.p}</div>
+                  </div>
+                )}
+                <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:0}}>Not what you meant? Post a custom job instead</button>
+              </div>
+            );
+          })():intentResult.tier==="medium"?(
+            <div style={{padding:"0 20px 24px"}}>
+              <div style={{fontSize:11,fontWeight:700,color:TS,letterSpacing:.4,textTransform:"uppercase",marginBottom:10}}>A few likely matches</div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
+                {intentResult.matches.map(m=>{
+                  const task=TASKS.find(t=>t.id===m.taskId);
+                  if(!task)return null;
+                  return (
+                    <div key={m.intentId} onClick={()=>openTask(task.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                      <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{task.e}</div>
+                      <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{task.n}</div>
+                      <div style={{fontWeight:800,fontSize:20,color:AM}}>${task.p}</div>
+                    </div>
+                  );
+                })}
+                <div onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+                  style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
+                  <div style={{fontSize:28,marginBottom:8}}>✏️</div>
+                  <div style={{fontWeight:700,fontSize:13,color:W,lineHeight:1.3,marginBottom:4}}>Post a custom job</div>
+                  <div style={{fontSize:11,color:"rgba(255,255,255,.55)"}}>Don't see what you need?</div>
+                </div>
+              </div>
+            </div>
+          ):intentResult.clarification?(
+            <div style={{padding:"0 20px 24px"}}>
+              <div style={{background:W,borderRadius:20,padding:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:14}}>{intentResult.clarification.question}</div>
+                {intentResult.clarification.options.map(opt=>(
+                  <button key={opt.label} onClick={()=>{
+                    if(opt.intentId){
+                      const intent=INTENT_LIBRARY.find(i=>i.id===opt.intentId);
+                      const task=intent&&TASKS.find(t=>t.id===intent.taskId);
+                      if(task){ openTask(task.id); return; }
+                    }
+                    setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");
+                  }} style={{width:"100%",textAlign:"left",padding:"13px 16px",borderRadius:12,border:`1px solid ${BD}`,background:BG,color:TX,fontWeight:600,fontSize:14,cursor:"pointer",marginBottom:8}}>{opt.label}</button>
+                ))}
+              </div>
+            </div>
+          ):(
+            <div style={{textAlign:"center",padding:"40px 20px"}}>
+              <div style={{fontSize:48,marginBottom:12}}>🔍</div>
+              <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No exact matches for "{q}"</div>
+              <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:260,marginLeft:"auto",marginRight:"auto"}}>Describe what's going on and we'll match you with the right pro.</div>
+              <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:W,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
+              <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:"none",border:"none",color:TS,fontWeight:600,cursor:"pointer",fontSize:13,textDecoration:"underline"}}>Clear filters</button>
+            </div>
+          )
+        ):items.length>0?(
           <div style={{padding:"0 20px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,paddingBottom:24}}>
             {items.map(t=>(
               <div key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
@@ -1777,10 +2137,8 @@ export default function App(){
         ):(
           <div style={{textAlign:"center",padding:"40px 20px"}}>
             <div style={{fontSize:48,marginBottom:12}}>🔍</div>
-            <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No exact matches for "{q}"</div>
-            <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:260,marginLeft:"auto",marginRight:"auto"}}>Describe what's going on and we'll match you with the right pro.</div>
-            <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:W,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
-            <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:"none",border:"none",color:TS,fontWeight:600,cursor:"pointer",fontSize:13,textDecoration:"underline"}}>Clear filters</button>
+            <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No services found</div>
+            <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:AM,border:"none",color:W,padding:"10px 20px",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14}}>Clear filters</button>
           </div>
         )}
       </div>
