@@ -18,9 +18,10 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black"/>
 <meta name="apple-mobile-web-app-title" content="Haven"/>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.development.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.development.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/4.2.1/jspdf.umd.min.js"></script>
 </head>
 <body style="margin:0;background:#888">
 <div id="root"></div>
@@ -110,13 +111,13 @@ const TASKS=[
   {id:58,e:"🚪",n:"Door repair",           p:79, t:"Varies", c:"Repair"},
 ];
 const PROS=[
-  {i:"MT",n:"Marcus T.",r:4.97,j:543,s:"TV Mount Pro",   col:"#1E40AF",
+  {i:"MT",n:"Marcus T.",r:4.97,j:543,s:"TV Mount Pro",   col:"#1E40AF",memberSince:"2019",
     trustScore:98,onTimeRate:99,hireAgainRate:97,completionRate:99,responseTime:"4 min",
     badges:["Identity verified","Background checked","Insured"]},
-  {i:"DR",n:"David R.", r:4.93,j:312,s:"Assembly Pro",   col:"#065F46",
+  {i:"DR",n:"David R.", r:4.93,j:312,s:"Assembly Pro",   col:"#065F46",memberSince:"2020",
     trustScore:95,onTimeRate:96,hireAgainRate:94,completionRate:98,responseTime:"7 min",
     badges:["Identity verified","Background checked"]},
-  {i:"SK",n:"Sarah K.", r:4.99,j:189,s:"Smart Home Pro", col:"#5B21B6",
+  {i:"SK",n:"Sarah K.", r:4.99,j:189,s:"Smart Home Pro", col:"#5B21B6",memberSince:"2021",
     trustScore:99,onTimeRate:100,hireAgainRate:98,completionRate:99,responseTime:"3 min",
     badges:["Identity verified","Background checked","Insured","Licensed"]},
 ];
@@ -137,6 +138,106 @@ const EMERGENCY_TIME_PREFS=[
 ];
 const ALL_TIME_PREFS=[...TIME_PREFS,...EMERGENCY_TIME_PREFS];
 const CATS=["All","Assembly","Installation","Smart Home","Plumbing","Electrical","Painting","Flooring","Cleaning","Landscaping","Moving","Repair","Maintenance","Appliance","Pest Control"];
+// Simulated job-completion detail (work performed, materials, pro notes),
+// keyed by category so a plumbing job and an electrical job get distinct,
+// contextually appropriate content rather than generic boilerplate — same
+// spirit as PRO_REPLIES being a real (if simulated) pool rather than one
+// fixed string. IMPORTANT: material costs are drawn FROM the task's
+// already-agreed price (see getCompletionDetails' cap below), never added
+// on top of it — a receipt must never show a higher total than what the
+// customer actually approved at booking time.
+const COMPLETION_TEMPLATES={
+  Plumbing:[{
+    workPerformed:["Diagnosed the source of the issue","Replaced the affected component","Tested water pressure and flow","Checked for leaks at all connections","Cleaned the work area"],
+    materialsTemplate:[{description:"Replacement cartridge",qty:1,amount:28},{description:"Compression fitting",qty:2,amount:9}],
+    notes:"Found the original part had worn past a simple repair, so replaced it outright rather than patching — should hold up long-term. Tested under full pressure before wrapping up; no drips at any connection.",
+  }],
+  Electrical:[{
+    workPerformed:["Shut off power at the breaker before starting","Diagnosed the wiring issue","Replaced the faulty component","Tested the circuit under load","Restored power and confirmed normal operation"],
+    materialsTemplate:[{description:"Outlet/switch (code-rated)",qty:1,amount:14},{description:"Wire nuts and connectors",qty:1,amount:6}],
+    notes:"Everything tested normal after the repair — no flickering, no warm-to-the-touch spots. Recommend keeping an eye on it for the next week just as routine follow-up, but I don't expect any issues.",
+  }],
+  Appliance:[{
+    workPerformed:["Diagnosed the malfunction","Replaced the failed part","Ran a full test cycle","Checked for leaks and unusual noise","Confirmed normal operation before leaving"],
+    materialsTemplate:[{description:"Replacement part (OEM-equivalent)",qty:1,amount:32}],
+    notes:"Ran a complete cycle after the repair to confirm everything's back to normal — no error codes, no unusual noise. Should be good to go.",
+  }],
+  Installation:[{
+    workPerformed:["Confirmed placement and measurements","Completed the installation","Secured all mounting points","Tested for stability and proper function","Cleaned up packaging and work area"],
+    materialsTemplate:[{description:"Mounting hardware kit",qty:1,amount:18}],
+    notes:"Double-checked everything was level and securely mounted before finishing. Let me know if you'd like anything adjusted.",
+  }],
+  Assembly:[{
+    workPerformed:["Unpacked and inventoried all parts","Assembled per manufacturer specifications","Tightened and checked all hardware","Tested stability","Cleared away packaging"],
+    materialsTemplate:[],
+    notes:"All hardware fully tightened and checked for stability. Packaging removed — let me know if you'd like it kept for a return.",
+  }],
+  Cleaning:[{
+    workPerformed:["Dusted and wiped all surfaces","Vacuumed and mopped floors","Cleaned kitchen and bathroom fixtures","Emptied trash and replaced liners","Final walkthrough for quality"],
+    materialsTemplate:[],
+    notes:"Focused extra attention on the kitchen and bathrooms as usual. Everything's ready to go.",
+  }],
+  Landscaping:[{
+    workPerformed:["Assessed the yard/area","Completed the requested work","Cleared and bagged debris","Edged and tidied borders","Final walkthrough"],
+    materialsTemplate:[],
+    notes:"Yard's in good shape. Let me know if you'd like this set up as a recurring visit.",
+  }],
+  Painting:[{
+    workPerformed:["Prepped surfaces (patched, sanded, taped)","Applied primer where needed","Applied two coats of paint","Removed tape and protected surfaces","Cleaned up work area"],
+    materialsTemplate:[{description:"Paint (per gallon)",qty:1,amount:34},{description:"Painter's tape and supplies",qty:1,amount:7}],
+    notes:"Two full coats for even coverage. Give it about 24 hours before hanging anything or wiping down the walls.",
+  }],
+  Flooring:[{
+    workPerformed:["Inspected the affected area","Completed the repair/installation","Checked for levelness and secure fit","Cleaned the area","Final inspection"],
+    materialsTemplate:[{description:"Flooring materials/adhesive",qty:1,amount:22}],
+    notes:"Everything's level and secure. Give any adhesive a full 24 hours before heavy foot traffic in that area.",
+  }],
+  "Smart Home":[{
+    workPerformed:["Confirmed compatibility and placement","Completed the installation and wiring","Paired the device with your network/app","Tested all functions","Walked through basic usage"],
+    materialsTemplate:[{description:"Mounting/wiring hardware",qty:1,amount:12}],
+    notes:"Device is paired and tested — all functions working as expected. Happy to answer any questions about the app setup.",
+  }],
+  Maintenance:[{
+    workPerformed:["Inspected the system/area","Performed the requested maintenance","Checked for any additional issues","Tested normal operation","Cleaned up work area"],
+    materialsTemplate:[{description:"Filter/consumable part",qty:1,amount:15}],
+    notes:"Everything's in good working order. I noted the date so you'll have a record for next time this is due.",
+  }],
+  "Pest Control":[{
+    workPerformed:["Inspected the affected areas","Identified entry points and activity","Applied treatment","Sealed accessible entry points where possible","Provided prevention recommendations"],
+    materialsTemplate:[{description:"Treatment product",qty:1,amount:19}],
+    notes:"Treated all active areas and the main entry points I could find. You may see some activity for a few days as the treatment takes effect — that's normal.",
+  }],
+  Moving:[{
+    workPerformed:["Confirmed the scope with you before starting","Carefully wrapped/protected items as needed","Completed the move","Placed items in requested locations","Final walkthrough"],
+    materialsTemplate:[],
+    notes:"Everything moved without any damage. Let me know if anything needs to be repositioned.",
+  }],
+  Repair:[{
+    workPerformed:["Diagnosed the issue","Completed the repair","Tested for proper function","Inspected surrounding area for related wear","Cleaned up work area"],
+    materialsTemplate:[{description:"Repair parts/hardware",qty:1,amount:16}],
+    notes:"Fixed and tested — working normally now. Let me know if you notice anything else in that area.",
+  }],
+};
+const DEFAULT_COMPLETION_TEMPLATE={
+  workPerformed:["Assessed the job on arrival","Completed the requested work","Tested the result","Cleaned up the work area"],
+  materialsTemplate:[],
+  notes:"Completed as requested — let me know if you have any questions.",
+};
+function getCompletionDetails(category,taskPrice){
+  const templates=COMPLETION_TEMPLATES[category];
+  const chosen=(templates&&templates.length)?templates[Math.floor(Math.random()*templates.length)]:DEFAULT_COMPLETION_TEMPLATE;
+  const maxMaterialsCost=Math.max(0,Math.floor((taskPrice||0)*0.35));
+  const materials=[]; let materialsCost=0;
+  for(const m of chosen.materialsTemplate){
+    if(materialsCost+m.amount<=maxMaterialsCost){ materials.push({...m}); materialsCost+=m.amount; }
+  }
+  return {
+    workPerformed:chosen.workPerformed,
+    materials, // materials cost always drawn FROM taskPrice, never added to it
+    laborAmount:(taskPrice||0)-materialsCost,
+    proNotes:chosen.notes,
+  };
+}
 // Plain keyword table for now — deliberately kept as data, not logic, so a
 // future AI/NLP service is a drop-in replacement for matchSymptomToCategories
 // without any caller needing to change.
@@ -736,6 +837,7 @@ function makeJob({
   tipAmount=0, tipStatus="notAdded", tippedAt=null, // notAdded | processing | paid | failed
   acceptedAt=null, // when status became en_route — anchors the arrival-window/ETA simulation
   jobPreferences=[], // snapshot of enabled preference labels at booking time — the shape a future Pro-app surface would read
+  workPerformed=[], materials=[], proNotes="", // populated once, at completion — see getCompletionDetails()
 }={}){
   return {
     id:Date.now(), // known limitation: two jobs in the same millisecond would collide — impossible via UI, fix when a backend exists
@@ -746,6 +848,7 @@ function makeJob({
     tipAmount, tipStatus, tippedAt,
     acceptedAt,
     jobPreferences,
+    workPerformed, materials, proNotes,
   };
 }
 
@@ -1174,7 +1277,7 @@ function App(){
   const [diagResult,setDiagResult] = useState(null);
   const [navFrom,setNavFrom] = useState({}); // v0.13 — per-screen origin {scr,tab}, replaces cameFrom/proProfileFrom/receiptFrom/helpFrom
   // Profile
-  const DEFAULT_PROFILE={name:"Jane Doe",bio:"",photo:null,accountCreatedAt:Date.now()};
+  const DEFAULT_PROFILE={name:"Jane Doe",bio:"",photo:null,accountCreatedAt:Date.now(),email:"jane.doe@email.com",phone:"(415) 555-0142"};
   const [profile,setProfile] = usePersistedState("haven_profile",DEFAULT_PROFILE,{
     version:1,
     validate:v=>{
@@ -1187,6 +1290,8 @@ function App(){
         // this field existed get a fixed creation timestamp assigned once
         // (now), which then persists — never regenerated on later boots.
         accountCreatedAt:typeof v.accountCreatedAt==="number"?v.accountCreatedAt:Date.now(),
+        email:typeof v.email==="string"&&v.email?v.email:DEFAULT_PROFILE.email,
+        phone:typeof v.phone==="string"&&v.phone?v.phone:DEFAULT_PROFILE.phone,
       };
     },
   });
@@ -1724,6 +1829,53 @@ function App(){
     const t2=setTimeout(()=>setHighlightField(null),2200); // brief highlight, then clear
     return ()=>{ clearTimeout(t1); clearTimeout(t2); };
   },[scr,highlightField]);
+  // Inline editing for the My Home overview tiles — writes directly through
+  // the same setAddresses used by the full Edit Home form (saveAddressForm,
+  // below), so there is exactly one canonical property record regardless of
+  // which editing path was used. Only one tile edits at a time; switching
+  // tiles attempts to save the field being left (if it currently validates)
+  // or safely discards it (if not) — never a silent bad save, never a
+  // navigation block.
+  const [inlineEditField,setInlineEditField]=useState(null); // null | "propertyType" | "yearBuilt" | "sqft" | "layout"
+  const [inlineEditDraft,setInlineEditDraft]=useState({});
+  const [inlineEditError,setInlineEditError]=useState("");
+  const validateSqft=(raw)=>{
+    const trimmed=String(raw).trim();
+    if(!trimmed) return {valid:false,error:"Enter a square footage."};
+    if(!/^\d+$/.test(trimmed)) return {valid:false,error:"Numbers only, please."};
+    const n=parseInt(trimmed,10);
+    if(n<=0) return {valid:false,error:"Must be greater than 0."};
+    if(n>50000) return {valid:false,error:"That doesn't look right — try again."};
+    return {valid:true,value:String(n)};
+  };
+  const commitInlineEdit=()=>{
+    if(!inlineEditField||!primaryHome) return true;
+    let patch=null;
+    if(inlineEditField==="sqft"){
+      const r=validateSqft(inlineEditDraft.sqft);
+      if(!r.valid){ setInlineEditError(r.error); return false; }
+      patch={sqft:r.value};
+    }else if(inlineEditField==="layout"){
+      patch={beds:inlineEditDraft.beds||primaryHome.beds,baths:inlineEditDraft.baths||primaryHome.baths};
+    }else{
+      patch={[inlineEditField]:inlineEditDraft[inlineEditField]??primaryHome[inlineEditField]};
+    }
+    setAddresses(as=>as.map(a=>a.id===primaryHome.id?{...a,...patch}:a));
+    setInlineEditField(null);setInlineEditDraft({});setInlineEditError("");
+    return true;
+  };
+  const cancelInlineEdit=()=>{ setInlineEditField(null);setInlineEditDraft({});setInlineEditError(""); };
+  const startInlineEdit=(fieldKey)=>{
+    if(inlineEditField&&inlineEditField!==fieldKey){
+      const ok=commitInlineEdit();
+      if(!ok) cancelInlineEdit(); // couldn't save what was there — discard rather than block or silently persist bad data
+    }
+    if(!primaryHome) return;
+    setInlineEditField(fieldKey);
+    setInlineEditError("");
+    if(fieldKey==="layout") setInlineEditDraft({beds:primaryHome.beds,baths:primaryHome.baths});
+    else setInlineEditDraft({[fieldKey]:primaryHome[fieldKey]});
+  };
   const openAddressForm=(addr,targetField=null)=>{
     setEditingAddressId(addr?addr.id:null);
     setDraftAddress(addr?{...addr}:{...emptyDraftAddress});
@@ -1846,7 +1998,14 @@ function App(){
     const i=SF.indexOf(vj.status);
     if(i<SF.length-1){
       const next=SF[i+1];
-      updateJob(vjid, next==="complete" ? {status:next,completedAt:Date.now()} : {status:next});
+      if(next==="complete"){
+        const cat=vj.taskId?(TASKS.find(t=>t.id===vj.taskId)?.c):vj.custom?.cat;
+        const price=vjTask?vjTask.p:0;
+        const {workPerformed,materials,proNotes}=getCompletionDetails(cat,price);
+        updateJob(vjid,{status:next,completedAt:Date.now(),workPerformed,materials,proNotes});
+      }else{
+        updateJob(vjid, {status:next});
+      }
       handleJobTransition(vjid,next,vj.pro?.n||"Your pro");
     }
   };
@@ -2667,15 +2826,66 @@ function App(){
             )}
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            {[["Home type",primaryHome.propertyType||"Not set","propertyType"],["Year built",primaryHome.yearBuilt||"Not set","yearBuilt"],["Square footage",primaryHome.sqft?`${primaryHome.sqft} sqft`:"Not set","sqft"],["Layout",formatLayout(primaryHome),"beds"]].map(([l,v,fieldKey])=>(
-              <button key={l} onClick={()=>openAddressForm(primaryHome,fieldKey)} aria-label={`${l}: ${v}. Tap to edit.`} style={{textAlign:"left",font:"inherit",background:BG,border:"none",borderRadius:12,padding:"10px 12px",cursor:"pointer",position:"relative"}}>
-                <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:2,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                  <span>{l}</span>
-                  <span style={{color:TM,fontSize:11}}>✎</span>
-                </div>
-                <div style={{fontSize:13,fontWeight:700,color:TX}}>{v}</div>
-              </button>
-            ))}
+            {[["Home type",primaryHome.propertyType||"Not set","propertyType"],["Year built",primaryHome.yearBuilt||"Not set","yearBuilt"],["Square footage",primaryHome.sqft?`${primaryHome.sqft} sqft`:"Not set","sqft"],["Layout",formatLayout(primaryHome),"layout"]].map(([l,v,fieldKey])=>{
+              const isEditing=inlineEditField===fieldKey;
+              if(isEditing){
+                const inputStyle={width:"100%",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 10px",fontSize:16,fontWeight:600,color:TX,background:W,outline:"none",appearance:"none",WebkitAppearance:"none"};
+                return (
+                  <div key={l} style={{gridColumn:fieldKey==="layout"?"1 / -1":"auto",background:BG,border:`2px solid ${AM}`,borderRadius:12,padding:"10px 12px"}}>
+                    <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:6}}>{l}</div>
+                    {fieldKey==="propertyType"&&(
+                      <select value={inlineEditDraft.propertyType||""} onChange={e=>setInlineEditDraft({propertyType:e.target.value})} aria-label="Home type" style={{...inputStyle,marginBottom:8}}>
+                        <option value="">Not set</option>
+                        {HOME_TYPES.map(o=><option key={o} value={o}>{o}</option>)}
+                      </select>
+                    )}
+                    {fieldKey==="yearBuilt"&&(
+                      <select value={inlineEditDraft.yearBuilt||""} onChange={e=>setInlineEditDraft({yearBuilt:e.target.value})} aria-label="Year built" style={{...inputStyle,marginBottom:8}}>
+                        <option value="">Not set</option>
+                        {YEAR_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
+                      </select>
+                    )}
+                    {fieldKey==="sqft"&&(
+                      <>
+                        <input value={inlineEditDraft.sqft??""} onChange={e=>{const digits=e.target.value.replace(/[^\d]/g,"");setInlineEditDraft({sqft:digits});if(inlineEditError)setInlineEditError("");}} inputMode="numeric" aria-label="Square footage" aria-invalid={!!inlineEditError} aria-describedby={inlineEditError?"sqft-inline-error":undefined} placeholder="e.g. 1150" style={{...inputStyle,border:`1px solid ${inlineEditError?"#DC2626":BD}`,marginBottom:inlineEditError?4:8}}/>
+                        {inlineEditError&&<div id="sqft-inline-error" role="alert" style={{fontSize:11,color:"#DC2626",fontWeight:600,marginBottom:6}}>{inlineEditError}</div>}
+                      </>
+                    )}
+                    {fieldKey==="layout"&&(
+                      <div style={{display:"flex",gap:8,marginBottom:8}}>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:9,color:TM,fontWeight:600,marginBottom:3}}>Bedrooms</div>
+                          <select value={inlineEditDraft.beds||""} onChange={e=>setInlineEditDraft(d=>({...d,beds:e.target.value}))} aria-label="Bedrooms" style={inputStyle}>
+                            <option value="">Not set</option>
+                            {BEDROOM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
+                          </select>
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:9,color:TM,fontWeight:600,marginBottom:3}}>Bathrooms</div>
+                          <select value={inlineEditDraft.baths||""} onChange={e=>setInlineEditDraft(d=>({...d,baths:e.target.value}))} aria-label="Bathrooms" style={inputStyle}>
+                            <option value="">Not set</option>
+                            {BATHROOM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={commitInlineEdit} aria-label={`Save ${l}`} style={{flex:1,padding:"9px 0",borderRadius:8,border:"none",background:AM,color:W,fontWeight:700,fontSize:13,cursor:"pointer"}}>✓ Save</button>
+                      <button onClick={cancelInlineEdit} aria-label={`Cancel editing ${l}`} style={{flex:1,padding:"9px 0",borderRadius:8,border:`1px solid ${BD}`,background:"transparent",color:TS,fontWeight:700,fontSize:13,cursor:"pointer"}}>✕ Cancel</button>
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <button key={l} onClick={()=>startInlineEdit(fieldKey)} aria-label={`${l}: ${v}. Tap to edit.`} style={{textAlign:"left",font:"inherit",background:BG,border:"none",borderRadius:12,padding:"10px 12px",cursor:"pointer",position:"relative"}}>
+                  <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:2,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                    <span>{l}</span>
+                    <span style={{color:TM,fontSize:11}}>✎</span>
+                  </div>
+                  <div style={{fontSize:13,fontWeight:700,color:TX}}>{v}</div>
+                </button>
+              );
+            })}
           </div>
         </div>
 
@@ -2872,6 +3082,14 @@ function App(){
         const printThisReceipt=()=>{ openReceipt(job.id); setListShareFallbackJobId(null); setTimeout(()=>{ try{window.print();}catch{} },50); };
         const downloadThisReceipt=()=>{
           try{
+            const pdfResult=generateReceiptPDF(job);
+            if(pdfResult){
+              pdfResult.doc.save(`Haven-Receipt-${pdfResult.receiptId}.pdf`);
+              setListShareFallbackJobId(null);
+              return;
+            }
+          }catch{}
+          try{
             const {text,receiptId}=buildReceiptShareText(job);
             const blob=new Blob([text],{type:"text/plain"});
             const url=URL.createObjectURL(blob);
@@ -2915,6 +3133,201 @@ function App(){
   // — takes a job directly (not the currently-viewed vj) so both the
   // individual Receipt screen and the Receipts-list Share action produce
   // identical output without duplicating this formatting logic.
+  // ── PDF RECEIPT GENERATION ──────────────────────────────────────────────
+  // True vector PDF via jsPDF (loaded from CDN, window.jspdf.jsPDF — same
+  // loading convention as React/Babel). This is entirely separate from the
+  // in-app receipt screen below, which is intentionally unchanged. Every
+  // value drawn here is read from the job/profile/pro records passed in —
+  // nothing about a specific receipt is hardcoded in this function.
+  const generateReceiptPDF=(job)=>{
+    if(typeof window==="undefined"||!window.jspdf) return null;
+    const { jsPDF }=window.jspdf;
+    const jt=job.taskId?TASKS.find(t=>t.id===job.taskId):job.custom?{n:job.custom.title,p:job.custom.price,c:job.custom.cat}:null;
+    const category=job.taskId?(TASKS.find(t=>t.id===job.taskId)?.c):job.custom?.cat;
+    const jPro=job.pro||PROS[0];
+    const laborTotal=jt?jt.p:(job.custom?.price||0);
+    const materials=Array.isArray(job.materials)?job.materials:[];
+    const materialsCost=materials.reduce((s,m)=>s+m.amount*(m.qty||1),0);
+    const laborLine=laborTotal-materialsCost; // materials are drawn FROM the agreed price, never added on top
+    const grandTotal=laborTotal+(job.surge||0)+(job.emergencyFee||0)+(job.tipAmount>0?job.tipAmount:0);
+    const dateObj=new Date(job.completedAt||job.id);
+    const dateStr=dateObj.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
+    const receiptId=`HVN-${String(job.id).slice(-6).toUpperCase()}`;
+    // Deterministic, derived from the real job id — not stored separately,
+    // not randomly regenerated on each export.
+    const transactionId=`TXN-${String(job.id).slice(-8).toUpperCase()}`;
+
+    const doc=new jsPDF({unit:"pt",format:"letter"});
+    const PAGE_W=doc.internal.pageSize.getWidth();
+    const PAGE_H=doc.internal.pageSize.getHeight();
+    const MARGIN=54;
+    const CONTENT_W=PAGE_W-MARGIN*2;
+    let y=MARGIN;
+
+    const INK=[28,43,58], MUTED=[95,110,122], FAINT=[154,170,182], DIVIDER=[222,217,207], GREEN=[15,120,80], GREEN_BG=[228,246,238];
+    const setInk=()=>doc.setTextColor(INK[0],INK[1],INK[2]);
+    const setMuted=()=>doc.setTextColor(MUTED[0],MUTED[1],MUTED[2]);
+    const setFaint=()=>doc.setTextColor(FAINT[0],FAINT[1],FAINT[2]);
+    const divider=(yy,weight=0.75)=>{ doc.setDrawColor(DIVIDER[0],DIVIDER[1],DIVIDER[2]); doc.setLineWidth(weight); doc.line(MARGIN,yy,PAGE_W-MARGIN,yy); };
+    const label=(text,x,yy)=>{ doc.setFont("helvetica","bold"); doc.setFontSize(7.5); setFaint(); doc.text(text.toUpperCase(),x,yy,{charSpace:0.6}); };
+
+    const ensureSpace=(needed)=>{
+      if(y+needed>PAGE_H-MARGIN-40){ // leave room for the footer band
+        doc.addPage(); y=MARGIN;
+        return true;
+      }
+      return false;
+    };
+
+    // === HEADER ===
+    doc.setFont("helvetica","bold"); doc.setFontSize(19); setInk();
+    doc.text("HAVEN",MARGIN,y+16);
+    doc.setFont("helvetica","normal"); doc.setFontSize(9); setMuted();
+    doc.text("Home Services, Made Simple.",MARGIN,y+30);
+
+    doc.setFont("helvetica","bold"); doc.setFontSize(10.5); setInk();
+    doc.text("SERVICE RECEIPT",PAGE_W-MARGIN,y+12,{align:"right",charSpace:0.6});
+    doc.setFont("helvetica","normal"); doc.setFontSize(8.5); setMuted();
+    doc.text(`Receipt # ${receiptId}`,PAGE_W-MARGIN,y+25,{align:"right"});
+    doc.text(`Date: ${dateStr}`,PAGE_W-MARGIN,y+37,{align:"right"});
+    const pillW=38,pillH=13;
+    doc.setFillColor(GREEN_BG[0],GREEN_BG[1],GREEN_BG[2]);
+    doc.roundedRect(PAGE_W-MARGIN-pillW,y+44,pillW,pillH,3,3,"F");
+    doc.setFont("helvetica","bold"); doc.setFontSize(7.5); doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]);
+    doc.text("PAID",PAGE_W-MARGIN-pillW/2,y+44+pillH/2+2.6,{align:"center",charSpace:0.5});
+
+    y+=72; divider(y); y+=24;
+
+    // === CUSTOMER & PROFESSIONAL (two columns) ===
+    const colGap=20, colW=(CONTENT_W-colGap)/2, rightX=MARGIN+colW+colGap;
+    label("Customer",MARGIN,y); label("Service Professional",rightX,y);
+    const colBlockTop=y+15;
+    y=colBlockTop;
+    doc.setFont("helvetica","bold"); doc.setFontSize(11); setInk();
+    doc.text(profile.name,MARGIN,y); doc.text(jPro.n,rightX,y);
+    y+=15;
+    doc.setFont("helvetica","normal"); doc.setFontSize(9); setMuted();
+    // Left column: address can wrap to multiple lines (long addresses).
+    const addrLines=doc.splitTextToSize(job.addressText||"—",colW);
+    addrLines.forEach((line,i)=>doc.text(line,MARGIN,y+i*11.5));
+    doc.text(profile.email||"—",MARGIN,y+addrLines.length*11.5);
+    doc.text(profile.phone||"—",MARGIN,y+(addrLines.length+1)*11.5);
+    const leftColBottom=y+(addrLines.length+2)*11.5;
+    // Right column: fixed four rows, independent of the left column's
+    // height — a long address can never misalign the professional column.
+    doc.text("Verified Haven Professional",rightX,y);
+    doc.text("Background Checked",rightX,y+11.5);
+    doc.text(`${jPro.r.toFixed(2)} rating (${jPro.j} jobs)`,rightX,y+11.5*2);
+    doc.text(`Member since ${jPro.memberSince||"—"}`,rightX,y+11.5*3);
+    const rightColBottom=y+11.5*4;
+    y=Math.max(leftColBottom,rightColBottom)+16;
+
+    divider(y); y+=22;
+
+    // === SERVICE INFORMATION (four columns) ===
+    const svcColW=CONTENT_W/4;
+    const svcCols=[
+      ["Service", jt?jt.n:(job.custom?.title||"Custom job")],
+      ["Category", category||"—"],
+      ["Property", job.addressLabel||"Home"],
+      ["Date of Service", dateStr],
+    ];
+    svcCols.forEach(([l,v],i)=>{
+      const x=MARGIN+i*svcColW;
+      label(l,x,y);
+    });
+    y+=15;
+    doc.setFont("helvetica","bold"); doc.setFontSize(9.5); setInk();
+    svcCols.forEach(([l,v],i)=>{
+      const x=MARGIN+i*svcColW;
+      const lines=doc.splitTextToSize(v,svcColW-10);
+      lines.slice(0,3).forEach((line,li)=>doc.text(line,x,y+li*11));
+    });
+    y+=32; divider(y); y+=24;
+
+    // === PAYMENT TABLE (the visual focus) ===
+    ensureSpace(120);
+    const qtyColX=MARGIN+CONTENT_W-110, amtColX=MARGIN+CONTENT_W;
+    doc.setFont("helvetica","bold"); doc.setFontSize(9); setInk();
+    doc.text("PAYMENT",MARGIN,y);
+    doc.setFontSize(7.5); setFaint();
+    doc.text("QTY",qtyColX,y,{align:"right"});
+    doc.text("AMOUNT",amtColX,y,{align:"right"});
+    y+=6; divider(y,1); y+=18;
+
+    const rows=[
+      ["Labor",jt?jt.n:(job.custom?.title||"Service"),1,laborLine],
+      ...materials.map(m=>[null,m.description,m.qty||1,m.amount*(m.qty||1)]),
+      ...(job.surge>0?[["Priority","ASAP surge",1,job.surge]]:[]),
+      ...(job.emergency?[["Priority","Emergency response fee",1,job.emergencyFee]]:[]),
+      ...(job.tipAmount>0?[["Tip",`Tip to ${jPro.n}`,1,job.tipAmount]]:[]),
+    ];
+    doc.setFont("helvetica","normal"); doc.setFontSize(9.5);
+    rows.forEach(([kicker,desc,qty,amt])=>{
+      ensureSpace(20);
+      if(kicker){ doc.setFont("helvetica","bold"); setFaint(); doc.setFontSize(7); doc.text(kicker.toUpperCase(),MARGIN,y-9,{charSpace:0.5}); }
+      doc.setFont("helvetica","normal"); doc.setFontSize(9.5); setInk();
+      doc.text(desc,MARGIN,y);
+      setMuted(); doc.text(String(qty),qtyColX,y,{align:"right"});
+      setInk(); doc.text(`$${amt.toFixed(2)}`,amtColX,y,{align:"right"});
+      y+=18;
+    });
+
+    y+=4; divider(y,1); y+=24;
+    ensureSpace(30);
+    doc.setFont("helvetica","bold"); doc.setFontSize(13); setInk();
+    doc.text("TOTAL PAID",MARGIN,y);
+    doc.setFontSize(19);
+    doc.text(`$${grandTotal.toFixed(2)}`,amtColX,y,{align:"right"});
+    y+=34;
+
+    // === WORK PERFORMED ===
+    const workPerformed=Array.isArray(job.workPerformed)?job.workPerformed:[];
+    if(workPerformed.length){
+      ensureSpace(24+workPerformed.length*14);
+      label("Work Performed",MARGIN,y); y+=16;
+      doc.setFont("helvetica","normal"); doc.setFontSize(9.5); setInk();
+      workPerformed.forEach(item=>{
+        ensureSpace(16);
+        doc.text("\u2022",MARGIN,y);
+        const lines=doc.splitTextToSize(item,CONTENT_W-16);
+        lines.forEach((line,li)=>doc.text(line,MARGIN+12,y+li*12.5));
+        y+=lines.length*12.5+3;
+      });
+      y+=12;
+    }
+
+    // === NOTES FROM PROFESSIONAL ===
+    if(job.proNotes){
+      ensureSpace(40);
+      label("Notes from Professional",MARGIN,y); y+=16;
+      doc.setFont("helvetica","normal"); doc.setFontSize(9.5); setInk();
+      const noteLines=doc.splitTextToSize(job.proNotes,CONTENT_W);
+      noteLines.forEach(line=>{
+        ensureSpace(13);
+        doc.text(line,MARGIN,y);
+        y+=13;
+      });
+      y+=14;
+    }
+
+    // === FOOTER (two columns, always at the bottom of the LAST page) ===
+    const footerY=PAGE_H-MARGIN-30;
+    if(y>footerY-10){ doc.addPage(); y=MARGIN; }
+    divider(footerY-14,0.75);
+    doc.setFont("helvetica","bold"); doc.setFontSize(7.5); setFaint();
+    doc.text("QUESTIONS?",MARGIN,footerY);
+    doc.text("RECEIPT DETAILS",rightX,footerY);
+    doc.setFont("helvetica","normal"); doc.setFontSize(8.5); setMuted();
+    doc.text("support@haven.app",MARGIN,footerY+12);
+    doc.text("1-800-555-0199",MARGIN,footerY+24);
+    doc.text(`Receipt ID: ${receiptId}`,rightX,footerY+12);
+    doc.text(`Transaction ID: ${transactionId}`,rightX,footerY+24);
+    doc.text(`${job.paymentBrand||"Card"} •••• ${job.paymentLast4||"----"} · Paid ${dateStr}`,rightX,footerY+36);
+
+    return { doc, receiptId };
+  };
+
   const buildReceiptShareText=(job)=>{
     const jt=job.taskId?TASKS.find(t=>t.id===job.taskId):job.custom?{n:job.custom.title,p:job.custom.price}:null;
     const jPro=job.pro||PROS[0];
@@ -2954,6 +3367,18 @@ function App(){
   const shareReceiptForJob=(job)=>{
     const {text}=buildReceiptShareText(job);
     try{
+      const pdfResult=generateReceiptPDF(job);
+      if(pdfResult&&typeof navigator!=="undefined"&&navigator.share){
+        const pdfBlob=pdfResult.doc.output("blob");
+        const pdfFile=new File([pdfBlob],`Haven-Receipt-${pdfResult.receiptId}.pdf`,{type:"application/pdf"});
+        const canShareFiles=typeof navigator.canShare==="function"&&navigator.canShare({files:[pdfFile]});
+        if(canShareFiles){
+          navigator.share({title:"Haven Receipt",files:[pdfFile]}).catch(()=>{
+            navigator.share({title:"Haven Receipt",text}).catch(()=>{});
+          });
+          return;
+        }
+      }
       if(typeof navigator!=="undefined"&&navigator.share){
         navigator.share({title:"Haven Receipt",text}).catch(()=>{});
       }else{
@@ -2982,6 +3407,18 @@ function App(){
     const {text:shareText}=buildReceiptShareText(vj);
     const shareReceipt=()=>{
       try{
+        const pdfResult=generateReceiptPDF(vj);
+        if(pdfResult&&typeof navigator!=="undefined"&&navigator.share){
+          const pdfBlob=pdfResult.doc.output("blob");
+          const pdfFile=new File([pdfBlob],`Haven-Receipt-${pdfResult.receiptId}.pdf`,{type:"application/pdf"});
+          const canShareFiles=typeof navigator.canShare==="function"&&navigator.canShare({files:[pdfFile]});
+          if(canShareFiles){
+            navigator.share({title:`Haven Receipt ${pdfResult.receiptId}`,files:[pdfFile]}).catch(()=>{
+              navigator.share({title:`Haven Receipt ${pdfResult.receiptId}`,text:shareText}).catch(()=>{});
+            });
+            return;
+          }
+        }
         if(typeof navigator!=="undefined"&&navigator.share){
           navigator.share({title:`Haven Receipt ${receiptId}`,text:shareText}).catch(()=>{});
         }else{
@@ -2994,6 +3431,16 @@ function App(){
       try{ if(typeof window!=="undefined"&&window.print) window.print(); }catch{}
     };
     const downloadReceipt=()=>{
+      try{
+        const pdfResult=generateReceiptPDF(vj);
+        if(pdfResult){
+          pdfResult.doc.save(`Haven-Receipt-${pdfResult.receiptId}.pdf`);
+          setShowShareFallback(false);
+          return;
+        }
+      }catch{}
+      // Fallback — PDF generation unavailable for some reason (e.g. the
+      // CDN library failed to load): export still works, just as text.
       try{
         const blob=new Blob([shareText],{type:"text/plain"});
         const url=URL.createObjectURL(blob);
