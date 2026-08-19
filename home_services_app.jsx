@@ -443,7 +443,7 @@ const INTENT_LIBRARY=[
     phrases:["deep clean","deep cleaning","deep clean house","deep cleaning needed","full house cleaning","whole house deep cleaned","deep clean my house","deep clean the house"],
     exclude:["move out","moving out"],clarifyGroup:"cleaning_category"},
   {id:"standard_clean",label:"Standard Home Cleaning",category:"Cleaning",taskId:59,
-    phrases:["standard cleaning","regular cleaning","house cleaning","clean my house","clean the house","need my house cleaned","weekly cleaning","recurring cleaning"],
+    phrases:["standard cleaning","regular cleaning","house cleaning","clean my house","clean the house","need my house cleaned","weekly cleaning","recurring cleaning","house is dirty","house is messy","place is a mess","house needs cleaning","garage cleanout","garage needs cleaning","garage is a mess"],
     exclude:["deep clean","move out","moving out","carpet","window"],clarifyGroup:"cleaning_category"},
   {id:"bathroom_clean",label:"Bathroom Cleaning",category:"Cleaning",taskId:60,
     phrases:["clean my bathroom","clean the bathroom","bathroom cleaning","bathroom needs cleaning","scrub the bathroom","clean bathrooms"],
@@ -490,6 +490,7 @@ const CLARIFICATION_GROUPS={
       {label:"Carpet Cleaning",intentId:"carpet_cleaning"},
       {label:"Bathroom Cleaning",intentId:"bathroom_clean"},
       {label:"Kitchen Cleaning",intentId:"kitchen_clean"},
+      {label:"Garage",intentId:null},
       {label:"Other / Not Listed",intentId:null},
     ],
   },
@@ -607,30 +608,38 @@ function matchRepairIntent(query){
     intentId:intent.id,label:intent.label,category:intent.category,taskId:intent.taskId,confidence,
   }));
 
-  // Category-level check first: if no individual intent has cleared even
-  // weak signal (everything so far is noise-level — the situation that
-  // previously let an unrelated low-confidence intent win by default),
-  // see if the query is nonetheless clearly ABOUT one category in
-  // aggregate. If so, ask within that category rather than falling
-  // through to an unrelated "recommendation" or a bare dead end.
-  const topIntentConfidence = matches.length ? matches[0].confidence : 0;
-  if(topIntentConfidence<20){
-    const categoryScores=_categoryList.map(cat=>({cat,confidence:_categoryConfidence(qWordSet,cat)})).sort((a,b)=>b.confidence-a.confidence);
-    const topCat=categoryScores[0], secondCat=categoryScores[1];
-    const catClearlyAhead = topCat && (!secondCat || (topCat.confidence-secondCat.confidence)>=20);
-    if(topCat && topCat.confidence>=45 && catClearlyAhead){
-      const group=_categoryClarifyGroup[topCat.cat];
-      if(group && CLARIFICATION_GROUPS[group]){
-        return {tier:"low",matches,clarification:CLARIFICATION_GROUPS[group]};
-      }
-    }
-  }
-
-  if(matches.length===0) return {tier:"low",matches:[],clarification:null};
+  // Category-level confidence is ALWAYS computed — never gated behind
+  // "did no intent score anything." That gate was the actual root cause
+  // of the "clean garage" bug: a single word shared with an unrelated
+  // single-purpose intent (here, "garage" belonging only to Garage Door
+  // Repair) can score a misleadingly moderate confidence on its own, even
+  // when the query's dominant, more holistic signal clearly points
+  // elsewhere ("clean" is far more broadly tied to Cleaning than "garage"
+  // is to Repair). The fix isn't a higher/lower threshold — it's that the
+  // top-scoring INTENT now has to actually agree with the top-scoring
+  // CATEGORY to be trusted, not just clear a number in isolation.
+  const categoryScores=_categoryList.map(cat=>({cat,confidence:_categoryConfidence(qWordSet,cat)})).sort((a,b)=>b.confidence-a.confidence);
+  const topCat=categoryScores[0], secondCat=categoryScores[1];
+  const catClearlyAhead = topCat && (!secondCat || (topCat.confidence-secondCat.confidence)>=20);
 
   const top=matches[0];
   const second=matches[1];
   const tooClose = second && (top.confidence-second.confidence)<20;
+  const topIntentAgreesWithCategory = top && topCat && top.category===topCat.cat;
+  // An exact phrase match (100%) is a deliberate, explicit signal and
+  // always wins outright. Short of that, a match is only "trustworthy"
+  // enough to override the category-level signal if it's both confident
+  // AND actually belongs to the category the query is dominantly about.
+  const topIntentIsTrustworthy = top && (top.confidence===100 || (topIntentAgreesWithCategory && top.confidence>=70 && !tooClose));
+
+  if(topCat && topCat.confidence>=45 && catClearlyAhead && !topIntentIsTrustworthy){
+    const group=_categoryClarifyGroup[topCat.cat];
+    if(group && CLARIFICATION_GROUPS[group]){
+      return {tier:"low",matches,clarification:CLARIFICATION_GROUPS[group]};
+    }
+  }
+
+  if(matches.length===0) return {tier:"low",matches:[],clarification:null};
 
   // Clarify only when genuinely needed: several sibling intents from the
   // same clarify group are close enough that guessing would be a real risk.

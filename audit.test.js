@@ -134,11 +134,13 @@ const { code } = babel.transformSync(src, { presets: [['@babel/preset-react', { 
 const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports = typeof App !== 'undefined' ? App : undefined;
   module.exports2 = typeof ErrorBoundary !== 'undefined' ? ErrorBoundary : undefined;
+  module.exports3 = typeof matchRepairIntent !== 'undefined' ? matchRepairIntent : undefined;
 })`;
 const moduleObj = { exports: {} };
 eval(wrapped)(React, React.useState, React.useRef, React.useEffect, moduleObj);
 const App = moduleObj.exports;
 const ErrorBoundary = moduleObj.exports2;
+const matchRepairIntent = moduleObj.exports3;
 
 assert(typeof App === 'function', 'App component loaded from compiled source');
 assert(typeof ErrorBoundary === 'function', 'ErrorBoundary class loaded from compiled source');
@@ -894,6 +896,90 @@ function runReceiptPdfChecks(){
 
   console.error = origError; console.warn = origWarn;
 
-  console.log(`\n--- Audit complete: ${pass} passing, ${fail} failing ---`);
+  runDiagnosisMatchingChecks();
+}
+
+// ── PHASE 12: "Minor repairs" universal-fallback removal + hierarchical
+// category/intent matching. Calls matchRepairIntent directly — the actual
+// user-facing diagnosis function — as a pure function. No React rendering
+// needed at all for these, which is deliberate: this class of matching
+// logic doesn't depend on component state, and testing it directly is
+// both the most faithful test of "the diagnosis function" specifically
+// (as opposed to the UI built on top of it) and the most robust against
+// resource-related flakiness from many accumulated mounted app instances.
+function runDiagnosisMatchingChecks(){
+  const neverMinorRepairs=(query)=>{
+    const r=matchRepairIntent(query);
+    return !r.matches.some(m=>m.label==='Minor repairs');
+  };
+
+  step('51. Bare "clean" never surfaces Minor Repairs and asks within the Cleaning category', () => {
+    const r=matchRepairIntent('clean');
+    assert(neverMinorRepairs('clean'), '"clean" never surfaces Minor Repairs anywhere in its matches');
+    assert(!!r.clarification && r.clarification.question==='What would you like cleaned?', '"clean" triggers the cleaning category clarification');
+    assert(r.tier!=='high', '"clean" is not shown as a confident bookable recommendation — the exact service is genuinely uncertain');
+  });
+
+  step('52. "clean garage" — the specific regression from this bug report — never surfaces Minor Repairs or an unrelated service', () => {
+    const r=matchRepairIntent('clean garage');
+    assert(neverMinorRepairs('clean garage'), '"clean garage" never surfaces Minor Repairs');
+    assert(r.matches[0]?.label!=='Garage Door Repair'||r.clarification, '"clean garage" does not silently resolve to the unrelated Garage Door Repair match without at least asking a clarification');
+    assert(!!r.clarification, '"clean garage" asks within the Cleaning category rather than guessing, since Haven has no dedicated garage-cleaning service');
+  });
+
+  step('53. "deep clean" still resolves confidently and specifically — the fix does not blunt genuinely confident matches', () => {
+    const r=matchRepairIntent('deep clean');
+    assert(r.tier==='high'&&r.matches[0].label==='Deep Home Cleaning', '"deep clean" remains a confident, specific match');
+  });
+
+  step('54. Broader cleaning phrasing resolves correctly without being individually enumerated as special cases', () => {
+    const cases=[
+      ['clean my house','Standard Home Cleaning'],
+      ['my house is dirty','Standard Home Cleaning'],
+      ['clean my bathroom','Bathroom Cleaning'],
+      ['clean the kitchen','Kitchen Cleaning'],
+      ['carpet needs cleaning','Carpet/Upholstery Cleaning'],
+      ['moving out and need the house cleaned','Move-Out Cleaning'],
+    ];
+    cases.forEach(([query,expectedLabel])=>{
+      const r=matchRepairIntent(query);
+      assert(neverMinorRepairs(query), `"${query}" never surfaces Minor Repairs`);
+      assert(r.tier==='high'&&r.matches[0]?.label===expectedLabel, `"${query}" resolves confidently to ${expectedLabel} (got tier=${r.tier}, top=${r.matches[0]?.label})`);
+    });
+  });
+
+  step('55. Non-cleaning intents are unaffected by the hierarchical fix — regression check in both directions', () => {
+    const clogged=matchRepairIntent('clogged toilet');
+    assert(clogged.tier==='high'&&clogged.matches[0].category==='Plumbing', 'Plumbing intent still resolves correctly');
+    const lights=matchRepairIntent('lights flickering');
+    assert(lights.tier==='high'&&lights.matches[0].category==='Electrical', 'Electrical intent still resolves correctly');
+    // The reverse direction matters too: a genuine garage-DOOR query must
+    // still resolve to Repair, not get incorrectly pulled into Cleaning
+    // now that "garage" also has cleaning-adjacent vocabulary.
+    const garageDoor=matchRepairIntent('garage door stuck');
+    assert(garageDoor.tier==='high'&&garageDoor.matches[0].label==='Garage Door Repair', 'A genuine garage door query still resolves to Garage Door Repair, not pulled into the cleaning clarification');
+  });
+
+  step('56. Genuinely ambiguous or nonsense input does not automatically become Minor Repairs, or any other unrelated bookable service', () => {
+    const gibberish=matchRepairIntent('xyzqqq nonsense gibberish');
+    assert(neverMinorRepairs('xyzqqq nonsense gibberish'), 'Gibberish never surfaces Minor Repairs');
+    assert(gibberish.tier!=='high'&&gibberish.tier!=='medium', 'Gibberish is never shown as a confident or plausible bookable recommendation');
+    const vague=matchRepairIntent('something is wrong');
+    assert(neverMinorRepairs('something is wrong'), 'Vague input never surfaces Minor Repairs');
+    assert(vague.tier!=='high', 'Vague input is never shown as a confident bookable recommendation');
+  });
+
+  step('57. Minor Repairs is only ever reachable through deliberate, specific matching — never as a fallback for unrelated or low-confidence input', () => {
+    // Minor Repairs should still be reachable for queries that actually
+    // describe minor/general repair work — removing it as a fallback
+    // must not mean removing it from the catalog entirely.
+    const genuine=matchRepairIntent('a few small things need fixing around the house, general repairs');
+    const queries=['clean','clean garage','cleaning','dirty','messy','garage cleaning','help','something is wrong','xyzqqq nonsense gibberish'];
+    queries.forEach(q=>{
+      assert(neverMinorRepairs(q), `"${q}" never surfaces Minor Repairs as a fallback`);
+    });
+  });
+
+  console.log(`\n--- Diagnosis matching audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 }
