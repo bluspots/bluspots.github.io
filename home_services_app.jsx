@@ -43,8 +43,17 @@ const TASKS=[
   {id:28,e:"🪵",n:"Install laminate/vinyl flooring",p:349,t:"3-5 hrs",c:"Flooring"},
   {id:29,e:"🔨",n:"Repair squeaky floor",  p:89,  t:"Varies", c:"Flooring"},
   // Cleaning
-  {id:30,e:"🧹",n:"Deep clean (2BR)",      p:159, t:"2-3 hrs",c:"Cleaning",  pop:true},
-  {id:31,e:"🧽",n:"Move-out cleaning",     p:199, t:"3 hrs",  c:"Cleaning"},
+  // NOTE: "p" is a base/fallback reference price only, shown when no real
+  // property data exists yet. propertyScoped tasks get their actual price
+  // computed from the selected property's real beds/baths/sqft at booking
+  // time — see calculateCleaningPrice(). Never bake a property size into a
+  // service's own name or its own separate catalog entry (that was the
+  // root cause of the original "Deep clean (2BR)" bug).
+  {id:30,e:"🧹",n:"Deep Home Cleaning",      p:159, t:"2-3 hrs",c:"Cleaning",  pop:true, propertyScoped:true},
+  {id:59,e:"🧼",n:"Standard Home Cleaning",  p:99,  t:"1-2 hrs",c:"Cleaning",  propertyScoped:true},
+  {id:60,e:"🚿",n:"Bathroom Cleaning",       p:59,  t:"45 min", c:"Cleaning"},
+  {id:61,e:"🍽️",n:"Kitchen Cleaning",        p:69,  t:"45 min", c:"Cleaning"},
+  {id:31,e:"🧽",n:"Move-Out Cleaning",     p:199, t:"3 hrs",  c:"Cleaning", propertyScoped:true},
   {id:32,e:"🪟",n:"Window washing (interior)",p:79,t:"60 min",c:"Cleaning"},
   {id:33,e:"🛋️",n:"Carpet/upholstery cleaning",p:119,t:"90 min",c:"Cleaning"},
   // Landscaping
@@ -210,6 +219,39 @@ function getCompletionDetails(category,taskPrice){
     proNotes:chosen.notes,
   };
 }
+// Property-aware pricing — deliberately separate from intent matching and
+// from the property record itself. A propertyScoped task's own "p" field
+// is only ever a fallback reference price (shown before any property is
+// known); the real price is always computed here, from the ACTUAL
+// selected property's real beds/baths/sqft. Never invents a missing
+// value — if the property is missing required fields, this returns which
+// ones so the caller can prompt the customer, never silently assume a
+// size. Coefficients are calibrated so a typical 2-bed/1-bath home lands
+// close to the task's own original reference price, scaling sensibly from
+// there — not an arbitrary formula disconnected from prior pricing.
+const CLEANING_PRICE_COEFFICIENTS={
+  30:{base:69,perBed:25,perBath:20,per100Sqft:2},    // Deep Home Cleaning
+  59:{base:39,perBed:15,perBath:12,per100Sqft:1.2},  // Standard Home Cleaning
+  31:{base:89,perBed:28,perBath:22,per100Sqft:2.2},  // Move-Out Cleaning
+};
+function calculateCleaningPrice(task,property){
+  if(!task?.propertyScoped) return {price:task?.p??0,missingFields:[]};
+  if(!property) return {price:null,missingFields:["bedrooms","bathrooms","square footage"]};
+  const missingFields=[];
+  const bedsRaw=property.beds;
+  const bedsNum = bedsRaw==="Studio" ? 0 : (bedsRaw&&!isNaN(parseFloat(bedsRaw)) ? parseFloat(bedsRaw) : null);
+  const bathsNum = property.baths&&!isNaN(parseFloat(property.baths)) ? parseFloat(property.baths) : null;
+  const sqftNum = property.sqft&&!isNaN(parseFloat(String(property.sqft).replace(/,/g,""))) ? parseFloat(String(property.sqft).replace(/,/g,"")) : null;
+  if(bedsNum===null) missingFields.push("bedrooms");
+  if(bathsNum===null) missingFields.push("bathrooms");
+  if(sqftNum===null) missingFields.push("square footage");
+  if(missingFields.length>0) return {price:null,missingFields};
+
+  const coef=CLEANING_PRICE_COEFFICIENTS[task.id]||{base:task.p*0.4,perBed:15,perBath:12,per100Sqft:1.5};
+  const raw=coef.base+bedsNum*coef.perBed+bathsNum*coef.perBath+(sqftNum/100)*coef.per100Sqft;
+  const price=Math.round((raw+1)/10)*10-1; // snap to the app's existing "$X9" pricing convention
+  return {price:Math.max(price,Math.round(task.p*0.4)),missingFields:[]}; // sane floor regardless of an unusually small property
+}
 // Plain keyword table for now — deliberately kept as data, not logic, so a
 // future AI/NLP service is a drop-in replacement for matchSymptomToCategories
 // without any caller needing to change.
@@ -244,7 +286,7 @@ const INTENT_LIBRARY=[
     exclude:["clogged","running","overflow","leak","won't flush"]},
   {id:"clogged_sink",label:"Unclog Sink",category:"Plumbing",taskId:19,
     phrases:["clogged sink","blocked sink","sink backing up","sink won't drain","sink wont drain","slow drain","water under sink","wet under sink","kitchen sink clogged","bathroom sink clogged"],
-    exclude:["toilet"]},
+    exclude:["toilet","clean","cleaning"]},
   {id:"leaky_pipe",label:"Fix Leaky Pipe",category:"Plumbing",taskId:19,
     phrases:["leaky pipe","leaking pipe","pipe leak","dripping pipe","pipe burst","burst pipe","water damage from pipe","pipe under sink leaking","leak under sink","leaking under sink","leak under the sink"],
     exclude:["toilet","sink clogged","sink backing up","sink won't drain"]},
@@ -397,16 +439,27 @@ const INTENT_LIBRARY=[
     phrases:["gutter cleaning","clean gutters","clogged gutters","gutters overflowing"],exclude:[]},
   {id:"pressure_washing",label:"Pressure Washing",category:"Maintenance",taskId:47,
     phrases:["pressure washing","power wash driveway","clean patio","wash the deck"],exclude:[]},
-  {id:"deep_clean",label:"Deep Clean",category:"Cleaning",taskId:30,
-    phrases:["deep clean house","deep cleaning needed","full house cleaning"],exclude:["move out","moving out"]},
+  {id:"deep_clean",label:"Deep Home Cleaning",category:"Cleaning",taskId:30,
+    phrases:["deep clean","deep cleaning","deep clean house","deep cleaning needed","full house cleaning","whole house deep cleaned","deep clean my house","deep clean the house"],
+    exclude:["move out","moving out"],clarifyGroup:"cleaning_category"},
+  {id:"standard_clean",label:"Standard Home Cleaning",category:"Cleaning",taskId:59,
+    phrases:["standard cleaning","regular cleaning","house cleaning","clean my house","clean the house","need my house cleaned","weekly cleaning","recurring cleaning"],
+    exclude:["deep clean","move out","moving out","carpet","window"],clarifyGroup:"cleaning_category"},
+  {id:"bathroom_clean",label:"Bathroom Cleaning",category:"Cleaning",taskId:60,
+    phrases:["clean my bathroom","clean the bathroom","bathroom cleaning","bathroom needs cleaning","scrub the bathroom","clean bathrooms"],
+    exclude:["clogged","leak","running","overflow","won't flush","wont flush","not draining"],clarifyGroup:"cleaning_category"},
+  {id:"kitchen_clean",label:"Kitchen Cleaning",category:"Cleaning",taskId:61,
+    phrases:["clean my kitchen","clean the kitchen","kitchen cleaning","kitchen needs cleaning","scrub the kitchen"],
+    exclude:["clogged","leak","not working","won't start","wont start","not draining","leaking"],clarifyGroup:"cleaning_category"},
   {id:"move_out_clean",label:"Move-Out Cleaning",category:"Cleaning",taskId:31,
-    phrases:["move out cleaning","moving out clean","end of lease cleaning"],exclude:[]},
+    phrases:["move out cleaning","moving out clean","end of lease cleaning","moving out and need everything cleaned","move in cleaning"],
+    exclude:[],clarifyGroup:"cleaning_category"},
   {id:"window_washing_interior",label:"Window Washing (Interior)",category:"Cleaning",taskId:32,
-    phrases:["window washing interior","clean windows inside"],exclude:["exterior","outside"]},
+    phrases:["window washing interior","clean windows inside"],exclude:["exterior","outside"],clarifyGroup:"cleaning_category"},
   {id:"window_washing_exterior",label:"Window Washing (Exterior)",category:"Maintenance",taskId:48,
     phrases:["window washing exterior","clean windows outside"],exclude:["interior","inside"]},
   {id:"carpet_cleaning",label:"Carpet/Upholstery Cleaning",category:"Cleaning",taskId:33,
-    phrases:["carpet cleaning","upholstery cleaning","clean carpet stains"],exclude:[]},
+    phrases:["carpet cleaning","upholstery cleaning","clean carpet stains","carpet needs cleaning","carpet needs cleaned"],exclude:[],clarifyGroup:"cleaning_category"},
   {id:"pest_control",label:"Pest Control Treatment",category:"Pest Control",taskId:51,
     phrases:["ants in house","roaches","mice in house","rats in house","spiders everywhere","termites","pest problem","bugs everywhere"],exclude:[]},
   {id:"furniture_moving",label:"Furniture Moving",category:"Moving",taskId:38,
@@ -426,6 +479,18 @@ const CLARIFICATION_GROUPS={
       {label:"Keeps running",intentId:"running_toilet"},
       {label:"Water leaking",intentId:"leaking_toilet"},
       {label:"Something else",intentId:null},
+    ],
+  },
+  cleaning_category:{
+    question:"What would you like cleaned?",
+    options:[
+      {label:"Standard Home Cleaning",intentId:"standard_clean"},
+      {label:"Deep Home Cleaning",intentId:"deep_clean"},
+      {label:"Move-In / Move-Out Cleaning",intentId:"move_out_clean"},
+      {label:"Carpet Cleaning",intentId:"carpet_cleaning"},
+      {label:"Bathroom Cleaning",intentId:"bathroom_clean"},
+      {label:"Kitchen Cleaning",intentId:"kitchen_clean"},
+      {label:"Other / Not Listed",intentId:null},
     ],
   },
 };
@@ -487,6 +552,46 @@ function _confidenceFor(query,queryWordSet,intent,wordSet,phraseWordSets,exclude
   return Math.round(Math.min(65, wordRatio*65));
 }
 
+// Hierarchical confidence, second level: CATEGORY confidence, independent
+// of any single intent's score. A word like "clean" is generic enough that
+// it can't meaningfully win any ONE cleaning intent on its own (that's
+// correct — plain word-overlap deliberately can't reach high confidence
+// alone, see _confidenceFor above), but aggregated across every cleaning
+// intent's vocabulary, "this query is about Cleaning" is a real, confident
+// signal even when "which cleaning service" isn't yet. This is what lets
+// the matcher ask a category-scoped question ("What would you like
+// cleaned?") instead of either guessing an unrelated service or giving up
+// with no guidance at all.
+const _categoryList=[...new Set(INTENT_LIBRARY.map(i=>i.category))];
+// Per word, how many intents in EACH category use it — the basis for a
+// concentration-weighted category score below (not the same as the
+// global per-intent _docFreq, which is deliberately the opposite signal).
+const _wordCategoryCounts={};
+INTENT_LIBRARY.forEach((intent,i)=>{
+  _intentWordSets[i].forEach(w=>{
+    if(!_wordCategoryCounts[w]) _wordCategoryCounts[w]={};
+    _wordCategoryCounts[w][intent.category]=(_wordCategoryCounts[w][intent.category]||0)+1;
+  });
+});
+// The clarification a category falls back to is whatever its own member
+// intents already share — no separate mapping table to keep in sync.
+const _categoryClarifyGroup=Object.fromEntries(_categoryList.map(cat=>{
+  const withGroup=INTENT_LIBRARY.find(i=>i.category===cat&&i.clarifyGroup);
+  return [cat,withGroup?withGroup.clarifyGroup:null];
+}));
+function _categoryConfidence(queryWordSet,category){
+  if(queryWordSet.size===0) return 0;
+  let matchedWeight=0;
+  queryWordSet.forEach(w=>{
+    const counts=_wordCategoryCounts[w];
+    if(!counts) return;
+    const totalCount=Object.values(counts).reduce((a,b)=>a+b,0);
+    const catCount=counts[category]||0;
+    if(totalCount>0) matchedWeight += catCount/totalCount; // this word's concentration in THIS category vs all categories it appears in
+  });
+  return Math.round(Math.min(100,(matchedWeight/queryWordSet.size)*100));
+}
+
 // The single swappable entry point — a future AI/NLP service replaces
 // only this function's internals. Same contract: a query string in,
 // {tier, matches, clarification} out.
@@ -501,6 +606,25 @@ function matchRepairIntent(query){
   const matches=scored.map(({intent,confidence})=>({
     intentId:intent.id,label:intent.label,category:intent.category,taskId:intent.taskId,confidence,
   }));
+
+  // Category-level check first: if no individual intent has cleared even
+  // weak signal (everything so far is noise-level — the situation that
+  // previously let an unrelated low-confidence intent win by default),
+  // see if the query is nonetheless clearly ABOUT one category in
+  // aggregate. If so, ask within that category rather than falling
+  // through to an unrelated "recommendation" or a bare dead end.
+  const topIntentConfidence = matches.length ? matches[0].confidence : 0;
+  if(topIntentConfidence<20){
+    const categoryScores=_categoryList.map(cat=>({cat,confidence:_categoryConfidence(qWordSet,cat)})).sort((a,b)=>b.confidence-a.confidence);
+    const topCat=categoryScores[0], secondCat=categoryScores[1];
+    const catClearlyAhead = topCat && (!secondCat || (topCat.confidence-secondCat.confidence)>=20);
+    if(topCat && topCat.confidence>=45 && catClearlyAhead){
+      const group=_categoryClarifyGroup[topCat.cat];
+      if(group && CLARIFICATION_GROUPS[group]){
+        return {tier:"low",matches,clarification:CLARIFICATION_GROUPS[group]};
+      }
+    }
+  }
 
   if(matches.length===0) return {tier:"low",matches:[],clarification:null};
 
@@ -810,6 +934,7 @@ function makeJob({
   acceptedAt=null, // when status became en_route — anchors the arrival-window/ETA simulation
   jobPreferences=[], // snapshot of enabled preference labels at booking time — the shape a future Pro-app surface would read
   workPerformed=[], materials=[], proNotes="", // populated once, at completion — see getCompletionDetails()
+  lockedPrice=null, // the actual labor price agreed to at booking time (property-aware for scoped tasks like Deep/Standard/Move-Out Cleaning). null for older jobs or non-scoped tasks — those fall back to the catalog's reference price, which is safe since it was never property-dependent to begin with.
 }={}){
   return {
     id:Date.now(), // known limitation: two jobs in the same millisecond would collide — impossible via UI, fix when a backend exists
@@ -821,6 +946,7 @@ function makeJob({
     acceptedAt,
     jobPreferences,
     workPerformed, materials, proNotes,
+    lockedPrice,
   };
 }
 
@@ -1405,7 +1531,6 @@ export default function App(){
   const browsedTask = TASKS.find(t=>t.id===tid);
   const customTask  = ctitle?{id:null,e:"🔧",n:ctitle,p:parseInt(cprice)||0,t:"Varies",c:ccat}:null;
   const currentTask = browsedTask||customTask;
-  const total       = currentTask?currentTask.p+surge+(emergency?EMERGENCY_FEE:0):0;
   // Search-by-symptom now runs through matchRepairIntent() (module-level,
   // see INTENT_LIBRARY above) instead of category-level keywords. Category
   // browsing via the chips below is completely unaffected — it never
@@ -1422,7 +1547,7 @@ export default function App(){
   const vjTp  = vj?ALL_TIME_PREFS.find(t=>t.id===vj.tpId):null;
   const vjPro = vj?.pro||PROS[0];
   const vjPname=vjPro.n.split(" ")[0];
-  const vjTotal=vjTask?vjTask.p+(vj?.surge||0)+(vj?.emergencyFee||0):0;
+  const vjTotal=vjTask?(vj?.lockedPrice??vjTask.p)+(vj?.surge||0)+(vj?.emergencyFee||0):0;
   const vjSIdx= vj?SF.indexOf(vj.status):-1;
   // Progressively-tightening arrival estimate — deterministic, anchored to
   // real elapsed time since the pro accepted (not random), so it always
@@ -1487,6 +1612,16 @@ export default function App(){
   const sortedCards = cards.slice().sort((a,b)=>(b.isDefault?1:0)-(a.isDefault?1:0));
   const selectedAddress = addresses.find(a=>a.id===selectedAddressId) || primaryHome;
   const selectedCard = cards.find(c=>c.id===selectedCardId) || cards.find(c=>c.isDefault) || cards[0];
+  // Property-aware pricing for scoped cleaning tasks — uses whichever
+  // property is currently selected (defaults to primary before an
+  // explicit selection, satisfying "preliminary estimate from the primary
+  // property is fine, but recalculate once a specific property is
+  // chosen" — selectedAddress already does exactly that on its own).
+  // Never invents beds/baths/sqft: cleaningPricing.missingFields tells the
+  // UI what to ask for instead of showing a guessed number.
+  const cleaningPricing = currentTask?.propertyScoped ? calculateCleaningPrice(currentTask,selectedAddress) : null;
+  const effectiveTaskPrice = currentTask ? (currentTask.propertyScoped ? cleaningPricing.price : currentTask.p) : null;
+  const total = (currentTask&&effectiveTaskPrice!=null) ? effectiveTaskPrice+surge+(emergency?EMERGENCY_FEE:0) : 0;
 
   const allJobs   = jobs.filter(j=>j.status!=="cancelled").slice().reverse();
   const shownJobs = allJobs.filter(j=>{
@@ -1802,52 +1937,45 @@ export default function App(){
     return ()=>{ clearTimeout(t1); clearTimeout(t2); };
   },[scr,highlightField]);
   // Inline editing for the My Home overview tiles — writes directly through
-  // the same setAddresses used by the full Edit Home form (saveAddressForm,
-  // below), so there is exactly one canonical property record regardless of
-  // which editing path was used. Only one tile edits at a time; switching
-  // tiles attempts to save the field being left (if it currently validates)
-  // or safely discards it (if not) — never a silent bad save, never a
-  // navigation block.
-  const [inlineEditField,setInlineEditField]=useState(null); // null | "propertyType" | "yearBuilt" | "sqft" | "layout"
-  const [inlineEditDraft,setInlineEditDraft]=useState({});
-  const [inlineEditError,setInlineEditError]=useState("");
-  const validateSqft=(raw)=>{
-    const trimmed=String(raw).trim();
-    if(!trimmed) return {valid:false,error:"Enter a square footage."};
-    if(!/^\d+$/.test(trimmed)) return {valid:false,error:"Numbers only, please."};
+  // Inline editing for the My Home overview tiles — direct-manipulation
+  // controls, not a mini edit form. No Save/Cancel, no "editing mode":
+  // each tile IS the control. Home type / Year built use an invisible
+  // native <select> overlaying the whole tile (position:absolute,
+  // opacity:0) — the user's tap goes straight to the real select, so the
+  // native picker opens on the very first tap with no JS-triggered-open
+  // fragility, while the visible content underneath is plain styled text
+  // that updates the instant the real data changes. Square footage is a
+  // genuinely visible, always-present text input styled to look like
+  // plain text until focused. Layout is the one field with no single
+  // native control for two values at once, so it gets a small absolutely-
+  // positioned popover that can never affect the grid's own sizing.
+  const saveInlineField=(fieldKey,value)=>{
+    if(!primaryHome)return;
+    setAddresses(as=>as.map(a=>a.id===primaryHome.id?{...a,[fieldKey]:value}:a));
+  };
+  const [sqftDraft,setSqftDraft]=useState(null); // null when not focused; string while actively editing
+  const commitSqftDraft=()=>{
+    if(sqftDraft===null)return;
+    const trimmed=sqftDraft.trim();
     const n=parseInt(trimmed,10);
-    if(n<=0) return {valid:false,error:"Must be greater than 0."};
-    if(n>50000) return {valid:false,error:"That doesn't look right — try again."};
-    return {valid:true,value:String(n)};
-  };
-  const commitInlineEdit=()=>{
-    if(!inlineEditField||!primaryHome) return true;
-    let patch=null;
-    if(inlineEditField==="sqft"){
-      const r=validateSqft(inlineEditDraft.sqft);
-      if(!r.valid){ setInlineEditError(r.error); return false; }
-      patch={sqft:r.value};
-    }else if(inlineEditField==="layout"){
-      patch={beds:inlineEditDraft.beds||primaryHome.beds,baths:inlineEditDraft.baths||primaryHome.baths};
-    }else{
-      patch={[inlineEditField]:inlineEditDraft[inlineEditField]??primaryHome[inlineEditField]};
+    if(trimmed&&/^\d+$/.test(trimmed)&&n>0&&n<=50000){
+      saveInlineField("sqft",String(n));
     }
-    setAddresses(as=>as.map(a=>a.id===primaryHome.id?{...a,...patch}:a));
-    setInlineEditField(null);setInlineEditDraft({});setInlineEditError("");
-    return true;
+    // else: invalid or empty — silently revert. Clearing the draft alone
+    // does this: the input's displayed value falls back to the unchanged
+    // primaryHome.sqft below.
+    setSqftDraft(null);
   };
-  const cancelInlineEdit=()=>{ setInlineEditField(null);setInlineEditDraft({});setInlineEditError(""); };
-  const startInlineEdit=(fieldKey)=>{
-    if(inlineEditField&&inlineEditField!==fieldKey){
-      const ok=commitInlineEdit();
-      if(!ok) cancelInlineEdit(); // couldn't save what was there — discard rather than block or silently persist bad data
-    }
-    if(!primaryHome) return;
-    setInlineEditField(fieldKey);
-    setInlineEditError("");
-    if(fieldKey==="layout") setInlineEditDraft({beds:primaryHome.beds,baths:primaryHome.baths});
-    else setInlineEditDraft({[fieldKey]:primaryHome[fieldKey]});
-  };
+  const [layoutPopoverOpen,setLayoutPopoverOpen]=useState(false);
+  const layoutTileRef=useRef(null);
+  useEffect(()=>{
+    if(!layoutPopoverOpen)return;
+    const onDocPointerDown=(e)=>{
+      if(layoutTileRef.current&&!layoutTileRef.current.contains(e.target)) setLayoutPopoverOpen(false);
+    };
+    document.addEventListener("pointerdown",onDocPointerDown);
+    return ()=>document.removeEventListener("pointerdown",onDocPointerDown);
+  },[layoutPopoverOpen]);
   const openAddressForm=(addr,targetField=null)=>{
     setEditingAddressId(addr?addr.id:null);
     setDraftAddress(addr?{...addr}:{...emptyDraftAddress});
@@ -1930,6 +2058,7 @@ export default function App(){
 
   const postJob=()=>{
     if(!currentTask||!tpid)return;
+    if(currentTask.propertyScoped&&effectiveTaskPrice==null)return; // missing property data — never post with a guessed price
     if(isPostingRef.current)return; // already posted this draft — a rapid second tap must not create a duplicate job
     isPostingRef.current=true;
     const nj=makeJob({
@@ -1940,6 +2069,7 @@ export default function App(){
       addressText:selectedAddress?formatAddress(selectedAddress):"—",addressLabel:selectedAddress?.label||"",
       paymentBrand:selectedCard?.brand||"Card",paymentLast4:selectedCard?.last4||"----",
       jobPreferences:jobPrefs.filter(p=>p.enabled).map(p=>p.label),
+      lockedPrice:tid?effectiveTaskPrice:null, // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
     });
     setJobs(p=>[...p,nj]);setVjid(nj.id);
     setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
@@ -2210,6 +2340,7 @@ export default function App(){
           intentResult.tier==="high"?(()=>{
             const top=intentResult.matches[0];
             const task=TASKS.find(t=>t.id===top.taskId);
+            const priceInfo=task?(task.propertyScoped?(()=>{const pr=calculateCleaningPrice(task,selectedAddress);return pr.price==null?{text:"Est. varies",isEstimate:true}:{text:`Est. $${pr.price}`,isEstimate:true};})():{text:`$${task.p}`,isEstimate:false}):null;
             return (
               <div style={{padding:"0 20px 24px"}}>
                 <div style={{fontSize:11,fontWeight:700,color:TS,letterSpacing:.4,textTransform:"uppercase",marginBottom:10}}>Recommended for you</div>
@@ -2218,9 +2349,9 @@ export default function App(){
                     <div style={{fontSize:38,lineHeight:1,flexShrink:0}}>{task.e}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:2}}>{task.n}</div>
-                      <div style={{fontSize:12,color:TS}}>Matched to "{top.label}"</div>
+                      <div style={{fontSize:12,color:TS}}>{priceInfo.isEstimate?`Estimate for ${selectedAddress?.label||"your property"}`:`Matched to "${top.label}"`}</div>
                     </div>
-                    <div style={{fontWeight:800,fontSize:19,color:AM,flexShrink:0}}>${task.p}</div>
+                    <div style={{fontWeight:800,fontSize:priceInfo.isEstimate?15:19,color:AM,flexShrink:0,textAlign:"right"}}>{priceInfo.text}</div>
                   </div>
                 )}
                 <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:0}}>Not what you meant? Post a custom job instead</button>
@@ -2233,11 +2364,12 @@ export default function App(){
                 {intentResult.matches.map(m=>{
                   const task=TASKS.find(t=>t.id===m.taskId);
                   if(!task)return null;
+                  const priceInfo=task.propertyScoped?(()=>{const pr=calculateCleaningPrice(task,selectedAddress);return pr.price==null?"Est. varies":`Est. $${pr.price}`;})():`$${task.p}`;
                   return (
                     <div key={m.intentId} onClick={()=>openTask(task.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                       <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{task.e}</div>
                       <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{task.n}</div>
-                      <div style={{fontWeight:800,fontSize:20,color:AM}}>${task.p}</div>
+                      <div style={{fontWeight:800,fontSize:task.propertyScoped?15:20,color:AM}}>{priceInfo}</div>
                     </div>
                   );
                 })}
@@ -2276,15 +2408,18 @@ export default function App(){
           )
         ):items.length>0?(
           <div style={{padding:"0 20px",display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,paddingBottom:24}}>
-            {items.map(t=>(
+            {items.map(t=>{
+              const priceInfo=t.propertyScoped?(()=>{const pr=calculateCleaningPrice(t,selectedAddress);return pr.price==null?"Est. varies":`Est. $${pr.price}`;})():`$${t.p}`;
+              return (
               <div key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                 {t.pop&&<span style={{position:"absolute",top:10,right:10,background:"#FEF3C7",color:"#D97706",fontSize:9,fontWeight:800,padding:"2px 7px",borderRadius:10}}>POPULAR</span>}
                 <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{t.e}</div>
                 <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
-                <div style={{fontWeight:800,fontSize:20,color:AM}}>${t.p}</div>
+                <div style={{fontWeight:800,fontSize:t.propertyScoped?15:20,color:AM}}>{priceInfo}</div>
                 <div style={{fontSize:11,color:TM,marginTop:1}}>est. {formatDurationRange(getExpectedDuration(t.t).estimatedDurationMin,getExpectedDuration(t.t).estimatedDurationMax)}</div>
               </div>
-            ))}
+              );
+            })}
             <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
               style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
               <div style={{fontSize:28,marginBottom:8}}>✏️</div>
@@ -2798,66 +2933,92 @@ export default function App(){
             )}
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-            {[["Home type",primaryHome.propertyType||"Not set","propertyType"],["Year built",primaryHome.yearBuilt||"Not set","yearBuilt"],["Square footage",primaryHome.sqft?`${primaryHome.sqft} sqft`:"Not set","sqft"],["Layout",formatLayout(primaryHome),"layout"]].map(([l,v,fieldKey])=>{
-              const isEditing=inlineEditField===fieldKey;
-              if(isEditing){
-                const inputStyle={width:"100%",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 10px",fontSize:16,fontWeight:600,color:TX,background:W,outline:"none",appearance:"none",WebkitAppearance:"none"};
-                return (
-                  <div key={l} style={{gridColumn:fieldKey==="layout"?"1 / -1":"auto",background:BG,border:`2px solid ${AM}`,borderRadius:12,padding:"10px 12px"}}>
-                    <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:6}}>{l}</div>
-                    {fieldKey==="propertyType"&&(
-                      <select value={inlineEditDraft.propertyType||""} onChange={e=>setInlineEditDraft({propertyType:e.target.value})} aria-label="Home type" style={{...inputStyle,marginBottom:8}}>
-                        <option value="">Not set</option>
-                        {HOME_TYPES.map(o=><option key={o} value={o}>{o}</option>)}
-                      </select>
-                    )}
-                    {fieldKey==="yearBuilt"&&(
-                      <select value={inlineEditDraft.yearBuilt||""} onChange={e=>setInlineEditDraft({yearBuilt:e.target.value})} aria-label="Year built" style={{...inputStyle,marginBottom:8}}>
-                        <option value="">Not set</option>
-                        {YEAR_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
-                      </select>
-                    )}
-                    {fieldKey==="sqft"&&(
-                      <>
-                        <input value={inlineEditDraft.sqft??""} onChange={e=>{const digits=e.target.value.replace(/[^\d]/g,"");setInlineEditDraft({sqft:digits});if(inlineEditError)setInlineEditError("");}} inputMode="numeric" aria-label="Square footage" aria-invalid={!!inlineEditError} aria-describedby={inlineEditError?"sqft-inline-error":undefined} placeholder="e.g. 1150" style={{...inputStyle,border:`1px solid ${inlineEditError?"#DC2626":BD}`,marginBottom:inlineEditError?4:8}}/>
-                        {inlineEditError&&<div id="sqft-inline-error" role="alert" style={{fontSize:11,color:"#DC2626",fontWeight:600,marginBottom:6}}>{inlineEditError}</div>}
-                      </>
-                    )}
-                    {fieldKey==="layout"&&(
-                      <div style={{display:"flex",gap:8,marginBottom:8}}>
-                        <div style={{flex:1}}>
-                          <div style={{fontSize:9,color:TM,fontWeight:600,marginBottom:3}}>Bedrooms</div>
-                          <select value={inlineEditDraft.beds||""} onChange={e=>setInlineEditDraft(d=>({...d,beds:e.target.value}))} aria-label="Bedrooms" style={inputStyle}>
-                            <option value="">Not set</option>
-                            {BEDROOM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
-                          </select>
-                        </div>
-                        <div style={{flex:1}}>
-                          <div style={{fontSize:9,color:TM,fontWeight:600,marginBottom:3}}>Bathrooms</div>
-                          <select value={inlineEditDraft.baths||""} onChange={e=>setInlineEditDraft(d=>({...d,baths:e.target.value}))} aria-label="Bathrooms" style={inputStyle}>
-                            <option value="">Not set</option>
-                            {BATHROOM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
-                          </select>
+            {(()=>{
+              const tileStyle={background:BG,borderRadius:12,padding:"10px 12px",position:"relative"};
+              const labelRow=(label)=>(
+                <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:2,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
+                  <span>{label}</span>
+                  <span style={{color:TM,fontSize:11}}>✎</span>
+                </div>
+              );
+              // Invisible native select overlaying the entire tile — the
+              // user's real tap goes straight to the real control, so the
+              // native picker opens on the very first tap. The visible
+              // text underneath is plain, styled content that updates the
+              // instant the underlying data changes (onChange writes
+              // straight through via saveInlineField, no draft/mode).
+              const overlaySelect=(fieldKey,options,ariaLabel)=>(
+                <select
+                  value={primaryHome[fieldKey]||""}
+                  onChange={e=>saveInlineField(fieldKey,e.target.value)}
+                  aria-label={ariaLabel}
+                  style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0,cursor:"pointer",border:"none",margin:0,padding:0,appearance:"none",WebkitAppearance:"none"}}
+                >
+                  <option value="">Not set</option>
+                  {options.map(o=><option key={o} value={o}>{o}</option>)}
+                </select>
+              );
+              return (
+                <>
+                  <div style={tileStyle}>
+                    {labelRow("Home type")}
+                    <div style={{fontSize:13,fontWeight:700,color:TX}}>{primaryHome.propertyType||"Not set"}</div>
+                    {overlaySelect("propertyType",HOME_TYPES,"Home type")}
+                  </div>
+
+                  <div style={tileStyle}>
+                    {labelRow("Year built")}
+                    <div style={{fontSize:13,fontWeight:700,color:TX}}>{primaryHome.yearBuilt||"Not set"}</div>
+                    {overlaySelect("yearBuilt",YEAR_OPTIONS,"Year built")}
+                  </div>
+
+                  <div style={tileStyle}>
+                    {labelRow("Square footage")}
+                    <div style={{display:"flex",alignItems:"baseline",gap:4}}>
+                      <input
+                        value={sqftDraft??(primaryHome.sqft||"")}
+                        onFocus={()=>setSqftDraft(primaryHome.sqft||"")}
+                        onChange={e=>setSqftDraft(e.target.value.replace(/[^\d]/g,""))}
+                        onBlur={commitSqftDraft}
+                        onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}}
+                        inputMode="numeric"
+                        aria-label="Square footage"
+                        placeholder="Not set"
+                        style={{width:56,border:"none",background:"transparent",fontSize:13,fontWeight:700,color:TX,padding:0,outline:"none",minWidth:0}}
+                      />
+                      {(sqftDraft??primaryHome.sqft)&&<span style={{fontSize:13,fontWeight:700,color:TX,flexShrink:0}}>sqft</span>}
+                    </div>
+                  </div>
+
+                  <div style={tileStyle} ref={layoutTileRef}>
+                    <button onClick={()=>setLayoutPopoverOpen(v=>!v)} aria-label={`Layout: ${formatLayout(primaryHome)}. Tap to edit.`} style={{all:"unset",display:"block",width:"100%",cursor:"pointer",boxSizing:"border-box"}}>
+                      {labelRow("Layout")}
+                      <div style={{fontSize:13,fontWeight:700,color:TX}}>{formatLayout(primaryHome)}</div>
+                    </button>
+                    {layoutPopoverOpen&&(
+                      <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:W,borderRadius:12,padding:12,boxShadow:"0 8px 24px rgba(28,43,58,.18)",zIndex:20,border:`1px solid ${BD}`}}>
+                        <div style={{display:"flex",gap:8}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:9,color:TM,fontWeight:600,marginBottom:3}}>Bedrooms</div>
+                            <select value={primaryHome.beds||""} onChange={e=>saveInlineField("beds",e.target.value)} aria-label="Bedrooms" style={{width:"100%",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 6px",fontSize:16,fontWeight:600,color:TX,background:BG,outline:"none",appearance:"none",WebkitAppearance:"none"}}>
+                              <option value="">Not set</option>
+                              {BEDROOM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
+                            </select>
+                          </div>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:9,color:TM,fontWeight:600,marginBottom:3}}>Bathrooms</div>
+                            <select value={primaryHome.baths||""} onChange={e=>saveInlineField("baths",e.target.value)} aria-label="Bathrooms" style={{width:"100%",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 6px",fontSize:16,fontWeight:600,color:TX,background:BG,outline:"none",appearance:"none",WebkitAppearance:"none"}}>
+                              <option value="">Not set</option>
+                              {BATHROOM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
+                            </select>
+                          </div>
                         </div>
                       </div>
                     )}
-                    <div style={{display:"flex",gap:8}}>
-                      <button onClick={commitInlineEdit} aria-label={`Save ${l}`} style={{flex:1,padding:"9px 0",borderRadius:8,border:"none",background:AM,color:W,fontWeight:700,fontSize:13,cursor:"pointer"}}>✓ Save</button>
-                      <button onClick={cancelInlineEdit} aria-label={`Cancel editing ${l}`} style={{flex:1,padding:"9px 0",borderRadius:8,border:`1px solid ${BD}`,background:"transparent",color:TS,fontWeight:700,fontSize:13,cursor:"pointer"}}>✕ Cancel</button>
-                    </div>
                   </div>
-                );
-              }
-              return (
-                <button key={l} onClick={()=>startInlineEdit(fieldKey)} aria-label={`${l}: ${v}. Tap to edit.`} style={{textAlign:"left",font:"inherit",background:BG,border:"none",borderRadius:12,padding:"10px 12px",cursor:"pointer",position:"relative"}}>
-                  <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:2,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-                    <span>{l}</span>
-                    <span style={{color:TM,fontSize:11}}>✎</span>
-                  </div>
-                  <div style={{fontSize:13,fontWeight:700,color:TX}}>{v}</div>
-                </button>
+                </>
               );
-            })}
+            })()}
           </div>
         </div>
 
@@ -4017,14 +4178,36 @@ export default function App(){
                 <div style={{color:"rgba(255,255,255,.5)",fontSize:12,marginTop:2}}>Fixed price</div>
               </div>
               <div style={{textAlign:"right",flexShrink:0}}>
-                <div style={{color:W,fontWeight:900,fontSize:24}}>${total}</div>
-                {(surge>0||emergency)&&<div style={{color:"#FFD4C7",fontSize:10,fontWeight:600}}>{surge>0&&`+$${surge} surge`}{surge>0&&emergency&&" · "}{emergency&&`+$${EMERGENCY_FEE} priority`}</div>}
+                <div style={{color:W,fontWeight:900,fontSize:24}}>{effectiveTaskPrice!=null?`$${total}`:"Est. pending"}</div>
+                {effectiveTaskPrice!=null&&(surge>0||emergency)&&<div style={{color:"#FFD4C7",fontSize:10,fontWeight:600}}>{surge>0&&`+$${surge} surge`}{surge>0&&emergency&&" · "}{emergency&&`+$${EMERGENCY_FEE} priority`}</div>}
               </div>
             </div>
           </div>
 
           <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,padding:"18px 20px 16px",position:"relative",zIndex:1}}>
             {addressPaymentCard()}
+
+            {currentTask?.propertyScoped&&(
+              cleaningPricing?.missingFields?.length>0?(
+                <div style={{background:"#FFF7ED",border:"1px solid #FDBA74",borderRadius:18,padding:16,marginBottom:16,display:"flex",gap:12,alignItems:"flex-start"}}>
+                  <span style={{fontSize:20,flexShrink:0}}>📐</span>
+                  <div style={{flex:1}}>
+                    <div style={{fontWeight:700,fontSize:14,color:"#9A3412",marginBottom:4}}>We need a few property details for an accurate price</div>
+                    <div style={{fontSize:12,color:"#9A3412",lineHeight:1.5,marginBottom:10}}>
+                      Missing: {cleaningPricing.missingFields.join(", ")} for {selectedAddress?.label||"this property"}.
+                    </div>
+                    <button onClick={()=>openAddressForm(selectedAddress,"beds")} style={{background:"#EA580C",border:"none",color:W,padding:"9px 16px",borderRadius:10,fontWeight:700,fontSize:13,cursor:"pointer"}}>Add property details</button>
+                  </div>
+                </div>
+              ):(
+                <div style={{background:W,borderRadius:18,padding:14,marginBottom:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center"}}>
+                  <span style={{fontSize:18,flexShrink:0}}>📐</span>
+                  <div style={{fontSize:12,color:TS,lineHeight:1.4}}>
+                    Estimate for <strong style={{color:TX}}>{selectedAddress?.label||"this property"}</strong>: {selectedAddress.beds==="Studio"?"Studio":`${selectedAddress.beds} bed`} / {selectedAddress.baths} bath, {selectedAddress.sqft} sqft
+                  </div>
+                </div>
+              )
+            )}
 
             {!emergency&&(()=>{
               const dur=getExpectedDuration(browsedTask.t);
@@ -4055,8 +4238,8 @@ export default function App(){
           </div>
         </div>
         <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
-          <button onClick={postJob} disabled={!selectedAddress} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:selectedAddress?AM:"#DDD9D2",color:selectedAddress?W:TM,fontWeight:800,fontSize:17,cursor:selectedAddress?"pointer":"default",boxShadow:selectedAddress?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
-            {selectedAddress?`Post Job — $${total}`:"Add an address to continue"}
+          <button onClick={postJob} disabled={!selectedAddress||effectiveTaskPrice==null} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:(selectedAddress&&effectiveTaskPrice!=null)?AM:"#DDD9D2",color:(selectedAddress&&effectiveTaskPrice!=null)?W:TM,fontWeight:800,fontSize:17,cursor:(selectedAddress&&effectiveTaskPrice!=null)?"pointer":"default",boxShadow:(selectedAddress&&effectiveTaskPrice!=null)?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
+            {!selectedAddress?"Add an address to continue":effectiveTaskPrice==null?"Add property details to continue":`Post Job — $${total}`}
           </button>
         </div>
       </div>

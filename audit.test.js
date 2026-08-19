@@ -757,56 +757,62 @@ function runInlineEditChecks(){
   document.body.appendChild(container7);
   act(()=>{ render(React.createElement(App), container7); });
 
-  step('32. Inline editing — Home type, tap-to-edit dropdown, save updates immediately', () => {
+  step('32. Home type — the control is always present, no separate "tap to reveal" step, and selecting a value saves instantly with no Save button', () => {
     click('Profile'); click('My Home');
     assert(existsRegex('Home overview'), 'On My Home');
-    click('Home type');
-    assert(!!screen.queryByLabelText('Home type'), 'Tapping the tile enters inline editing with an accessible, labeled control');
-    act(()=>{fireEvent.change(screen.getByLabelText('Home type'),{target:{value:'Townhouse'}});});
-    click('✓ Save');
-    assert(existsRegex('Townhouse'), 'Save updates the tile value immediately');
-    assert(!screen.queryByLabelText('Home type'), 'Editing mode closes after save — semantic button again, not left open');
+    const homeTypeSelect = screen.getByLabelText('Home type');
+    assert(!!homeTypeSelect, 'The native control exists without any prior tap on the tile — first tap goes straight to the real control');
+    act(()=>{fireEvent.change(homeTypeSelect,{target:{value:'Townhouse'}});});
+    assert(existsRegex('Townhouse'), 'Selecting a value saves and updates the displayed text immediately');
+    assert(!screen.queryByText('✓ Save') && !screen.queryByText('✕ Cancel'), 'No Save/Cancel buttons exist anywhere on the tile');
   });
 
-  step('33. Inline editing — Year built, Cancel restores the prior value untouched', () => {
+  step('33. Year built — same direct-manipulation pattern, independent of Home type (no shared "one tile editing at a time" state)', () => {
     const before = primaryHomeRaw().yearBuilt;
-    click('Year built');
-    act(()=>{fireEvent.change(screen.getByLabelText('Year built'),{target:{value:before==='2010'?'2011':'2010'}});});
-    click('✕ Cancel');
-    assert(primaryHomeRaw().yearBuilt===before, 'Cancel restores the prior value exactly — no partial or accidental save');
+    const yearSelect = screen.getByLabelText('Year built');
+    const newYear = before==='2010'?'2011':'2010';
+    act(()=>{fireEvent.change(yearSelect,{target:{value:newYear}});});
+    assert(primaryHomeRaw().yearBuilt===newYear, 'Year built saves instantly on selection');
+    assert(primaryHomeRaw().propertyType==='Townhouse', "Home type from the previous step is untouched — each tile is fully independent, there's no shared editing-mode state to interfere with a different tile");
   });
 
-  step('34. Inline editing — Square footage validation: zero rejected with inline error, value preserved for correction, valid save works', () => {
-    click('Square footage');
+  step('34. Square footage — focus/type/blur pattern: invalid input silently reverts on blur (no error banner, no Save button), valid input saves on blur', () => {
     const sqftInput = screen.getByLabelText('Square footage');
+    const before = primaryHomeRaw().sqft;
+    act(()=>{fireEvent.focus(sqftInput);});
     act(()=>{fireEvent.change(sqftInput,{target:{value:'0'}});});
-    click('✓ Save');
-    assert(existsRegex(/greater than 0/), 'Invalid (zero) square footage shows a short inline error');
-    assert(!!screen.queryByLabelText('Square footage'), 'Invalid save does not close the editor — user can correct it in place');
-    assert(sqftInput.value==='0', "The user's entered value is preserved after a failed validation, not cleared");
+    act(()=>{fireEvent.blur(sqftInput);});
+    assert(primaryHomeRaw().sqft===before, 'Invalid (zero) square footage silently reverts to the previous value on blur — no error message, no lingering edit state');
+    act(()=>{fireEvent.focus(sqftInput);});
     act(()=>{fireEvent.change(sqftInput,{target:{value:'-40'}});});
-    assert(sqftInput.value==='40', 'Non-digit characters (including a minus sign) are stripped at input time — negative values cannot even be typed, a stronger guarantee than a rejection message');
+    assert(sqftInput.value==='40', 'Non-digit characters (including a minus sign) are stripped at input time — negative values cannot even be typed');
     act(()=>{fireEvent.change(sqftInput,{target:{value:'1650'}});});
-    click('✓ Save');
-    assert(existsRegex('1650 sqft'), 'Valid square footage saves and displays immediately');
+    act(()=>{fireEvent.blur(sqftInput);});
+    assert(primaryHomeRaw().sqft==='1650', 'Valid square footage saves on blur');
+    assert(sqftInput.value==='1650'&&existsRegex('sqft'), 'Updated value displays immediately');
   });
 
-  step('35. Inline editing — Layout uses two selectors and saves both fields together', () => {
+  step('35. Layout — tapping the tile opens a small popover without resizing the tile itself; both selectors save instantly; tapping outside closes it', () => {
+    const tileBefore = screen.getByLabelText(/Layout:/).closest('div').getAttribute('style');
     click('Layout');
-    assert(!!screen.queryByLabelText('Bedrooms') && !!screen.queryByLabelText('Bathrooms'), 'Layout opens a compact editor with separate bedroom and bathroom selectors');
+    assert(!!screen.queryByLabelText('Bedrooms') && !!screen.queryByLabelText('Bathrooms'), 'Tapping Layout opens a popover with both selectors immediately — no second tap');
+    const tileDuring = screen.getByLabelText(/Layout:/).closest('div').getAttribute('style');
+    assert(tileBefore===tileDuring, "The Layout tile's own style never changes while its popover is open — the tile itself does not resize");
     act(()=>{fireEvent.change(screen.getByLabelText('Bedrooms'),{target:{value:'4'}});});
     act(()=>{fireEvent.change(screen.getByLabelText('Bathrooms'),{target:{value:'2.5'}});});
-    click('✓ Save');
-    assert(existsRegex('4 bed / 2.5 bath'), 'Layout saves both bedroom and bathroom values together');
+    assert(primaryHomeRaw().beds==='4'&&primaryHomeRaw().baths==='2.5', 'Both values save instantly on selection, no Save button');
+    assert(existsRegex('4 bed / 2.5 bath'), 'Updated layout displays immediately while the popover is still open');
+    act(()=>{fireEvent.pointerDown(document.body);});
+    assert(!screen.queryByLabelText('Bedrooms'), 'Tapping outside the popover closes it');
+    assert(primaryHomeRaw().beds==='4'&&primaryHomeRaw().baths==='2.5', 'Closing the popover keeps the already-saved values (nothing to discard, since every change saved instantly)');
   });
 
-  step('36. Inline editing — only one tile edits at a time; switching tiles saves a valid pending edit', () => {
-    click('Home type');
-    act(()=>{fireEvent.change(screen.getByLabelText('Home type'),{target:{value:'Condo'}});});
-    click('Year built'); // switch without an explicit Save
-    assert(existsRegex('Condo'), 'Switching tiles auto-saved the valid pending edit rather than discarding it silently');
-    assert(!!screen.queryByLabelText('Year built') && !screen.queryByLabelText('Home type'), 'Exactly one tile is in edit mode after switching — the new one, not both');
-    click('✕ Cancel');
+  step('36. No tile ever changes dimensions — Home overview grid style is stable whether idle or mid-interaction on any tile', () => {
+    const gridBefore = screen.getByLabelText('Home type').closest('div').parentElement.getAttribute('style');
+    click('Layout');
+    const gridDuring = screen.getByLabelText('Home type').closest('div').parentElement.getAttribute('style');
+    assert(gridBefore===gridDuring, 'The grid container itself never changes style/columns while a tile is being interacted with');
+    act(()=>{fireEvent.pointerDown(document.body);}); // close the popover again
   });
 
   step('37. Inline edits update the same canonical property — full Edit Home screen and Saved Addresses reflect identical data, no duplicate created', () => {
