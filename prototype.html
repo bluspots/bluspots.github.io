@@ -301,7 +301,7 @@ const INTENT_LIBRARY=[
     phrases:["clogged toilet","blocked toilet","toilet backed up","toilet won't flush","toilet wont flush","water rises when flushed","commode clogged","toilet not flushing","toilet overflow when flushed","toilet clog","toilet stopped up"],
     exclude:["running constantly","runs constantly","leaking at base","leaking from tank","install","new toilet"],clarifyGroup:"toilet_issue"},
   {id:"running_toilet",label:"Fix Running Toilet",category:"Plumbing",taskId:16,
-    phrases:["running toilet","toilet keeps running","toilet won't stop running","toilet wont stop running","toilet runs constantly","toilet tank running","phantom flush","toilet running non stop"],
+    phrases:["running toilet","toilet keeps running","toilet won't stop running","toilet wont stop running","toilet runs constantly","toilet tank running","phantom flush","toilet running non stop","toilet keeps filling","toilet tank keeps filling","toilet won't stop filling"],
     exclude:["clogged","blocked","backed up","overflow","won't flush","wont flush"],clarifyGroup:"toilet_issue"},
   {id:"overflowing_toilet",label:"Fix Overflowing Toilet",category:"Plumbing",taskId:16,
     phrases:["overflowing toilet","toilet overflowing","toilet overflows","water on floor from toilet","toilet spilling over"],
@@ -345,7 +345,10 @@ const INTENT_LIBRARY=[
     exclude:["outlet not working","no power","dead outlet"]},
   {id:"outlet_not_working",label:"Outlet Not Working",category:"Electrical",taskId:54,
     phrases:["outlet not working","dead outlet","outlet no power","plug not working","socket not working","outlet stopped working"],
-    exclude:["install new outlet","flicker","flickering"]},
+    exclude:["install new outlet","flicker","flickering","smell","burning","burnt","hot to touch"]},
+  {id:"electrical_burning_smell",label:"Electrical Safety Concern",category:"Electrical",taskId:54,urgent:true,
+    phrases:["smells burnt near outlet","burning smell near outlet","outlet smells burnt","burning smell from outlet","outlet is hot to the touch","smell burning from the wall","electrical burning smell","outlet sparking","sparks from outlet"],
+    exclude:[]},
   {id:"install_outlet",label:"Install Outlet/Switch",category:"Electrical",taskId:22,
     phrases:["install outlet","new outlet installation","add an outlet","install switch","install light switch"],
     exclude:["not working","dead","broken","stopped working"]},
@@ -366,7 +369,7 @@ const INTENT_LIBRARY=[
     exclude:[]},
   // HVAC / Appliance
   {id:"ac_not_cooling",label:"AC/Heating Repair Visit",category:"Repair",taskId:53,
-    phrases:["ac blowing warm air","ac not cooling","air conditioning not cold","ac not working","air conditioner broken","ac blowing hot air"],
+    phrases:["ac blowing warm air","ac not cooling","air conditioning not cold","ac not working","air conditioner broken","ac blowing hot air","room is too hot","house is too hot","room too hot","house too hot","not getting cold air","ac isn't cooling"],
     exclude:["heat not working","furnace","no heat"]},
   {id:"heater_not_working",label:"AC/Heating Repair Visit",category:"Repair",taskId:53,
     phrases:["furnace not working","heater not working","no heat","heating not working","thermostat not responding","furnace won't turn on"],
@@ -437,10 +440,13 @@ const INTENT_LIBRARY=[
     exclude:[]},
   {id:"build_shelves",label:"Install Shelving",category:"Installation",taskId:9,
     phrases:["need shelves built","install shelves","shelf installation","build shelving","mount shelves","put up shelves"],
-    exclude:[]},
+    exclude:[],clarifyGroup:"mounting_category"},
   {id:"mount_tv",label:"Mount TV",category:"Installation",taskId:6,
     phrases:["mount tv","tv wall mount","hang tv on wall","tv mounting","install tv bracket","put tv on wall"],
-    exclude:["won't turn on","wont turn on","not working","broken","black screen"]},
+    exclude:["won't turn on","wont turn on","not working","broken","black screen"],clarifyGroup:"mounting_category"},
+  {id:"mounting_general",label:"Mounting (unspecified)",category:"Installation",taskId:null,
+    phrases:["need this mounted","need something mounted","want this mounted","mount this for me","hang this up","need it mounted on the wall"],
+    exclude:["tv","television","shelf","shelves","shelving"],clarifyGroup:"mounting_category"},
   {id:"tv_not_turning_on",label:"Electrical Troubleshooting",category:"Electrical",taskId:54,
     phrases:["tv won't turn on","tv wont turn on","tv screen black","tv not powering on","tv remote not working","tv has no power"],
     exclude:["mount","wall mount","install bracket"]},
@@ -520,6 +526,15 @@ const CLARIFICATION_GROUPS={
       {label:"Kitchen Cleaning",intentId:"kitchen_clean"},
       {label:"Garage",intentId:null},
       {label:"Other / Not Listed",intentId:null},
+    ],
+  },
+  mounting_category:{
+    question:"What would you like mounted?",
+    options:[
+      {label:"TV",intentId:"mount_tv"},
+      {label:"Shelves",intentId:"build_shelves"},
+      {label:"Mirror or artwork",intentId:null},
+      {label:"Something else",intentId:null},
     ],
   },
 };
@@ -626,7 +641,7 @@ function _categoryConfidence(queryWordSet,category){
 // {tier, matches, clarification} out.
 function matchRepairIntent(query){
   const q=(query||"").toLowerCase().trim();
-  if(!q) return {tier:"none",matches:[],clarification:null};
+  if(!q) return {tier:"none",matches:[],clarification:null,topCategory:null,topCategoryConfidence:0};
   const qWordSet=new Set(_tokenize(q));
   const scored=INTENT_LIBRARY.map((intent,i)=>({
     intent,confidence:_confidenceFor(q,qWordSet,intent,_intentWordSets[i],_intentPhraseWordSets[i],_excludeWordSets[i]),
@@ -649,6 +664,7 @@ function matchRepairIntent(query){
   const categoryScores=_categoryList.map(cat=>({cat,confidence:_categoryConfidence(qWordSet,cat)})).sort((a,b)=>b.confidence-a.confidence);
   const topCat=categoryScores[0], secondCat=categoryScores[1];
   const catClearlyAhead = topCat && (!secondCat || (topCat.confidence-secondCat.confidence)>=20);
+  const topCategory=topCat?topCat.cat:null, topCategoryConfidence=topCat?topCat.confidence:0;
 
   const top=matches[0];
   const second=matches[1];
@@ -663,11 +679,11 @@ function matchRepairIntent(query){
   if(topCat && topCat.confidence>=45 && catClearlyAhead && !topIntentIsTrustworthy){
     const group=_categoryClarifyGroup[topCat.cat];
     if(group && CLARIFICATION_GROUPS[group]){
-      return {tier:"low",matches,clarification:CLARIFICATION_GROUPS[group]};
+      return {tier:"low",matches,clarification:CLARIFICATION_GROUPS[group],topCategory,topCategoryConfidence};
     }
   }
 
-  if(matches.length===0) return {tier:"low",matches:[],clarification:null};
+  if(matches.length===0) return {tier:"low",matches:[],clarification:null,topCategory,topCategoryConfidence};
 
   // Clarify only when genuinely needed: several sibling intents from the
   // same clarify group are close enough that guessing would be a real risk.
@@ -678,13 +694,104 @@ function matchRepairIntent(query){
       return mi?.clarifyGroup===topIntent.clarifyGroup;
     });
     if(siblingsInTop.length>=2){
-      return {tier:"low",matches,clarification:CLARIFICATION_GROUPS[topIntent.clarifyGroup]||null};
+      return {tier:"low",matches,clarification:CLARIFICATION_GROUPS[topIntent.clarifyGroup]||null,topCategory,topCategoryConfidence};
     }
   }
 
-  if(top.confidence>=70 && !tooClose) return {tier:"high",matches:matches.slice(0,3)};
-  if(top.confidence>=35) return {tier:"medium",matches:matches.slice(0,3)};
-  return {tier:"low",matches:matches.slice(0,3),clarification:null};
+  // An intent with no canonical taskId (no real Haven service to book)
+  // must never become a bookable "high" or "medium" recommendation,
+  // regardless of how confidently its phrases matched. Route to its own
+  // clarify group if it has one; otherwise fall through honestly rather
+  // than render a "recommendation" with nothing behind it.
+  if(top && !top.taskId){
+    const group=topIntent?.clarifyGroup;
+    if(group && CLARIFICATION_GROUPS[group]) return {tier:"low",matches,clarification:CLARIFICATION_GROUPS[group],topCategory,topCategoryConfidence};
+    return {tier:"low",matches,clarification:null,topCategory,topCategoryConfidence};
+  }
+
+  if(top.confidence>=70 && !tooClose) return {tier:"high",matches:matches.slice(0,3),clarification:null,topCategory,topCategoryConfidence};
+  if(top.confidence>=35) return {tier:"medium",matches:matches.slice(0,3),clarification:null,topCategory,topCategoryConfidence};
+  return {tier:"low",matches:matches.slice(0,3),clarification:null,topCategory,topCategoryConfidence};
+}
+
+// Safety/urgency signal words — deliberately independent of which specific
+// service matched, since urgency is a different dimension than "which
+// service." A burning smell is urgent regardless of whether the matching
+// engine confidently identified the exact electrical issue.
+const URGENCY_KEYWORDS=["smoke","burning smell","burnt smell","smells burnt","gas smell","smell gas","sparking","spark","shock","electrocut","fire","flooding","water everywhere","water pouring","emergency","urgent","can't wait","cant wait","no power at all","exposed wire"];
+function _detectUrgency(rawInput,topIntent){
+  if(topIntent?.urgent) return "high";
+  const lower=(rawInput||"").toLowerCase();
+  if(URGENCY_KEYWORDS.some(kw=>lower.includes(kw))) return "high";
+  return "normal";
+}
+
+// interpretHomeIntent(input, context) — the single boundary the UI
+// consumes. Everything above (INTENT_LIBRARY, matchRepairIntent,
+// category/service confidence, clarification groups) is implementation
+// detail behind this contract. A future AI classifier only needs to
+// implement this same function signature and output shape; the UI does
+// not need to change, and does not need to know which one is answering.
+//
+// context is optional and additive — for the prototype, only `property`
+// (the selected/primary property record: beds/baths/sqft/propertyType) is
+// actually used, for property-aware scope/pricing on services that need
+// it. Other fields the product spec anticipates (previousServices,
+// activeJobs, savedPreferences, location) are accepted in the shape but
+// not yet used by any matching logic — there's no concrete behavior
+// defined for them yet, and inventing one would be speculative rather
+// than principled. Extending scopeContext/matching to use them later
+// only requires extending this function, not the UI.
+function interpretHomeIntent(input,context={}){
+  const raw=input||"";
+  const result=matchRepairIntent(raw);
+  const top=result.matches[0]||null;
+  const topIntent=top?INTENT_LIBRARY.find(i=>i.id===top.intentId):null;
+  const task=top?.taskId?TASKS.find(t=>t.id===top.taskId):null;
+
+  const clarificationRequired=!!result.clarification;
+  const isBookable=(result.tier==="high"||result.tier==="medium")&&!!task;
+
+  // Property-aware scope: only computed when there's an actual bookable,
+  // property-scoped service to compute it for. Never invents property
+  // data — calculateCleaningPrice already refuses to guess missing
+  // beds/baths/sqft, and that behavior carries through unchanged here.
+  let scopeContext=null;
+  if(task?.propertyScoped){
+    const pricing=calculateCleaningPrice(task,context.property||null);
+    scopeContext={
+      basedOnProperty:context.property?(context.property.label||"selected property"):null,
+      beds:context.property?.beds||null,
+      baths:context.property?.baths||null,
+      sqft:context.property?.sqft||null,
+      estimatedPrice:pricing.price,
+      missingPropertyFields:pricing.missingFields,
+    };
+  }
+
+  let fallbackType="none";
+  if(!isBookable){
+    fallbackType=clarificationRequired?"clarification":"custom_job";
+  }
+
+  return {
+    categoryId:isBookable?(top.category||null):((result.topCategoryConfidence>0)?result.topCategory:null),
+    serviceId:isBookable?task.id:null,
+    intentId:top?top.intentId:null,
+    categoryConfidence:result.topCategoryConfidence>0?result.topCategoryConfidence:(top?100:0),
+    serviceConfidence:top?top.confidence:0,
+    clarificationRequired,
+    clarificationQuestion:result.clarification?result.clarification.question:null,
+    clarificationOptions:result.clarification?result.clarification.options.map(o=>({label:o.label,intentId:o.intentId})):null,
+    urgency:_detectUrgency(raw,topIntent),
+    scopeContext,
+    fallbackType,
+    // Internal/debug — not part of the stable contract, but useful for
+    // the UI to render "Recommended for you" without needing its own
+    // second lookup into TASKS/INTENT_LIBRARY.
+    _task:task,
+    _matches:result.matches,
+  };
 }
 
 const JOB_CATS=[...CATS.filter(c=>c!=="All"),"Other"];
@@ -1568,11 +1675,11 @@ function App(){
   const browsedTask = TASKS.find(t=>t.id===tid);
   const customTask  = ctitle?{id:null,e:"🔧",n:ctitle,p:parseInt(cprice)||0,t:"Varies",c:ccat}:null;
   const currentTask = browsedTask||customTask;
-  // Search-by-symptom now runs through matchRepairIntent() (module-level,
-  // see INTENT_LIBRARY above) instead of category-level keywords. Category
-  // browsing via the chips below is completely unaffected — it never
-  // touches intent matching at all, only a live query does.
-  const intentResult = q ? matchRepairIntent(q) : {tier:"none",matches:[],clarification:null};
+  // Search-by-symptom now runs through interpretHomeIntent() (module-level
+  // — see matchRepairIntent/INTENT_LIBRARY above), the same clean boundary
+  // a future AI classifier would implement. Category browsing via the
+  // chips below is completely unaffected — it never touches intent
+  // matching at all, only a live query does.
   const items       = TASKS.filter(t=>{
     const passCat = catGroup ? catGroup.cats.includes(t.c) : (cat==="All"||t.c===cat);
     const passQ   = !q||t.n.toLowerCase().includes(q.toLowerCase());
@@ -1649,6 +1756,18 @@ function App(){
   const sortedCards = cards.slice().sort((a,b)=>(b.isDefault?1:0)-(a.isDefault?1:0));
   const selectedAddress = addresses.find(a=>a.id===selectedAddressId) || primaryHome;
   const selectedCard = cards.find(c=>c.id===selectedCardId) || cards.find(c=>c.isDefault) || cards[0];
+  // The UI's one and only entry point into diagnosis — interpretHomeIntent
+  // is the full contract (category/service confidence, urgency,
+  // property-aware scope, clarification). tier/matches/clarification are
+  // derived from it here rather than rewriting the render logic below,
+  // since that logic is already proven correct; what changed is that
+  // nothing in this component calls matchRepairIntent directly anymore.
+  const homeIntent = q ? interpretHomeIntent(q,{property:selectedAddress}) : null;
+  const intentResult = homeIntent ? {
+    tier: homeIntent.serviceId ? (homeIntent.serviceConfidence>=70?"high":"medium") : "low",
+    matches: homeIntent._matches,
+    clarification: homeIntent.clarificationRequired ? {question:homeIntent.clarificationQuestion,options:homeIntent.clarificationOptions} : null,
+  } : {tier:"none",matches:[],clarification:null};
   // Property-aware pricing for scoped cleaning tasks — uses whichever
   // property is currently selected (defaults to primary before an
   // explicit selection, satisfying "preliminary estimate from the primary

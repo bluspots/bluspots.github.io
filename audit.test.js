@@ -135,12 +135,14 @@ const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports = typeof App !== 'undefined' ? App : undefined;
   module.exports2 = typeof ErrorBoundary !== 'undefined' ? ErrorBoundary : undefined;
   module.exports3 = typeof matchRepairIntent !== 'undefined' ? matchRepairIntent : undefined;
+  module.exports4 = typeof interpretHomeIntent !== 'undefined' ? interpretHomeIntent : undefined;
 })`;
 const moduleObj = { exports: {} };
 eval(wrapped)(React, React.useState, React.useRef, React.useEffect, moduleObj);
 const App = moduleObj.exports;
 const ErrorBoundary = moduleObj.exports2;
 const matchRepairIntent = moduleObj.exports3;
+const interpretHomeIntent = moduleObj.exports4;
 
 assert(typeof App === 'function', 'App component loaded from compiled source');
 assert(typeof ErrorBoundary === 'function', 'ErrorBoundary class loaded from compiled source');
@@ -981,5 +983,104 @@ function runDiagnosisMatchingChecks(){
   });
 
   console.log(`\n--- Diagnosis matching audit: ${pass} passing, ${fail} failing ---`);
+  if (fail > 0) process.exit(1);
+
+  runHomeIntentArchitectureChecks();
+}
+
+// ── PHASE 13: interpretHomeIntent(input, context) — the redesigned
+// architecture's actual entry point. Tests the real user-facing diagnosis
+// function directly (per the spec's explicit instruction), not only the
+// matcher underneath it. Covers every query in the required regression
+// list, urgency detection, property-context-aware scope, and the specific
+// gaps found and fixed this session (toilet keeps filling, room too hot,
+// the new electrical safety intent, and ambiguous mounting requests).
+function runHomeIntentArchitectureChecks(){
+  const neverMinorRepairsViaIntent=(query,context)=>{
+    const r=interpretHomeIntent(query,context);
+    return r.serviceId===null || r._task?.n!=='Minor repairs';
+  };
+
+  step('58. Full required regression list — cleaning inputs never resolve to Minor Repairs, category stays correct throughout', () => {
+    const cleaningQueries=['clean','clean garage','deep clean','clean my house','my house is dirty','clean my bathroom','clean the kitchen','carpet needs cleaning','moving out and need everything cleaned'];
+    cleaningQueries.forEach(q=>{
+      const r=interpretHomeIntent(q);
+      assert(neverMinorRepairsViaIntent(q), `"${q}" never resolves to Minor Repairs`);
+      assert(r.categoryId===null||r.categoryId==='Cleaning', `"${q}" stays within the Cleaning category (got ${r.categoryId})`);
+    });
+  });
+
+  step('59. Full required regression list — plumbing/electrical/mechanical inputs resolve correctly and specifically', () => {
+    const cases=[
+      ['clogged toilet','Plumbing'],
+      ["toilet won't flush",'Plumbing'],
+      ['toilet keeps filling','Plumbing'],
+      ['water under sink','Plumbing'],
+      ['lights flickering','Electrical'],
+      ["door won't close",'Repair'],
+      ["garage door won't open",'Repair'],
+      ['AC blowing warm air','Repair'],
+      ['dishwasher leaking','Appliance'],
+      ['washing machine shaking','Appliance'],
+      ['ceiling fan wobbles','Electrical'],
+    ];
+    cases.forEach(([q,expectedCategory])=>{
+      const r=interpretHomeIntent(q);
+      assert(neverMinorRepairsViaIntent(q), `"${q}" never resolves to Minor Repairs`);
+      assert(r.categoryId===expectedCategory, `"${q}" resolves to ${expectedCategory} (got ${r.categoryId})`);
+      assert(r.serviceId!==null, `"${q}" resolves to a real, specific bookable service`);
+    });
+  });
+
+  step('60. "something smells burnt near outlet" — safety-relevant, resolves to Electrical with high urgency', () => {
+    const r=interpretHomeIntent('something smells burnt near outlet');
+    assert(r.categoryId==='Electrical', 'Resolves to the Electrical category');
+    assert(r.urgency==='high', 'Flagged as high urgency — this is a genuine safety signal, not routine troubleshooting');
+    assert(neverMinorRepairsViaIntent('something smells burnt near outlet'), 'Never resolves to Minor Repairs');
+  });
+
+  step('61. Random nonsense input produces clarification or Not Listed, never a fabricated repair', () => {
+    const r=interpretHomeIntent('random nonsense input asdkjfh qqweoiu');
+    assert(r.serviceId===null, 'No service is fabricated for nonsense input');
+    assert(r.fallbackType==='custom_job'||r.fallbackType==='clarification', 'Falls through to custom job or clarification, never a guessed service');
+    assert(r.categoryId===null, 'No category is asserted for genuinely meaningless input');
+  });
+
+  step('62. High category confidence + low exact-service confidence stays inside the correct category (the core hierarchical principle)', () => {
+    const r=interpretHomeIntent('clean');
+    assert(r.categoryConfidence>=45, 'Category confidence is genuinely high for "clean"');
+    assert(r.serviceConfidence<70, 'Service-level confidence is genuinely low — no single cleaning service is obviously the one meant');
+    assert(r.clarificationRequired===true, 'The system asks within the category rather than guessing a specific service');
+    assert(r.clarificationOptions.every(o=>o.label!=='Minor Repairs'&&o.label!=='Minor repairs'), 'Minor Repairs is never among the clarification options for a cleaning query');
+  });
+
+  step('63. Property-dependent services use the actual selected property, never invented values', () => {
+    const withProperty=interpretHomeIntent('deep clean',{property:{label:'Home',beds:'3',baths:'2.5',sqft:'1345'}});
+    assert(withProperty.scopeContext.beds==='3'&&withProperty.scopeContext.baths==='2.5'&&withProperty.scopeContext.sqft==='1345', 'Scope context uses the actual property data passed in, not invented values');
+    assert(withProperty.scopeContext.estimatedPrice!=null, 'A real price is computed from that actual property data');
+    const withoutProperty=interpretHomeIntent('deep clean',{property:{label:'Work',beds:'',baths:'',sqft:''}});
+    assert(withoutProperty.scopeContext.estimatedPrice===null, 'Missing property data never gets a guessed price');
+    assert(withoutProperty.scopeContext.missingPropertyFields.length>0, 'Missing fields are reported so the UI can prompt for them, rather than silently assuming a size');
+  });
+
+  step('64. Ambiguous mounting request asks a clarification rather than guessing an object, but a specific one still resolves confidently', () => {
+    const ambiguous=interpretHomeIntent('need this mounted');
+    assert(ambiguous.serviceId===null&&ambiguous.clarificationRequired===true, 'An unspecified mounting request asks what to mount rather than guessing');
+    const specific=interpretHomeIntent('mount tv');
+    assert(specific.serviceId!==null&&specific.clarificationRequired===false, 'A specific, unambiguous mounting request still resolves confidently and directly');
+  });
+
+  step('65. The UI-facing contract shape is present and correctly typed on every result', () => {
+    const r=interpretHomeIntent('deep clean');
+    ['categoryId','serviceId','intentId','categoryConfidence','serviceConfidence','clarificationRequired','clarificationQuestion','clarificationOptions','urgency','scopeContext','fallbackType'].forEach(field=>{
+      assert(field in r, `Result includes the "${field}" field from the documented contract shape`);
+    });
+    assert(typeof r.categoryConfidence==='number'&&typeof r.serviceConfidence==='number', 'Confidence fields are numbers');
+    assert(typeof r.clarificationRequired==='boolean', 'clarificationRequired is a boolean');
+    assert(['high','normal'].includes(r.urgency), 'urgency is one of the documented values');
+    assert(['none','clarification','custom_job'].includes(r.fallbackType), 'fallbackType is one of the documented values');
+  });
+
+  console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 }
