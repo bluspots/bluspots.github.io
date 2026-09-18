@@ -8,7 +8,7 @@ developer-side verification only):
 
 ```bash
 npm install --no-save jsdom @testing-library/react@14 @testing-library/dom react@18.3.1 react-dom@18.3.1 @babel/core @babel/preset-react
-node audit.test.js    # functional navigation audit — 110 passing assertions
+node audit.test.js    # functional navigation audit — 190 passing assertions
 node boot_check.js    # boots the actual prototype.html script block
 ./build.sh            # regenerates prototype.html from home_services_app.jsx
 ```
