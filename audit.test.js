@@ -1151,4 +1151,5 @@ function runLockedPriceChecks(){
 
   // Note: Historical totals are stored on the job itself (lockedPrice), not recomputed.
   // Property changes after completion therefore do not alter past totals by design.
+
 }

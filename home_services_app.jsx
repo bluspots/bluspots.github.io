@@ -2644,7 +2644,7 @@ export default function App(){
         ):shownJobs.map(j=>{
           const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
           const jtp=ALL_TIME_PREFS.find(t=>t.id===j.tpId);
-          const basePrice=j.taskId?(j.lockedPrice??jt.p):(j.custom?.price||0);
+          const basePrice=j.taskId?(j.lockedPrice??(jt?jt.p:0)):(j.custom?.price||0);
           const jTotal=basePrice+(j.surge||0)+(j.emergencyFee||0);
           const isPending=j.status==="posted";const isDone=j.status==="complete";
           const isCancelPending=j.cancelStatus==="requested"&&!isDone;
@@ -3000,7 +3000,7 @@ export default function App(){
   })();
   const jobDisplayInfo=j=>{
     const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
-    const basePrice=j.taskId?(j.lockedPrice??jt.p):(j.custom?.price||0);
+    const basePrice=j.taskId?(j.lockedPrice??(jt?jt.p:0)):(j.custom?.price||0);
     const jTotal=basePrice+(j.surge||0)+(j.emergencyFee||0);
     const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
     return {jt,jTotal,dateStr};
@@ -3318,7 +3318,7 @@ export default function App(){
           </div>
         ):completedJobs.map(j=>{
           const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
-        const basePrice=j.taskId?(j.lockedPrice??jt.p):(j.custom?.price||0);
+        const basePrice=j.taskId?(j.lockedPrice??(jt?jt.p:0)):(j.custom?.price||0);
         const jTotal=basePrice+(j.surge||0)+(j.emergencyFee||0)+(j.tipAmount>0?j.tipAmount:0);
           const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
           return(
