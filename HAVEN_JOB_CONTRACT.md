@@ -36,7 +36,12 @@ destructured). What's built is the job feed, eligibility/geographic
 filtering, category filters, sort controls, Profile, Settings, and dark
 mode. Accept, Driving, Arrived, Diagnosing, Materials Request, Working,
 Completed — all of it is designed in `haven-pro-app-architecture-v2.md`
-but not yet written as code.
+but it is no longer accurate to say “not yet written as code.” The Pro App
+now implements a working job lifecycle. Exact status names and transition
+boundaries in the Pro App may differ from the Customer App’s
+lowercase-snake_case set and from the original architecture doc. This
+document does not publish a cross‑app canonical enum in this slice; see §2
+— reconciliation is explicitly DEFERRED.
 
 **Why this matters right now:** the Pro App is about to write its first
 lifecycle code. That's the cheapest possible moment to align vocabulary —
@@ -46,9 +51,10 @@ status enums instead of adopting one from the start.
 
 ---
 
-## 2. Status Vocabulary — the decision this document makes
+## 2. Status Vocabulary — reconciliation DEFERRED in this slice
 
-The Customer App already ships with a working, tested status enum:
+The Customer App already ships with a working, tested status enum (Customer‑side
+record only for now):
 
 ```
 posted → en_route → arrived → in_progress → complete
@@ -62,39 +68,37 @@ The Pro App's architecture doc independently proposed:
 AVAILABLE → ACCEPTED → DRIVING → ARRIVED → DIAGNOSING → WORKING → COMPLETED
                                                        ↘ MATERIALS_REQUESTED → WORKING | INSPECTION_ONLY_COMPLETE
 ```
-(SCREAMING_SNAKE_CASE; source: `haven-pro-app-architecture-v2.md` §8 — not
-yet coded)
+(SCREAMING_SNAKE_CASE; source: `haven-pro-app-architecture-v2.md` §8)
 
-**Decision: adopt the Customer App's existing lowercase convention and
-extend it**, rather than the reverse. Rationale: the Customer App's enum is
-already shipped, tested (110 passing assertions reference these exact
-strings), and persisted in real user data structures. The Pro App's enum
-exists only in a design doc — zero migration cost to change it before the
-first line of lifecycle code is written. Changing the Customer App's enum
-would mean touching shipped, working code and every test that references
-it for no functional gain.
+Decision for a single shared cross‑app enum is DEFERRED in this slice.
+Actions for now:
+- Keep the Customer App’s lowercase snake_case names as the
+  Customer‑side record.
+- Acknowledge that the Pro App now has its own implemented lifecycle with
+  potentially different names.
+- Do not rename statuses in code on either side in this PR.
+- Do not publish a new canonical combined enum here; reconciliation is a
+  follow‑up task.
 
-### Canonical status enum (target, extending Customer App's existing set)
+### Prior proposal (non‑canonical reference; DEFERRED)
 
 | Status | Meaning | Introduced by |
 |---|---|---|
 | `posted` | Job created, waiting for a pro to accept | Customer App (existing) |
 | `en_route` | Pro accepted, traveling to the property | Customer App (existing) |
 | `arrived` | Pro is at the property | Customer App (existing) |
-| `diagnosing` | *(diagnosis-required categories only)* Pro is assessing scope | **New — from Pro App v2 design, not yet coded either side** |
-| `materials_requested` | Pro found the job needs more than expected; awaiting customer approve/decline | **New — not yet coded either side** |
-| `in_progress` | Actively doing the work | Customer App (existing) — reused as-is for the post-diagnosis "Working" state; **do not introduce a separate `working` status**, it's the same state the Customer App already models |
+| `diagnosing` | *(diagnosis-required categories only)* Pro is assessing scope | Proposed (from Pro App v2 design) |
+| `materials_requested` | Pro found the job needs more than expected; awaiting customer approve/decline | Proposed |
+| `in_progress` | Actively doing the work | Customer App (existing). Proposed earlier as the shared “Working” state mapping. |
 | `complete` | Job finished, full repair, standard payout/pricing applies | Customer App (existing) |
-| `inspection_only_complete` | Diagnosis performed, customer declined materials, job ends at the inspection fee | **New — not yet coded either side** |
+| `inspection_only_complete` | Diagnosis performed, customer declined materials, job ends at the inspection fee | Proposed |
 | `cancelled` | Job cancelled before or during the above (see §5 for cancellation sub-states) | Customer App (existing) |
 
-**Explicitly rejected:** `AVAILABLE` and `ACCEPTED` as separate statuses.
-In the Customer App's actual model, "posted" *is* "waiting to be accepted" —
-there is no gap between posting and a pro seeing it in their feed, and the
-job never has a state that means "accepted but not yet en route." If the
-Pro App needs to distinguish "I've accepted, haven't started driving yet"
-as a UI moment, that's a Pro-App-local UI state, not a shared job status —
-see §6.
+Open question (DEFERRED): whether to distinguish “accepted” vs “en_route”
+as separate shared statuses. Today, the Customer App models “posted”
+as “waiting to be accepted,” with no separate “accepted, not yet en_route”
+state; the Pro App may represent an “accepted” pre‑drive moment in its UI
+without that being a shared enum value — see §6.
 
 ---
 
@@ -114,9 +118,9 @@ this stays honest about what's real today).
 | `propertyId` / `propertyLabel` | string | ⚠️ `addressLabel` (e.g. `"Home"`), no stable `propertyId` | ❌ n/a | Customer App's address objects have real IDs (`addresses[].id`); jobs currently snapshot only the formatted text (`addressText`) and label, not the ID. **Gap:** if a property is later renamed, historical jobs can't be traced back to which saved property they were. Not urgent, but worth fixing before this becomes a real backend concern. |
 | `addressSnapshot` | string | ✅ `addressText` | ✅ `city` (much coarser — city/state only, not a full address) | **Real privacy/precision mismatch.** The Pro App currently only has city-level location (appropriate for the *feed*, before acceptance — a pro shouldn't see a full address for a job they haven't accepted). Once a job is accepted, the Pro App needs the *full* address, which it doesn't have a field for at all yet. This should be modeled as two different pieces of data: a coarse `cityLabel` (feed-safe) and a full `addressSnapshot` (only populated/visible after acceptance). |
 | `coordinates` | {lat, lng} | ❌ not present | ❌ not present (uses `city` string matching + `distanceMi`) | Both sides currently simulate distance/geography rather than using real coordinates. Fine for prototype; flagged as a real backend requirement. |
-| `fixedCustomerLaborPrice` | number | ✅ resolved via `vjTask.p` / `custom.price` | ⚠️ `payout` (this is the *pro's* payout, not the customer's price — see next row) | **These are not the same number and must not become the same field.** Customer's price includes Haven's margin; Pro's payout does not. |
-| `fixedProLaborPayout` | number | ❌ not modeled (Customer App has no concept of what the pro earns) | ✅ `payout` | Once a backend exists, `fixedCustomerLaborPrice - fixedProLaborPayout = platformFee`. Today, neither app computes or stores a platform fee anywhere — it's implicit/undefined. |
-| `platformFee` | number | ❌ not present | ❌ not present | Not yet modeled on either side. Real backend requirement (see previous row). |
+| `fixedCustomerLaborPrice` | number | ✅ resolved via `vjTask.p` / `custom.price` | ⚠️ `payout` (this is the *pro's* payout, not the customer's price — see next row) | Current working margin is 20% of the customer labor/service price. Adjustable later. Not immutable. Not TBD. The customer sees one fixed labor/service price. Haven keeps 20% inside the listed labor price; the customer price does not increase. The founder set that margin at 20% of the listed labor price. The Pro's fixed labor payout is 80% of the listed labor price. The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later. It is not TBD. |
+| `fixedProLaborPayout` | number | ❌ not modeled (Customer App has no concept of what the pro earns) | ✅ `payout` | The Pro's fixed labor payout is 80% of `fixedCustomerLaborPrice` (the listed labor price). The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later. It is not TBD. |
+| `platformFee` | number | ❌ not present | ❌ not present | Not yet modeled on either side. Haven keeps 20% inside the listed labor price (current working margin); the customer price does not increase. |
 | `emergencyFee` / `emergency` | number / bool | ✅ `emergencyFee`, `emergency` | ✅ `emergency` (bool only, no fee field) | Pro App shows emergency as a badge/priority flag on the feed; it doesn't yet carry the fee amount as its own field. Should if/when Pro App shows payout breakdown. |
 | `inspectionFee` | number | ❌ not present (Customer App has no Inspection Visit concept yet) | ✅ `inspectionFee` | **This is the clearest sign the two apps have already diverged on a real feature.** The Pro App's job feed already displays a two-tier price card (guaranteed inspection fee vs. contingent full payout) for diagnosis categories, per architecture doc §6 — this is real, shipped Pro App UI. The Customer App has *no* corresponding UI or data field for this at all. This needs Customer App work before a real diagnosis-required job could ever be posted and completed end-to-end. |
 | `requiresDiagnosis` | bool | ❌ not present | ⚠️ implicit — `DIAGNOSIS_CATEGORIES` is a static `Set` checked by category name, not a field on the job itself | Recommend making this a real field on the job object (computed at creation time from the category lookup) rather than a lookup every consumer has to redo. Cheap, removes a shared-constant dependency. |
@@ -130,6 +134,31 @@ this stays honest about what's real today).
 | `cancellationState` | object | ✅ `cancelStatus` (`null` \| `"requested"`), `cancellationRequestedAt` | ❌ not present | Pro App has no cancellation flow modeled yet. |
 | `customerRating` / `customerReview` | number / string | ✅ `stars`, `reviewTxt`, `rated`, `hireAgain` | ❌ not present (Pro App's own Trust Score is a *separate*, pre-computed simulated number on the pro profile, not derived from real per-job ratings yet) | Real backend requirement: Pro App's Trust Score should eventually aggregate from real `customerRating` values across completed jobs, not be a static seeded number. Not urgent for prototype stage. |
 | `tipAmount` / `tipStatus` / `tippedAt` | number / string / timestamp | ✅ all three, fully implemented (`notAdded`\|`processing`\|`paid`\|`failed`) | ❌ not present | Pro App's Earnings screen (designed, not yet built) should read `tipAmount` directly once it exists — 100% of tip goes to the pro, per Customer App's existing tip-economics rule; this rule should be treated as already-decided, not re-litigated in Pro App design. |
+
+### 3b. Locked economics decisions (wording only; not yet reflected in code)
+
+The following product decisions are locked. They are authoritative for
+economics vocabulary, even where current prototype code has not yet
+adopted them. Do not change app code in this PR; this is documentation only.
+
+- Service price equals labor. No carve‑outs from the service price.
+- Materials are additive on top of the service price (labor).
+- Haven takes 0% of materials, 0% of tips, and 0% of Inspection Visits.
+- 100% of approved materials and 100% of tips go to the Pro.
+- The Customer App’s current code that carves materials out of the
+  service/labor price is NOT canonical. Do not “fix” that code here; this
+  note records the decision for future implementation work.
+- The customer sees one fixed labor/service price. Haven keeps 20% inside the listed labor price; the customer price does not increase. The founder set that margin at 20% of the listed labor price. The Pro's fixed labor payout is 80% of the listed labor price. The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later. It is not TBD.
+
+### 3c. Standard materials‑decline outcome wording
+
+- For standard (non‑diagnosis) categories, when materials are requested
+  mid‑job and the customer declines, the terminal outcome is:
+  “Job Ended — Materials Declined.”
+- A flat visit fee for that outcome is approved in principle; the exact
+  amount is FOUNDER‑TBD. This PR does not set a dollar amount.
+- Existing diagnosis fees and the diagnosis‑inspection path remain as they
+  are; do not rename or merge that path into this new standard outcome.
 
 ---
 
