@@ -1084,3 +1084,92 @@ function runHomeIntentArchitectureChecks(){
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 }
+
+// ── PHASE 14: Locked price everywhere for property-scoped (cleaning) services ──
+// Verifies that once a booking is created, every booked/historical total renders
+// from the booking's lockedPrice, not the catalog/base price or a freshly
+// recomputed property estimate. Covers: bookings list, posted/completion displays,
+// My Home service history, Receipts list, and the Receipt screen itself.
+(function runLockedPriceChecks(){
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  act(()=>{ render(React.createElement(App), container); });
+
+  step('66. Set property details to produce a non-base cleaning price (ensures lockedPrice != catalog p)', () => {
+    click('Profile'); click('My Home'); click('Edit ›');
+    const beds = screen.getByLabelText('Bedrooms');
+    const baths = screen.getByLabelText('Bathrooms');
+    const sqft = screen.getByLabelText('Square footage');
+    act(()=>{ fireEvent.change(beds,{target:{value:'4'}}); });
+    act(()=>{ fireEvent.change(baths,{target:{value:'2.5'}}); });
+    act(()=>{ fireEvent.focus(sqft); });
+    act(()=>{ fireEvent.change(sqft,{target:{value:'1650'}}); });
+    act(()=>{ fireEvent.blur(sqft); });
+    click('‹'); click('‹');
+  });
+
+  step('67. Book a property-scoped cleaning job and capture its locked price at booking time', () => {
+    clickTab('Home');
+    click('Deep Home Cleaning');
+    // Pick a non-surge time window to keep totals clean (no ASAP fee)
+    click('This morning'); // sets tpId with 0 surge in TIME_PREFS
+    clickRegex(/Post Job/);
+    // Posted screen shows the agreed total; lockedPrice is written to storage
+    const jobsData = JSON.parse(storedData['haven_jobs']);
+    const job = jobsData.data[jobsData.data.length-1];
+    assert(typeof job.lockedPrice==='number' && job.lockedPrice>0, 'Booking stored a numeric lockedPrice for the property-scoped task');
+    // Posted header uses vjTotal which must include lockedPrice as the base
+    assert(existsRegex(`$${job.lockedPrice}`), 'Posted job header shows the locked price (not the catalog base)');
+  });
+
+  step('68. Bookings list renders the locked price, not the catalog/base', () => {
+    click('← Bookings');
+    const jobsData = JSON.parse(storedData['haven_jobs']);
+    const job = jobsData.data[jobsData.data.length-1];
+    clickTab('Bookings');
+    assert(existsRegex(`$${job.lockedPrice}`), 'Bookings list shows the locked price');
+  });
+
+  step('69. Complete the job; completion/receipt flows use the locked price', () => {
+    // Open the job and advance through the lifecycle
+    act(()=>{ fireEvent.click(screen.queryAllByText(/Deep Home Cleaning/)[0]); });
+    click('Accept job (start travel)'); clickRegex(/Arrive/); clickRegex(/Start work/); clickRegex(/Complete job/);
+    // Receipt access button should be present and totals should match locked
+    click('🧾 View Receipt');
+    const jobsData = JSON.parse(storedData['haven_jobs']);
+    const job = jobsData.data[jobsData.data.length-1];
+    // In-app receipt breakdown shows Labor as the locked price
+    assert(existsRegex(new RegExp(`PAYMENT BREAKDOWN[\\s\\S]*Labor\\s*\\$${job.lockedPrice}`)), 'Receipt breakdown lists Labor at the locked price');
+    // Total paid equals locked price (no surge/priority or tip in this flow)
+    assert(existsRegex(new RegExp(`TOTAL PAID\\$?${job.lockedPrice}(?:\\.0+)?`)) || existsRegex(new RegExp(`Total paid\\$?${job.lockedPrice}(?:\\.0+)?`)), 'Receipt total equals the locked price');
+    click('‹');
+  });
+
+  step('70. My Home service history and Receipts list both use the same locked price', () => {
+    clickTab('Home'); click('‹'); // ensure on main Home
+    clickTab('Profile'); click('My Home');
+    const jobsData = JSON.parse(storedData['haven_jobs']);
+    const job = jobsData.data[jobsData.data.length-1];
+    assert(existsRegex(`$${job.lockedPrice}`), 'My Home service history preview shows the locked price');
+    click('View all service history');
+    assert(existsRegex(`$${job.lockedPrice}`), 'Dedicated Service History list shows the locked price');
+    click('‹'); click('Receipts');
+    assert(existsRegex(`$${job.lockedPrice}`), 'Receipts list shows the locked price');
+  });
+
+  step('71. Changing the property after completion does not change historical totals (still locked)', () => {
+    // Mutate the property to something that would yield a very different cleaning estimate
+    click('‹'); click('‹'); forceProfileRoot(); click('Saved Addresses');
+    click('Home');
+    act(()=>{ fireEvent.change(screen.getByLabelText('Bedrooms'),{target:{value:'1'}}); });
+    act(()=>{ fireEvent.change(screen.getByLabelText('Bathrooms'),{target:{value:'1'}}); });
+    const sqft = screen.getByLabelText('Square footage');
+    act(()=>{ fireEvent.focus(sqft); fireEvent.change(sqft,{target:{value:'600'}}); fireEvent.blur(sqft); });
+    click('‹'); click('‹'); click('My Home');
+    const jobsData = JSON.parse(storedData['haven_jobs']);
+    const job = jobsData.data[jobsData.data.length-1];
+    assert(existsRegex(`$${job.lockedPrice}`), 'My Home still shows the original locked price after property changes');
+    click('Receipts');
+    assert(existsRegex(`$${job.lockedPrice}`), 'Receipts list still shows the original locked price after property changes');
+  });
+})(); 
