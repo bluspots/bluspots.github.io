@@ -4713,6 +4713,7 @@ export default function App(){
           ):(
             <>
               <div style={{fontSize:13,color:TS,textAlign:"center",marginBottom:20,lineHeight:1.5}}>Recognize exceptional service with an optional tip.</div>
+              <div style={{fontSize:12,color:TS,textAlign:"center",marginBottom:12,lineHeight:1.5}}>100% of your tip goes to {vjPname}. Haven keeps none.</div>
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
                 {presets.map(amt=>(
                   <button key={amt} onClick={()=>{setTipSelection(amt);setTipCustomAmount("");setTipError("");}}
