@@ -15,6 +15,8 @@ Steps:
    - In Supabase dashboard → SQL Editor:
      - Run the contents of `supabase/migrations/0001_init.sql`
      - Then run the contents of `supabase/migrations/0002_chunk2_rls.sql`
+     - Finally run `supabase/migrations/0003_chunk2_grants.sql` (privilege fix)
+       - Grants: `grant select, insert on public.jobs to anon, authenticated;`
    - Confirm tables and RLS:
      - `public.jobs` exists with RLS enabled
      - Policies allow INSERT only when `status='posted'` and `pro_id is null`, and SELECT of rows where `status='posted'`
@@ -56,4 +58,7 @@ Notes and guardrails
 - Pricing economics are locked: Haven keeps 20% margin inside the listed labor price; Pro labor payout is 80% of the listed labor price (`margin_rate_bps=2000`). Materials, tips, and inspection are $0 for Haven in this slice (not used in create path).
 - Updates that assign a pro or change status beyond `posted` are intentionally not allowed by policies in this chunk.
 - Future slices will add authenticated ownership checks and additional read/write paths (materials, tips, assignment, status events).
+
+Remediation for existing projects
+- If you previously applied only `0001` and `0002` and see Postgres error `42501` (insufficient privilege) when calling Supabase REST, apply `supabase/migrations/0003_chunk2_grants.sql` to grant the required table privileges to `anon` and `authenticated`.
 
