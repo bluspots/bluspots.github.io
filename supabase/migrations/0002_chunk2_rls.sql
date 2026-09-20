@@ -34,3 +34,7 @@ create policy jobs_select_posted
 -- - Materials/tips/inspection paths are also out of scope.
 -- Real auth and finer-grained ownership checks will replace these prototypes.
 
+-- Minimum table privileges required for Supabase REST access in this chunk.
+-- Idempotent: re-running this GRANT is safe.
+grant select, insert on public.jobs to anon, authenticated;
+
