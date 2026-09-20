@@ -1146,10 +1146,11 @@ export default function App(){
   // Reads config from localStorage; if missing, dual‑write is a no‑op.
   const getSupabaseConfig=()=>{
     try{
-      const url=(localStorage.getItem("haven_supabase_url")||"").trim();
+      let url=(localStorage.getItem("haven_supabase_url")||"").trim();
       const key=(localStorage.getItem("haven_supabase_anon_key")||"").trim();
       if(!url||!key) return null;
-      return {url:url.replace(/\\/+$/,""), anonKey:key};
+      while (url.endsWith('/')) url = url.slice(0, -1);
+      return {url, anonKey:key};
     }catch{ return null; }
   };
   const postCanonicalJob=async(payload)=>{
