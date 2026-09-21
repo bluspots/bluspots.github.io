@@ -14,17 +14,20 @@ Recommended order for a fresh project:
 1. `migrations/0001_init.sql`
 2. `migrations/0002_chunk2_rls.sql`
 3. `migrations/0003_chunk2_grants.sql`
-4. `migrations/0004_chunk3_accept_and_decline.sql`
+4. `migrations/0004_chunk3_accept_and_decline.sql` (enum + column only)
 5. `migrations/0005_chunk3_grants.sql` (privilege fix for UPDATE + optional status‑event inserts)
+6. `migrations/0006_chunk3_rls_policies.sql` (prototype RLS policies for claim + terminals)
 
-Warning: Run `0004` from this PR branch’s latest file (Files tab → raw URL), not any older paste or copy — earlier drafts used invalid `CREATE POLICY IF NOT EXISTS` and will fail with error 42601.
+Warning:
+- Use this PR branch’s latest files (Files tab → raw URL), not any older paste or copy.
+- If running manually in the SQL Editor, run `0004` and finish/commit that execution BEFORE running `0006`. Never combine an `ALTER TYPE … ADD VALUE 'materials_declined'` and policies that reference `'materials_declined'` in the same run — Postgres requires the new enum value to be committed first (error 55P04 otherwise).
 
 Notes:
 - `0004` adds:
   - enum value `materials_declined`
   - column `convenience_fee_cents int not null default 0 check (>=0)`
-  - RLS UPDATE policies for claim and demo terminals
 - `0005` grants `UPDATE` on `public.jobs` to `anon`, `authenticated` (and `INSERT` on `public.job_status_events` optionally)
+- `0006` defines the prototype RLS UPDATE policies for claim and demo terminals
 
 ## 2) Configure the Customer App dual‑write (unchanged keys)
 
