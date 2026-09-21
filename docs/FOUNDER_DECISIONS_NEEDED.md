@@ -2,16 +2,14 @@
 
 Only decisions that represent real cross‑app conflicts or gaps that would shape the backend schema/constraints. Each lists Customer does / Pro does / why conflict / recommendation / blocks backend?
 
-1) Materials‑declined terminal outcome(s) and compensation
-- Customer does: No materials‑decline UI/flow yet (no inspection visit or materials‑decline handling on Customer).
-- Pro does (live): If the Pro arrives, inspects/diagnoses, and the customer declines materials so the job cannot be completed, the job ends as `inspection_completed` and the Pro is paid the inspection fee (e.g., $45) — already implemented in Pro code.
-- Historical Pro note: For standard (non‑diagnosis) categories where materials are discovered mid‑job and declined, the prototype historically ended with $0 to the Pro. This is the gap CoS flagged.
-- Options to present (do not silently pick one globally):
-  - Option A (provisional founder choice; implemented): Status/display “Inspection Completed” with `inspection_fee` (currently $45, INSPECTION_VISIT_FEE). Applies clearly to diagnosis categories after on‑site inspection/diagnosis when materials are declined.
-  - Option B (thesis label): Status/display “Job Ended — Materials Declined.” May include a separate visit fee (amount TBD) distinct from the diagnosis/inspection fee. Label and fee policy require founder confirmation.
-- Scope clarification to decide: Does Option A also apply to standard (non‑diagnosis) mid‑job materials‑decline cases, or should those use Option B with a separate visit fee? Today the Pro app only implements Option A for diagnosis categories; standard categories still effectively pay $0 on decline.
-- Recommendation: Backend schema supports both labels and fees (via `status` + `inspection_fee_cents` and/or an optional `visit_fee_cents`). Do NOT recommend “Job Ended — Materials Declined” as the production default without founder confirmation. Note that Option A is the provisional founder choice already reflected in the Pro app for the on‑site diagnosis path.
-- Blocks backend? No — schema can ship now; final payout/display rules per category/path need founder confirmation.
+1) Materials‑declined terminal outcome(s) and compensation — DECIDED (Chunk 3)
+- Customer does: No materials‑decline UI/flow yet (Customer remains unchanged in Chunk 3).
+- Pro does (live): If the Pro arrives, inspects/diagnoses, and the customer declines materials so the job cannot be completed, the job ends as `inspection_completed` and the Pro is paid the inspection fee ($45).
+- Standard (non‑diagnosis) categories: When materials are discovered mid‑job and declined, the terminal is `materials_declined` with a $30 convenience fee to the Pro. Haven takes $0 of this fee.
+- Outcome: Backend adopts both terminals:
+  - Diagnosis path → `inspection_completed` with `inspection_fee_cents=4500`
+  - Standard path → `materials_declined` with `convenience_fee_cents=3000`
+- Blocks backend? No — schema and RLS shipped in Chunk 3.
 
 2) Cross‑app status vocabulary (final set)
 - Customer: `posted,en_route,arrived,in_progress,complete,cancelled`.

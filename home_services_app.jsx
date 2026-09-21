@@ -2252,6 +2252,17 @@ export default function App(){
       const isCatalog = !!nj.taskId;
       const cat      = isCatalog ? (currentTask?.c||"") : (nj.custom?.cat||"");
       const title    = isCatalog ? (currentTask?.n||"") : (nj.custom?.title||"");
+        const taskId   = nj.taskId;
+        // CHUNK 3: compute diagnosis requirement once at creation and persist it
+        const DIAGNOSIS_CATEGORY_SET = new Set(["Plumbing","Electrical","Appliance","HVAC"]);
+        let requiresDiagnosis = DIAGNOSIS_CATEGORY_SET.has(cat);
+        if(!requiresDiagnosis && cat==="Repair"){
+          const tlc=(title||"").toLowerCase();
+          // Treat HVAC repair visit as diagnosis even though category label is "Repair" in this app
+          if(taskId===53 || tlc.includes("ac/heating") || tlc.includes("hvac")){
+            requiresDiagnosis = true;
+          }
+        }
       const customerPriceDollars = isCatalog
         ? (nj.lockedPrice??0)
         : (parseInt(nj.custom?.price)||0);
@@ -2266,7 +2277,7 @@ export default function App(){
         pro_id:null,
         category:cat||"General",
         title:title||"General service",
-        requires_diagnosis:false,
+          requires_diagnosis:!!requiresDiagnosis,
         city_label:cityLabel||"Unknown",
         address_snapshot:null,
         lat:null,
@@ -2276,7 +2287,7 @@ export default function App(){
         margin_rate_bps:2000,
         emergency:!!nj.emergency,
         emergency_fee_cents:Math.max(0,Math.floor((nj.emergencyFee||0)*100)),
-        inspection_fee_cents:0,
+          inspection_fee_cents:requiresDiagnosis?4500:0,
         status:"posted",
         customer_preferences_snapshot:Array.isArray(nj.jobPreferences)?nj.jobPreferences:[],
         payment_snapshot:{brand:nj.paymentBrand||"Card",last4:nj.paymentLast4||"----"},
