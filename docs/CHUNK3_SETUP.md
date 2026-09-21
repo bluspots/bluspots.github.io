@@ -17,6 +17,8 @@ Recommended order for a fresh project:
 4. `migrations/0004_chunk3_accept_and_decline.sql`
 5. `migrations/0005_chunk3_grants.sql` (privilege fix for UPDATE + optional status‑event inserts)
 
+Warning: Run `0004` from this PR branch’s latest file (Files tab → raw URL), not any older paste or copy — earlier drafts used invalid `CREATE POLICY IF NOT EXISTS` and will fail with error 42601.
+
 Notes:
 - `0004` adds:
   - enum value `materials_declined`
