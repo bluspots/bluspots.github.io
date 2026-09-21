@@ -39,7 +39,8 @@ alter table public.jobs enable row level security;
 -- 3a) Claim policy — allow accepting a job:
 --     Only when the CURRENT row is posted and unassigned,
 --     and the NEW row becomes en_route with a pro assigned.
-create policy if not exists jobs_update_claim_posted_to_en_route
+drop policy if exists jobs_update_claim_posted_to_en_route on public.jobs;
+create policy jobs_update_claim_posted_to_en_route
   on public.jobs
   for update
   to anon, authenticated
@@ -56,7 +57,8 @@ create policy if not exists jobs_update_claim_posted_to_en_route
 --     - inspection_completed (diagnosis decline path), or
 --     - materials_declined (standard decline path).
 --     Narrow: requires the row is already assigned; only permits those terminal statuses.
-create policy if not exists jobs_update_assigned_to_decline_terminals
+drop policy if exists jobs_update_assigned_to_decline_terminals on public.jobs;
+create policy jobs_update_assigned_to_decline_terminals
   on public.jobs
   for update
   to anon, authenticated
