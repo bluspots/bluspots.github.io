@@ -1090,6 +1090,7 @@ function makeJob({
   lockedPrice=null, // the actual labor price agreed to at booking time (property-aware for scoped tasks like Deep/Standard/Move-Out Cleaning). null for older jobs or non-scoped tasks — those fall back to the catalog's reference price, which is safe since it was never property-dependent to begin with.
   requiresDiagnosis=false, // computed once at creation for diagnosis categories; used for materials-decline outcome
   materialsRequest=null,   // {items:[{description,qty,amount}], estimatedTotal} — shown while awaiting approval
+  backendJobId=null,       // canonical UUID from Supabase dual-write; preserved across reloads
 }={}){
   return {
     id:Date.now(), // known limitation: two jobs in the same millisecond would collide — impossible via UI, fix when a backend exists
@@ -1104,8 +1105,8 @@ function makeJob({
     lockedPrice,
     requiresDiagnosis,
     materialsRequest,
-    // Backend (canonical) UUID once dual-write succeeds — null until then.
-    backendJobId:null,
+    // Backend (canonical) UUID once dual-write succeeds — preserved if present.
+    backendJobId,
   };
 }
 
