@@ -23,8 +23,9 @@ cd "$(dirname "$0")"
 
 # Phase 3 Step 0 — concat source list (Option A). See docs/PHASE3_MODULARIZATION_ORDER.md.
 
-# Ordered list of source files to concatenate (Step 0: single file to keep ship byte-stable)
+# Ordered list of source files to concatenate (Step 1 adds locked constants first)
 SOURCE_FILES=(
+  "locked_constants.js"
   "home_services_app.jsx"
 )
 

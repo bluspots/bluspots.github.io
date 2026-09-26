@@ -122,7 +122,6 @@ const EMERGENCY_TIME_PREFS=[
   {id:103,label:"Within 6 hours",  sub:"Response within 6 hours",surge:0},
 ];
 const ALL_TIME_PREFS=[...TIME_PREFS,...EMERGENCY_TIME_PREFS];
-const CATS=["All","Assembly","Installation","Smart Home","Plumbing","Electrical","Painting","Flooring","Cleaning","Landscaping","Moving","Repair","Maintenance","Appliance","Pest Control"];
 // Simulated job-completion detail (work performed, materials, pro notes),
 // keyed by category so a plumbing job and an electrical job get distinct,
 // contextually appropriate content rather than generic boilerplate — same
@@ -781,7 +780,6 @@ const ENTRY_GROUPS=[
   {key:"outdoor", label:"Outdoor", e:"🌿", cats:["Landscaping","Maintenance"]},
   {key:"move",    label:"Move",    e:"📦", cats:["Moving"]},
 ];
-const EMERGENCY_FEE=35;
 // "Trusted Home" is purely informational — no points, levels, or rewards.
 // It simply reflects that a property has an established repair history
 // through Haven. Configurable threshold, not tied to any gamification.
@@ -915,18 +913,7 @@ function matchDiagnosis(text){
   const conf = bestScore>=2 ? "High" : best.conf;
   return {...best,conf};
 }
-const SF=["en_route","arrived","diagnosing","materials_requested","materials_approved","in_progress","complete"];
-const SI={
-  en_route:            {label:"Pro is on the way",                 sub:"is heading to you",                 em:"🚗"},
-  arrived:             {label:"Pro has arrived",                   sub:"is at your door",                   em:"📍"},
-  diagnosing:          {label:"Assessing the job",                 sub:"is diagnosing the issue",           em:"🧪"},
-  materials_requested: {label:"Materials needed — your approval",  sub:"review and approve",                em:"🧾"},
-  materials_approved:  {label:"Materials approved — pro is buying",sub:"authorized purchase",               em:"🧾"},
-  in_progress:         {label:"Job in progress",                   sub:"is working on your job",            em:"🔨"},
-  inspection_completed:{label:"Inspection visit completed",        sub:"",                                  em:"🧪"},
-  materials_declined:  {label:"Job ended — materials declined",    sub:"",                                  em:"⛔"},
-  complete:            {label:"Job Complete! 🎉",                  sub:"— tap below to review",             em:"⭐"},
-};
+ 
 const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
 const PRO_REPLIES=["Got it! 👍","On it!","Thanks for the heads up!","Almost there!","Sounds good!","Will do!"];
 // Seed/default data — reused both for the initial useState value and by
@@ -1001,12 +988,6 @@ input,textarea,select{font-size:16px!important;}
 // v0.13 — registry of every valid scr value. goTo() refuses navigation to
 // anything not listed here (console-error, no crash). Adding a new screen
 // requires adding its name here AND a render branch in the switch below.
-const SCREENS = new Set([
-  "home","browse","diagnose","emergency","task","custom","posted","tracking",
-  "messages","rating","payment","editProfile","myhome","receiptList","receipt",
-  "addressEdit","proProfile","addresses","help","serviceHistory",
-  "notifCenter","settings","tip","jobPreferences",
-]);
 // Screens representing a temporary, single-use flow (the booking lifecycle,
 // and one-off editable forms) — these are never eligible for tab-memory
 // restoration, unlike stable "destination" screens (Notifications, My Home,
@@ -1014,9 +995,6 @@ const SCREENS = new Set([
 // switching tabs and back. Prevents "zombie" restores into a flow the user
 // has already finished or explicitly navigated away from via a fixed
 // destination (e.g. Tracking's "← Bookings").
-const TRANSIENT_FLOW_SCREENS = new Set([
-  "task","custom","posted","tracking","messages","rating","receipt","addressEdit","editProfile","tip",
-]);
 
 // v0.13 — Fix 3: catches render errors that would otherwise produce a silent
 // blank screen. Only catches render-phase errors (React limitation) — errors
@@ -1305,12 +1283,6 @@ export default function App(){
   const [ctitle,setCtitle] = useState("");
   const [ccat,setCcat]     = useState("Repair");
   const [cprice,setCprice] = useState("");
-  const VALID_JOB_STATUSES=new Set([
-    "posted","en_route","arrived","diagnosing",
-    "materials_requested","materials_approved",
-    "in_progress","inspection_completed","materials_declined",
-    "complete","cancelled"
-  ]);
   const [jobs,setJobs] = usePersistedState("haven_jobs",[],{
     version:1,
     validate:v=>{
@@ -1888,7 +1860,6 @@ export default function App(){
     if(bFilter==="done")   return j.status==="complete";
     return true;
   });
-  const TERMINAL_STATUSES=new Set(["complete","inspection_completed","materials_declined"]);
   const activeCount= allJobs.filter(j=>!TERMINAL_STATUSES.has(j.status)).length;
   const doneCount  = allJobs.filter(j=>TERMINAL_STATUSES.has(j.status)).length;
   const hasActive  = activeCount>0;
