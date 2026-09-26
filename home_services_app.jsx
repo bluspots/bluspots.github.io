@@ -1205,7 +1205,7 @@ export default function App(){
           "Accept":"application/json",
           "apikey":cfg.anonKey,
           "Authorization":`Bearer ${cfg.anonKey}`,
-          "Prefer":"return=representation",
+          "Prefer":"return=minimal",
         },
         body:JSON.stringify(fields),
       });
@@ -2405,9 +2405,21 @@ export default function App(){
   const requestCancellation=()=>{ updateJob(vjid,{cancelStatus:"requested",cancellationRequestedAt:Date.now()}); setShowCancelRequest(false); handleCancellationTransition(vjid,"requested"); };
 
   // Materials approval/decline — customer actions when vj.status === 'materials_requested'
-  const approveMaterials=()=>{
+  const [showApproveSyncFailed,setShowApproveSyncFailed]=useState(false);
+  const approveMaterials=async()=>{
     if(!vj) return;
-    // Local-only transition for now (authorize purchase) — backend RLS for this transition may not be open yet
+    let patched=false;
+    if(vj.backendJobId){
+      patched = await updateCanonicalJob(vj.backendJobId,{status:"materials_approved"});
+    }else{
+      // If Supabase is configured but we don't have a backend id, surface a soft error
+      const cfg=getSupabaseConfig();
+      if(cfg){ setShowApproveSyncFailed(true); setTimeout(()=>setShowApproveSyncFailed(false),2500); }
+    }
+    if(!patched){
+      // Soft-fail: proceed locally so the customer isn't blocked
+      console.warn("Haven: materials approval dual-write failed or unavailable; proceeding locally.");
+    }
     updateJob(vjid,{status:"materials_approved"});
     handleJobTransition(vjid,"materials_approved",vj.pro?.n||"Your pro");
   };
@@ -5266,6 +5278,11 @@ export default function App(){
                 <button onClick={()=>setShowMaterialsDeclineConfirm(false)} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:10}}>Go back</button>
                 <button onClick={declineMaterials} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"#DC2626",color:W,fontWeight:800,fontSize:15,cursor:"pointer"}}>Decline and end job</button>
               </div>
+            </div>
+          )}
+          {showApproveSyncFailed&&(
+            <div style={{position:"absolute",left:16,right:16,bottom:96,background:"#DC2626",borderRadius:14,padding:"12px 16px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)",zIndex:21}}>
+              <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>Couldn't sync approval — saved locally</span>
             </div>
           )}
         </div>
