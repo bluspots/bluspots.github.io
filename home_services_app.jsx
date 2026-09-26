@@ -6,36 +6,38 @@ const N='#1C2B3A',AM='#F59E0B';
 const SC='#059669';
 
 const TASKS=[
+  {id:41,e:"🔧",n:"Minor repairs",         p:59,  t:"Varies", c:"Repair",     pop:true},
   // Assembly
   {id:1, e:"🪑",n:"Assemble furniture",    p:65,  t:"50 min",c:"Assembly"},
-  {id:2, e:"🛏️",n:"Assemble bed",          p:79,  t:"60 min",c:"Assembly",    pop:true},
   {id:3, e:"🏋️",n:"Assemble home gym",     p:120, t:"90 min",c:"Assembly"},
   {id:4, e:"🛋️",n:"Assemble sofa",         p:70,  t:"45 min",c:"Assembly"},
   {id:5, e:"🗄️",n:"Assemble office desk",  p:75,  t:"50 min",c:"Assembly"},
   // Installation
   {id:6, e:"📺",n:"Mount TV",              p:89,  t:"45 min",c:"Installation",pop:true},
+  {id:2, e:"🛏️",n:"Assemble bed",          p:79,  t:"60 min",c:"Assembly",    pop:true},
   {id:7, e:"🖼️",n:"Hang artwork",          p:45,  t:"30 min",c:"Installation"},
   {id:8, e:"🪟",n:"Install curtains/blinds",p:55,  t:"35 min",c:"Installation"},
   {id:9, e:"📚",n:"Install shelving",      p:59,  t:"40 min",c:"Installation"},
   {id:10,e:"🚪",n:"Install door hardware", p:65,  t:"35 min",c:"Installation"},
   // Smart Home
-  {id:11,e:"🔒",n:"Install smart lock",    p:95,  t:"30 min",c:"Smart Home",  pop:true},
+  {id:11,e:"🔒",n:"Install smart lock",    p:95,  t:"30 min",c:"Smart Home",  pop:false},
   {id:12,e:"📡",n:"Install doorbell camera",p:65, t:"30 min",c:"Smart Home"},
   {id:13,e:"🌡️",n:"Install smart thermostat",p:75,t:"40 min",c:"Smart Home"},
   {id:14,e:"💡",n:"Install smart lighting",p:59,  t:"35 min",c:"Smart Home"},
+  {id:53,e:"🌡️",n:"AC/heating repair visit", p:99,  t:"Varies", c:"Repair",     pop:true},
   // Plumbing
   {id:15,e:"🚰",n:"Replace faucet",        p:85,  t:"45 min",c:"Plumbing"},
   {id:16,e:"🚽",n:"Install/repair toilet", p:95,  t:"50 min",c:"Plumbing"},
   {id:17,e:"🍽️",n:"Install dishwasher",    p:99,  t:"60 min",c:"Plumbing"},
   {id:18,e:"♻️",n:"Install garbage disposal",p:89, t:"45 min",c:"Plumbing"},
-  {id:19,e:"🔧",n:"Fix leaky pipe",        p:79,  t:"Varies",c:"Plumbing"},
+  {id:19,e:"🔧",n:"Fix leaky pipe",        p:79,  t:"Varies",c:"Plumbing", pop:true},
   // Electrical
   {id:20,e:"💡",n:"Replace light fixture", p:55,  t:"25 min",c:"Electrical"},
   {id:21,e:"🌀",n:"Install ceiling fan",   p:79,  t:"50 min",c:"Electrical"},
   {id:22,e:"🔌",n:"Install outlet/switch", p:65,  t:"30 min",c:"Electrical"},
   {id:23,e:"🧯",n:"Install EV charger outlet",p:149,t:"90 min",c:"Electrical"},
   // Painting
-  {id:24,e:"🎨",n:"Paint a room",          p:249, t:"3-4 hrs",c:"Painting",  pop:true},
+  {id:24,e:"🎨",n:"Paint a room",          p:249, t:"3-4 hrs",c:"Painting",  pop:false},
   {id:25,e:"🖌️",n:"Paint an accent wall",  p:129, t:"2 hrs",  c:"Painting"},
   {id:26,e:"🚪",n:"Paint doors/trim",      p:99,  t:"90 min", c:"Painting"},
   // Flooring
@@ -49,7 +51,7 @@ const TASKS=[
   // time — see calculateCleaningPrice(). Never bake a property size into a
   // service's own name or its own separate catalog entry (that was the
   // root cause of the original "Deep clean (2BR)" bug).
-  {id:30,e:"🧹",n:"Deep Home Cleaning",      p:159, t:"2-3 hrs",c:"Cleaning",  pop:true, propertyScoped:true},
+  {id:30,e:"🧹",n:"Deep Home Cleaning",      p:159, t:"2-3 hrs",c:"Cleaning",  pop:false, propertyScoped:true},
   {id:59,e:"🧼",n:"Standard Home Cleaning",  p:99,  t:"1-2 hrs",c:"Cleaning",  propertyScoped:true},
   {id:60,e:"🚿",n:"Bathroom Cleaning",       p:59,  t:"45 min", c:"Cleaning"},
   {id:61,e:"🍽️",n:"Kitchen Cleaning",        p:69,  t:"45 min", c:"Cleaning"},
@@ -66,7 +68,7 @@ const TASKS=[
   {id:39,e:"🚛",n:"Load/unload moving truck",p:149,t:"2 hrs",c:"Moving"},
   {id:40,e:"🗑️",n:"Junk removal",          p:99,  t:"60 min", c:"Moving"},
   // Repair
-  {id:41,e:"🔧",n:"Minor repairs",         p:59,  t:"Varies", c:"Repair"},
+ 
   {id:42,e:"🚪",n:"Fence repair",          p:159, t:"2 hrs",  c:"Repair"},
   {id:43,e:"🚗",n:"Garage door repair",    p:139, t:"90 min", c:"Repair"},
   {id:44,e:"🧱",n:"Drywall patch/repair",  p:99,  t:"60 min", c:"Repair"},
@@ -82,7 +84,7 @@ const TASKS=[
   {id:51,e:"🐜",n:"Pest control treatment",p:129, t:"60 min", c:"Pest Control"},
   // Added for problem-diagnosis coverage
   {id:52,e:"🌀",n:"Garbage disposal repair",p:89,  t:"40 min", c:"Plumbing"},
-  {id:53,e:"🌡️",n:"AC/heating repair visit", p:99,  t:"Varies", c:"Repair"},
+ 
   {id:54,e:"⚡",n:"Electrical troubleshooting",p:89, t:"Varies", c:"Electrical"},
   // Added for search-by-symptom intent coverage — these are genuine repair
   // needs that had no non-install-only task to route to.
