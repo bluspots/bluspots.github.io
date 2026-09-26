@@ -692,6 +692,7 @@ export default function App(){
   useEffect(()=>{
     if(scr!=="tracking"||vj?.status!=="en_route")return;
     const interval=setInterval(()=>setEtaTick(t=>t+1),3000);
+    if (interval && typeof interval === "object" && typeof interval.unref === "function") { try { interval.unref(); } catch(_) {} }
     return ()=>clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[scr,vj?.status,vj?.id]);
@@ -784,7 +785,7 @@ export default function App(){
   // Lightweight polling while Tracking or Bookings are open and there are backend-linked active jobs
   const isTerminalStatus=(s)=>TERMINAL_STATUSES.has(s)||s==="cancelled";
   useEffect(()=>{
-    const onScreen = (scr==="tracking") || (scr==="home" && tab==="bookings");
+    const onScreen = (scr==="tracking") || (scr==="home" && tab==="bookings") || (scr==="posted");
     if(!onScreen) return;
     let cancelled=false;
     const tick=async()=>{
@@ -796,11 +797,18 @@ export default function App(){
       if(cancelled) return;
       if(rows.length===0) return;
       const byId=new Map(rows.map(r=>[r.id,r]));
+      let acceptedJobId=null;
       setJobs(js=>js.map(j=>{
         if(!j.backendJobId) return j;
         const row=byId.get(j.backendJobId);
         if(!row) return j;
         const remoteStatus=row.status;
+        // Remote accept mapping: when backend transitions posted -> en_route,
+        // reflect it locally and trigger navigation to tracking outside this map.
+        if(remoteStatus==="en_route" && j.status!=="en_route"){
+          acceptedJobId=j.id;
+          return {...j,status:"en_route",acceptedAt:j.acceptedAt||Date.now(),justAccepted:true};
+        }
         // Map materials metadata if present
         let mappedRequest=null;
         if(Array.isArray(row.materials_items)||typeof row.materials_estimate_cents==="number"){
@@ -823,10 +831,18 @@ export default function App(){
         }
         return j;
       }));
+      // Navigate to tracking and clear the transient toast flag if we just observed an accept
+      if(acceptedJobId){
+        if(scr==="posted"){ setVjid(acceptedJobId); goTo("tracking"); }
+        // Clear justAccepted after a short celebratory toast window
+        setTimeout(()=>updateJob(acceptedJobId,{justAccepted:false}),3500);
+      }
     };
     // Start immediately, then periodic
     tick();
     const id=setInterval(tick,4500);
+    // Allow Node test env to exit even if an interval is pending
+    if (id && typeof id === "object" && typeof id.unref === "function") { try { id.unref(); } catch(_) {} }
     return ()=>{ cancelled=true; clearInterval(id); };
   },[scr,tab]);
 
@@ -3726,7 +3742,7 @@ export default function App(){
         {vj.justAccepted&&(
           <div style={{background:SC,padding:"12px 20px",display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
             <span style={{fontSize:20}}>🎉</span>
-            <div><div style={{color:W,fontWeight:700,fontSize:14}}>{vjPro.n} accepted your job!</div><div style={{color:"rgba(255,255,255,.8)",fontSize:12}}>They're on their way</div></div>
+            <div><div style={{color:W,fontWeight:700,fontSize:14}}>{vj?.pro?.n||"Your pro"} accepted your job!</div><div style={{color:"rgba(255,255,255,.8)",fontSize:12}}>They're on their way</div></div>
           </div>
         )}
         <div style={{background:W,padding:"12px 20px 14px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
