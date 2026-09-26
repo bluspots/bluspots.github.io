@@ -47,7 +47,7 @@ philosophy statement used throughout development is:
 throughout the build (not yet ratified as official marketing copy — ❓ needs
 your sign-off):
 - Fixed price shown before you book — no quotes, no surprises
-- Every pro is ID-verified, background-checked, and insured
+- Every pro is ID-verified and background-checked
 - Post a job in under 60 seconds
 - Same-day availability where possible
 - Every completed job becomes a permanent, retrievable home record
@@ -318,11 +318,11 @@ who doesn't know the reasoning.
 |---|---|---|
 | **Trust Score** | Prototype (static) | Each pro has a hardcoded `trustScore` (0–100), color-coded (green ≥97, amber ≥90, red below). Shown as a compact badge everywhere a pro appears, and as a large hero number on Pro Profile. |
 | **Supporting metrics** | Prototype (static) | On-time rate, would-hire-again rate, completion rate, avg. response time — all hardcoded per pro, not calculated from real job outcomes. |
-| **Verification badges** | Prototype (static/cosmetic) | "Identity verified," "Background checked," "Insured," "Licensed" — displayed as trust signals; **no real verification backend exists.** |
+| **Verification badges** | Prototype (static/cosmetic) | "Identity verified," "Background checked," "Licensed" — displayed as trust signals; **no real verification backend exists.** |
 | **Reviews** | Prototype | Star rating + free text + "would hire again" captured per job. **Does not currently feed back into a pro's Trust Score** — explicitly deferred as a future "keep it simulated for now" decision. |
 | **Receipts** | Prototype | See §8 — function partly as a trust artifact (proof of what was paid and done) as well as a record-keeping one. |
 | **Payments** | Prototype (UI only) | Realistic add-card form (card #, expiry, CVV, billing address). CVV and billing details are **never persisted** — only brand, last 4, expiry, and default status are stored, and that's all that's ever displayed again. No real processor is connected. |
-| **Safety** | Conceptual only | Background-check and insurance messaging exists in the UI; no real background-check integration (e.g., Checkr) has been built or even stubbed. |
+| **Safety** | Conceptual only | Background‑check messaging exists in the UI; no real background‑check integration (e.g., Checkr) has been built or even stubbed. |
 | **Emergency flow** | Prototype | See §5/§7 — urgent path with dedicated timing and fee, not a trust feature per se but designed to reduce anxiety during urgent situations. |
 
 ---
@@ -705,7 +705,7 @@ customer commits.
 |---|---|---|
 | **Time** | "When will someone actually show up?" — vague quote-request timelines, voicemail tag, no-shows | Fixed time-preference options shown at booking; Emergency Mode guarantees a bounded window (within 6 hours); live tracking once a pro accepts |
 | **Price** | "What is this actually going to cost?" — quotes, hourly estimates that balloon, hidden fees | Fixed price shown before booking for every catalog service; any surge/emergency fee is itemized and visible at every step, never hidden until checkout |
-| **Trust** | "Is this a stranger I can safely let into my home?" — no way to verify who's coming | ID verification, background checks, insurance, and a Trust Score (not just a star average) surfaced at every point a pro is shown |
+| **Trust** | "Is this a stranger I can safely let into my home?" — no way to verify who's coming | ID verification, background checks, and a Trust Score (not just a star average) surfaced at every point a pro is shown |
 | **Quality** | "Will the work actually be done right?" — no record, no recourse, word-of-mouth reputation only | Trust Score metrics (on-time rate, completion rate, would-hire-again rate), receipts, and a permanent Service History create both accountability in the moment and a lasting record afterward |
 
 **The governing test for every future feature:** before building anything,

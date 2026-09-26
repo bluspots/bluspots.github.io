@@ -24,11 +24,12 @@
 ## 1. Current Implementation Reality (read this first)
 
 **Customer App** has a working job lifecycle: post → accept (simulated via
-Demo Pro Controls) → en route → arrived → in progress → complete, plus
-cancellation, tipping, ratings, receipts, and job preferences. No diagnosis,
-no materials-request flow, no inspection-only outcome — none of that exists
-in the Customer App yet, despite being fully designed in the Pro App
-architecture doc (v2, §8–10).
+Demo Pro Controls) → en route → arrived → diagnosing → materials_requested
+→ materials_approved → in progress → complete, plus cancellation, tipping,
+ratings, receipts, and job preferences. The Customer App also models
+diagnosis-required categories and a materials-approval UI; terminal
+materials-decline outcomes (`inspection_completed` for diagnosis categories,
+`materials_declined` for standard categories) are recognized and rendered.
 
 **Pro App** currently has *no job lifecycle code at all*. `SIM_JOBS` is a
 static array (`const [jobs] = useState(SIM_JOBS)` — no setter is even
@@ -57,8 +58,10 @@ The Customer App already ships with a working, tested status enum (Customer‑si
 record only for now):
 
 ```
-posted → en_route → arrived → in_progress → complete
-                                            ↘ cancelled (from any pre-complete state)
+posted → en_route → arrived → diagnosing → (materials_requested → materials_approved →) in_progress → complete
+                                                                                       ↘ inspection_completed (diagnosis decline)
+                                                                                       ↘ materials_declined   (standard decline)
+(any pre-complete) → cancelled
 ```
 (lowercase snake_case; source: `home_services_app.jsx`, `SF` array and
 `VALID_JOB_STATUSES`)
@@ -135,19 +138,15 @@ this stays honest about what's real today).
 | `customerRating` / `customerReview` | number / string | ✅ `stars`, `reviewTxt`, `rated`, `hireAgain` | ❌ not present (Pro App's own Trust Score is a *separate*, pre-computed simulated number on the pro profile, not derived from real per-job ratings yet) | Real backend requirement: Pro App's Trust Score should eventually aggregate from real `customerRating` values across completed jobs, not be a static seeded number. Not urgent for prototype stage. |
 | `tipAmount` / `tipStatus` / `tippedAt` | number / string / timestamp | ✅ all three, fully implemented (`notAdded`\|`processing`\|`paid`\|`failed`) | ❌ not present | Pro App's Earnings screen (designed, not yet built) should read `tipAmount` directly once it exists — 100% of tip goes to the pro, per Customer App's existing tip-economics rule; this rule should be treated as already-decided, not re-litigated in Pro App design. |
 
-### 3b. Locked economics decisions (wording only; not yet reflected in code)
+### 3b. Locked economics decisions (now reflected in code)
 
-The following product decisions are locked. They are authoritative for
-economics vocabulary, even where current prototype code has not yet
-adopted them. Do not change app code in this PR; this is documentation only.
+The following product decisions are locked and adopted in both code and docs.
 
 - Service price equals labor. No carve‑outs from the service price.
 - Materials are additive on top of the service price (labor).
 - Haven takes 0% of materials, 0% of tips, and 0% of Inspection Visits.
 - 100% of approved materials and 100% of tips go to the Pro.
-- The Customer App’s current code that carves materials out of the
-  service/labor price is NOT canonical. Do not “fix” that code here; this
-  note records the decision for future implementation work.
+- The Customer App treats materials as additive; labor remains the full service/labor price.
 - The customer sees one fixed labor/service price. Haven keeps 20% inside the listed labor price; the customer price does not increase. The founder set that margin at 20% of the listed labor price. The Pro's fixed labor payout is 80% of the listed labor price. The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later. It is not TBD.
 
 ### 3c. Standard materials‑decline outcome wording

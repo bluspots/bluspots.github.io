@@ -26,7 +26,7 @@ Scope: What each app currently stores/assumes about jobs, customers, pros, prici
   - Preferences snapshot: `jobPreferences[]`
   - Payment snapshot: `paymentBrand`, `paymentLast4`
   - Completion artifacts: auto‑generated receipt from job data
-  - Materials/diagnosis: not modeled as first‑class fields; completion helper currently carves “materials” from the task price (prototype‑only, non‑canonical economics)
+  - Materials/diagnosis: `requiresDiagnosis` is computed at creation for diagnosis categories; materials approval UI exists; approved `job.materials[]` render additively on receipt (no carve‑out from labor)
 
 - Pro stores:
   - Identity: `id` (short string like `j1`), `category`, `title`, `customerName` (display only)
@@ -47,8 +47,8 @@ Agreement:
 Conflicts / mismatches:
 - IDs differ (timestamp number vs short string). Neither is backend‑safe.
 - Address precision: Customer stores full address snapshot; Pro stores city + lat/lng; no “post‑accept full address” field on Pro yet.
-- Diagnosis/inspection fee and materials workflow exist only in Pro; Customer has no inspection fee field or diagnosis flow.
-- Customer’s completion helper carves “materials” out of the labor price; Pro treats materials as additive with receipt (locked rule). The carve‑out is explicitly non‑canonical.
+- Diagnosis/inspection fee and materials workflow now exist on both sides: Customer models `requiresDiagnosis`, supports materials approval, and recognizes `inspection_completed`/`materials_declined` terminals. Inspection fee appears in backend payloads for diagnosis categories; Customer UI does not surface it pre‑booking.
+- Customer follows the locked rule: materials are additive; labor remains the full service price.
 - Timestamps: Customer persists several status timestamps; Pro drops most timestamps when finalizing.
 
 One‑sided data:
