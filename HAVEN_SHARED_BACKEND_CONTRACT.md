@@ -13,9 +13,10 @@ Do not wire any live clients in this PR. This is the source of truth for future 
 - Fixed labor price; no hourly/bidding/negotiation.
 - Haven margin 20% of labor (current working value, adjustable later).
 - Pro payout is 80% of labor, shown before accept; the exact amount paid.
-- Haven takes 0% of materials, 0% of tips, 0% of inspection.
+- Haven takes 0% of materials, 0% of tips, 0% of inspection visits, and 0% of the $30 convenience fee.
 - Materials are additive (reimbursed), not carved from the labor price.
-- Diagnosis path: inspection fee exists; standard‑category materials‑decline outcome uses a flat visit fee — amount FOUNDER‑TBD (see Decisions).
+- Diagnosis materials‑decline: terminal is “Inspection Completed” with a $45 inspection fee to the Pro.
+- Standard (non‑diagnosis) materials‑decline: terminal is “Materials declined — job could not be completed” with a $30 convenience fee to the Pro.
 - One active job per pro.
 - Messaging in‑app only; no phone‑call feature.
 - Insurance out of scope; credentials are not “trust badges.”
@@ -54,6 +55,7 @@ Field groups and intent:
 - Additive fees
   - `emergency` (bool), `emergency_fee_cents` (int default 0),
   - `inspection_fee_cents` (int default 0) — diagnosis categories only
+  - `convenience_fee_cents` (int default 0) — applied on standard materials‑decline terminal only
 - Lifecycle
   - `status` (enum; see §3), `posted_at` (timestamptz, default now()), `completed_at` (timestamptz nullable), `cancelled_at` (timestamptz nullable)
 - Customer‑side snapshots
@@ -77,12 +79,13 @@ Notes:
 
 Enum (lowercase snake_case):
 - `posted` → `en_route` → `arrived` → `diagnosing?` → (`materials_requested` → `materials_approved` →) `in_progress` → `complete`
-                                                    ↘ `inspection_completed`
+                                                     ↘ `inspection_completed` (diagnosis decline)
+                                                     ↘ `materials_declined`   (standard decline)
 Any pre‑complete → `cancelled`
 
 Ownership of transitions (enforced by backend):
 - Customer: `(none)→posted`, `materials_requested→materials_approved` (approve), `materials_requested→inspection_completed` (decline), ratings/tips (post‑complete), cancellation request rules (pre/post accept).
-- Pro: `posted→en_route` (accept), `en_route→arrived`, `arrived→diagnosing`, `diagnosing→in_progress`, `diagnosing→materials_requested`, `materials_approved→in_progress` (requires receipt), `in_progress→complete`. One active job per pro gate applies across all active statuses.
+- Pro: `posted→en_route` (accept), `en_route→arrived`, `arrived→diagnosing`, `diagnosing→in_progress`, `diagnosing→materials_requested`, `materials_approved→in_progress` (requires receipt), `in_progress→complete`, and setting terminal `materials_declined` when a standard‑category job cannot proceed due to declined materials. One active job per pro gate applies across all active statuses.
 
 Every transition appends a row to `job_status_events(job_id, from_status, to_status, at, actor_role, actor_id)`. Clients read current status from `jobs.status`; history comes from `job_status_events`.
 
@@ -93,7 +96,9 @@ Every transition appends a row to `job_status_events(job_id, from_status, to_sta
 - `materials_requests(job_id, requested_at, items_jsonb, estimated_total_cents, status: pending|approved|declined, responded_at, responded_by)`
 - `materials_receipts(job_id, submitted_at, actual_total_cents, receipt_photo_url, submitted_by)`
 - Backend credits `materials_reimbursed_cents` only on a receipt, never on approval.
-- Standard categories “materials declined” fallback: see Decisions — visit‑fee amount FOUNDER‑TBD.
+- Materials‑decline terminals:
+  - Diagnosis categories: `inspection_completed` with `inspection_fee_cents=4500`
+  - Standard categories: `materials_declined` with `convenience_fee_cents=3000`
 
 ---
 
@@ -128,6 +133,7 @@ Every transition appends a row to `job_status_events(job_id, from_status, to_sta
 
 Net for a job:
 - If `status=inspection_completed`: `gross = inspection_fee_cents`
+- Else if `status=materials_declined`: `gross = convenience_fee_cents`
 - Else `gross = fixed_pro_labor_payout_cents`
 - `net = gross + materials_reimbursed_cents + tip_amount_cents`
 
