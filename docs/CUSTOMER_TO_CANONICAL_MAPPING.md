@@ -13,7 +13,7 @@ Parties
 
 Service
 - `taskId` or `custom {title,category,budget}` → Canonical `category`, `title`; 🔁 for catalog jobs, denormalize the task name into `title`
-- `requiresDiagnosis` ❌ → Canonical `requires_diagnosis` (compute at create from catalog rules)
+- `requiresDiagnosis` ✅ → Canonical `requires_diagnosis` (computed at create from catalog rules)
 
 Location
 - `addressText` → Canonical `address_snapshot` (post‑accept only)
@@ -29,7 +29,7 @@ Pricing snapshot (labor)
 - Inspection fee ❌ → `inspection_fee_cents` (0 unless diagnosis path)
 
 Lifecycle
-- `status` (posted/en_route/arrived/in_progress/complete/cancelled) → `status` (enum)
+- `status` (posted/en_route/arrived/diagnosing/materials_requested/materials_approved/in_progress/complete/inspection_completed/materials_declined/cancelled) → `status` (enum)
 - `acceptedAt`,`completedAt`,`cancellationRequestedAt` → `job_status_events` + rollups `accepted_at`,`completed_at`
 
 Customer snapshots
@@ -41,8 +41,7 @@ Messaging
 - `msgs[]` (local only) → `job_messages` (backend)
 
 Materials/diagnosis
-- Not present → `materials_requests` / `materials_receipts` tables; Customer triggers approve/decline in transitions
-- Current completion helper that carves materials from labor → no mapping (non‑canonical economics; replaced by additive reimbursement flow)
+- Present: `job.materials[]` additively rendered on receipt; Customer triggers approve/decline transitions → `materials_requests` / `materials_receipts` tables (backend); reimbursement occurs on receipt submission
 
 Tips
 - `tipAmount`,`tipStatus`,`tippedAt` → `tips` rows; roll up to job at completion

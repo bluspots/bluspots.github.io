@@ -1,3 +1,112 @@
+# HAVEN — CANONICAL JOB CONTRACT (Product Rules)
+Status: Canonical · Scope: Product/job rules only (Customer + Pro)
+
+Purpose and boundary
+
+- This file is the single source of truth for WHAT the Haven job lifecycle and economics are.
+- It defines product rules: lifecycle statuses, who may trigger which transition, economics (20/80 labor), materials and decline outcomes, “one active job per pro,” and category‑naming parity.
+- It does not define HOW these rules are represented in tables/APIs/enums or how they are enforced technically. That contract lives in `HAVEN_SHARED_BACKEND_CONTRACT.md` and must mirror these rules exactly.
+
+If any other document (including the Pro repo’s copy or the backend contract) disagrees with this one on a product rule, this document wins. The backend contract must be updated to reflect this file.
+
+---
+
+## 1) Canonical lifecycle (status vocabulary)
+
+Statuses (lowercase snake_case):
+
+```
+posted → en_route → arrived → diagnosing? → (materials_requested → materials_approved →) in_progress → complete
+                                                                                     ↘ inspection_completed (diagnosis decline)
+                                                                                     ↘ materials_declined   (standard decline)
+any pre‑complete → cancelled
+```
+
+Definitions:
+- posted: Job created; waiting for a pro to accept.
+- en_route: Pro accepted; traveling to the property.
+- arrived: Pro is at the property.
+- diagnosing: For categories where requires_diagnosis=true; pro is assessing scope.
+- materials_requested: Pro requested customer approval to buy materials; waiting on customer.
+- materials_approved: Customer approved; pro is authorized to purchase (no reimbursement yet).
+- in_progress: Pro is actively doing the work.
+- complete: Job finished with full repair.
+- inspection_completed: Diagnosis performed; customer declined materials on a diagnosis category; job ends at the inspection fee.
+- materials_declined: Standard category materials decline; job could not proceed; ends with a $30 convenience fee.
+- cancelled: Cancelled from any pre‑complete status (role rules below).
+
+Naming principles:
+- Use shared, lowercase snake_case names everywhere.
+- No separate “accepted” or “driving” statuses — those are Pro‑app‑local UI moments; the shared status remains `en_route`.
+
+---
+
+## 2) Transition ownership (permissions)
+
+| Transition | May trigger | Notes |
+|---|---|---|
+| (none) → posted | Customer | Job creation |
+| posted → en_route | Pro | Accepts job |
+| en_route → arrived | Pro | Arrival confirmation |
+| arrived → diagnosing | Pro | Diagnosis categories only |
+| diagnosing → in_progress | Pro | Scope matched what was listed |
+| diagnosing → materials_requested | Pro | Scope exceeded what was listed |
+| materials_requested → materials_approved | Customer | Approves request; authorizes purchase only |
+| materials_approved → in_progress | Pro | Submits receipt w/ actual materials cost + photo |
+| materials_requested → inspection_completed | Customer | Declines on diagnosis categories |
+| in_progress → complete | Pro | Mark job complete |
+| any pre‑complete → cancelled | Either | Different sub‑rules by phase; Customer after accept is “request cancel” |
+| Rating / tip | Customer | Post‑complete only |
+
+Backend enforcement must reject out‑of‑turn and role‑unauthorized transitions.
+
+---
+
+## 3) Locked economics (authoritative)
+
+- 20/80 labor split: The customer’s listed labor price is authoritative. Haven retains 20% inside that price; the pro’s fixed labor payout is 80%. The payout shown before accept is exactly what the pro receives.
+- Haven takes 0% of materials, 0% of tips, 0% of Inspection Visits, and 0% of the $30 convenience fee.
+- Materials are additive to labor — never carved out of the service/labor price.
+- Diagnosis decline: `inspection_completed` with a hard‑locked $45 inspection fee (pro receives it).
+- Standard (non‑diagnosis) decline: `materials_declined` with a $30 convenience fee (pro receives it).
+
+---
+
+## 4) Materials workflow (product rules)
+
+- Customer approval authorizes purchase; it does not reimburse an estimate.
+- Reimbursement occurs only on receipt submission with an actual amount and a receipt photo.
+- Whole‑request approval (no line‑item negotiation) is acceptable for v1.
+- Materials may be requested on any job category (not restricted to diagnosis categories).
+
+---
+
+## 5) One active job per pro (product rule)
+
+- A pro may hold at most one active job at a time across statuses {en_route, arrived, diagnosing, materials_requested, materials_approved, in_progress}.
+- The backend enforces this as a constraint; clients must respect it in UX.
+
+---
+
+## 6) Category naming parity (product rule)
+
+- Pro‑side category names must exactly match Customer‑side category names. The shared vocabulary is product‑owned here; the backend carries category strings verbatim.
+
+---
+
+## 7) Insurance (product rule)
+
+- Insurance is OUT. No blanket “Insured” messaging; no insurance product exists. Credentials surfaced to customers may include “Identity verified,” “Background checked,” and “Licensed” only when verified.
+
+---
+
+## 8) Document boundary (what lives where)
+
+- HAVEN_JOB_CONTRACT.md (this file): authoritative product/job rules — lifecycle, permissions, economics, materials, declines, one‑active, category naming, insurance policy.
+- HAVEN_SHARED_BACKEND_CONTRACT.md: technical representation and enforcement — enums, columns, RLS/policies, APIs. It MUST mirror these rules exactly and never invent different product behavior.
+
+---
+
 # HAVEN — SHARED JOB DATA CONTRACT
 **Status:** Living document · **Version:** 0.1 · **Scope:** Customer App ↔ Pro App ↔ (future) Backend
 
@@ -24,61 +133,41 @@
 ## 1. Current Implementation Reality (read this first)
 
 **Customer App** has a working job lifecycle: post → accept (simulated via
-Demo Pro Controls) → en route → arrived → in progress → complete, plus
-cancellation, tipping, ratings, receipts, and job preferences. No diagnosis,
-no materials-request flow, no inspection-only outcome — none of that exists
-in the Customer App yet, despite being fully designed in the Pro App
-architecture doc (v2, §8–10).
+Demo Pro Controls) → en route → arrived → diagnosing → materials_requested
+→ materials_approved → in progress → complete, plus cancellation, tipping,
+ratings, receipts, and job preferences. The Customer App also models
+diagnosis-required categories and a materials-approval UI; terminal
+materials-decline outcomes (`inspection_completed` for diagnosis categories,
+`materials_declined` for standard categories) are recognized and rendered.
 
-**Pro App** currently has *no job lifecycle code at all*. `SIM_JOBS` is a
-static array (`const [jobs] = useState(SIM_JOBS)` — no setter is even
-destructured). What's built is the job feed, eligibility/geographic
-filtering, category filters, sort controls, Profile, Settings, and dark
-mode. Accept, Driving, Arrived, Diagnosing, Materials Request, Working,
-Completed — all of it is designed in `haven-pro-app-architecture-v2.md`
-but it is no longer accurate to say “not yet written as code.” The Pro App
-now implements a working job lifecycle. Exact status names and transition
-boundaries in the Pro App may differ from the Customer App’s
-lowercase-snake_case set and from the original architecture doc. This
-document does not publish a cross‑app canonical enum in this slice; see §2
-— reconciliation is explicitly DEFERRED.
+**Pro App** now has a live, stateful job lifecycle (accept → `en_route` → `arrived` → `diagnosing` → `materials_requested` → `materials_approved` → `in_progress` → `complete`/`inspection_completed`) written by real UI actions. Exact status names and transition boundaries in the Pro App may differ from the Customer App’s lowercase‑snake_case set and from the original architecture doc. This document records the shared rules; see §2 for the canonical enum.
 
-**Why this matters right now:** the Pro App is about to write its first
-lifecycle code. That's the cheapest possible moment to align vocabulary —
-before either side has to migrate anything. Waiting until after the Pro
-App's lifecycle ships would mean reconciling two independently-invented
-status enums instead of adopting one from the start.
+This appendix retains historical notes where helpful, but the canonical product rules and enum live at the top of this document; use those as authoritative.
 
 ---
 
-## 2. Status Vocabulary — reconciliation DEFERRED in this slice
+## 2. Status Vocabulary — historical context (superseded by canonical §1)
 
 The Customer App already ships with a working, tested status enum (Customer‑side
 record only for now):
 
 ```
-posted → en_route → arrived → in_progress → complete
-                                            ↘ cancelled (from any pre-complete state)
+posted → en_route → arrived → diagnosing → (materials_requested → materials_approved →) in_progress → complete
+                                                                                       ↘ inspection_completed (diagnosis decline)
+                                                                                       ↘ materials_declined   (standard decline)
+(any pre-complete) → cancelled
 ```
 (lowercase snake_case; source: `home_services_app.jsx`, `SF` array and
 `VALID_JOB_STATUSES`)
 
-The Pro App's architecture doc independently proposed:
+The Pro App's architecture doc originally proposed (historical naming, not canonical):
 ```
 AVAILABLE → ACCEPTED → DRIVING → ARRIVED → DIAGNOSING → WORKING → COMPLETED
-                                                       ↘ MATERIALS_REQUESTED → WORKING | INSPECTION_ONLY_COMPLETE
+                                                       ↘ MATERIALS_REQUESTED → WORKING | INSPECTION_COMPLETED  (historical naming varied; canonical shown)
 ```
 (SCREAMING_SNAKE_CASE; source: `haven-pro-app-architecture-v2.md` §8)
 
-Decision for a single shared cross‑app enum is DEFERRED in this slice.
-Actions for now:
-- Keep the Customer App’s lowercase snake_case names as the
-  Customer‑side record.
-- Acknowledge that the Pro App now has its own implemented lifecycle with
-  potentially different names.
-- Do not rename statuses in code on either side in this PR.
-- Do not publish a new canonical combined enum here; reconciliation is a
-  follow‑up task.
+Note: The canonical shared enum is defined in §1 of this document (lowercase snake_case). This historical block is retained only for reference; do not derive behavior from it.
 
 ### Prior proposal (non‑canonical reference; DEFERRED)
 
@@ -91,14 +180,10 @@ Actions for now:
 | `materials_requested` | Pro found the job needs more than expected; awaiting customer approve/decline | Proposed |
 | `in_progress` | Actively doing the work | Customer App (existing). Proposed earlier as the shared “Working” state mapping. |
 | `complete` | Job finished, full repair, standard payout/pricing applies | Customer App (existing) |
-| `inspection_only_complete` | Diagnosis performed, customer declined materials, job ends at the inspection fee | Proposed |
+| `inspection_completed` | Diagnosis performed, customer declined materials, job ends at the inspection fee | Proposed |
 | `cancelled` | Job cancelled before or during the above (see §5 for cancellation sub-states) | Customer App (existing) |
 
-Open question (DEFERRED): whether to distinguish “accepted” vs “en_route”
-as separate shared statuses. Today, the Customer App models “posted”
-as “waiting to be accepted,” with no separate “accepted, not yet en_route”
-state; the Pro App may represent an “accepted” pre‑drive moment in its UI
-without that being a shared enum value — see §6.
+Historical note: distinguishing an “accepted” pre‑drive state versus `en_route` is handled as a Pro‑local UI moment; the shared status remains `en_route` (see §1).
 
 ---
 
@@ -135,28 +220,23 @@ this stays honest about what's real today).
 | `customerRating` / `customerReview` | number / string | ✅ `stars`, `reviewTxt`, `rated`, `hireAgain` | ❌ not present (Pro App's own Trust Score is a *separate*, pre-computed simulated number on the pro profile, not derived from real per-job ratings yet) | Real backend requirement: Pro App's Trust Score should eventually aggregate from real `customerRating` values across completed jobs, not be a static seeded number. Not urgent for prototype stage. |
 | `tipAmount` / `tipStatus` / `tippedAt` | number / string / timestamp | ✅ all three, fully implemented (`notAdded`\|`processing`\|`paid`\|`failed`) | ❌ not present | Pro App's Earnings screen (designed, not yet built) should read `tipAmount` directly once it exists — 100% of tip goes to the pro, per Customer App's existing tip-economics rule; this rule should be treated as already-decided, not re-litigated in Pro App design. |
 
-### 3b. Locked economics decisions (wording only; not yet reflected in code)
+### 3b. Locked economics decisions (now reflected in code)
 
-The following product decisions are locked. They are authoritative for
-economics vocabulary, even where current prototype code has not yet
-adopted them. Do not change app code in this PR; this is documentation only.
+The following product decisions are locked and adopted in both code and docs.
 
 - Service price equals labor. No carve‑outs from the service price.
 - Materials are additive on top of the service price (labor).
 - Haven takes 0% of materials, 0% of tips, and 0% of Inspection Visits.
 - 100% of approved materials and 100% of tips go to the Pro.
-- The Customer App’s current code that carves materials out of the
-  service/labor price is NOT canonical. Do not “fix” that code here; this
-  note records the decision for future implementation work.
+- The Customer App treats materials as additive; labor remains the full service/labor price.
 - The customer sees one fixed labor/service price. Haven keeps 20% inside the listed labor price; the customer price does not increase. The founder set that margin at 20% of the listed labor price. The Pro's fixed labor payout is 80% of the listed labor price. The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later. It is not TBD.
 
-### 3c. Standard materials‑decline outcome wording
+### 3c. Standard materials‑decline outcome wording (locked)
 
 - For standard (non‑diagnosis) categories, when materials are requested
   mid‑job and the customer declines, the terminal outcome is:
   “Job Ended — Materials Declined.”
-- A flat visit fee for that outcome is approved in principle; the exact
-  amount is FOUNDER‑TBD. This PR does not set a dollar amount.
+- A flat $30 convenience fee is LOCKED for this outcome (Haven $0). Credited to the Pro.
 - Existing diagnosis fees and the diagnosis‑inspection path remain as they
   are; do not rename or merge that path into this new standard outcome.
 
@@ -195,7 +275,7 @@ out of sync with each other the way job status already has.
 | `diagnosing → in_progress` | Pro App | Scope matched what was listed |
 | `diagnosing → materials_requested` | Pro App | Scope exceeded what was listed |
 | `materials_requested → in_progress` | **Customer App** (approve) | Customer-triggered, not Pro-triggered — the Pro App is blocked waiting on this |
-| `materials_requested → inspection_only_complete` | **Customer App** (decline) | Same — customer-triggered terminal state |
+| `materials_requested → inspection_completed` | **Customer App** (decline) | Same — customer-triggered terminal state |
 | `in_progress → complete` | Pro App | |
 | `(any pre-complete) → cancelled` | Either, with different sub-rules: Customer may cancel before acceptance freely, and *request* cancellation after acceptance (`cancelStatus:"requested"` — already built); Pro App cancellation/abandonment handling is an open edge case per architecture doc §23, not yet designed in detail | |
 | Rating / tip | Customer App only, post-`complete` | Already fully built on Customer side |
@@ -223,20 +303,13 @@ Not everything the Pro App tracks needs to be a shared job field:
 
 ---
 
-## 7. Open questions this document surfaces (not resolved here)
+## 7. Open questions (historical; updated where decisions are locked)
 
 Carried over from the Pro App architecture doc's own open questions,
 restated here because they directly affect the shared schema:
 
-1. Should `materials_requested` (the general capability) be available on
-   *any* job, or scoped only to the five `requiresDiagnosis` categories?
-   Architecture doc v2 recommends "any job" — if adopted, `materials_requested`
-   in §2's enum applies universally, not just to diagnosis categories.
-2. Standard (non-diagnosis) categories currently have no fallback
-   compensation if materials are discovered mid-job and declined — real
-   risk of uncompensated pro labor. Needs a product decision (minimum
-   trip/attempt fee?) before `materials_requested` ships for standard
-   categories.
+1. Should `materials_requested` (the general capability) be available on any job, or scoped only to diagnosis categories? — Resolved: available on any job (see §1/§4).
+2. Standard (non‑diagnosis) materials‑decline compensation — Resolved (LOCKED): terminal = `materials_declined` with $30 convenience fee to the Pro; Haven $0 (see §1/§3c).
 3. Whole-request materials approval only (no line-item negotiation) —
    confirmed acceptable for v1 per architecture doc; carried here as a
    schema implication: `materialsRequest` is one object per request, not
