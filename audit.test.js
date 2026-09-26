@@ -867,7 +867,7 @@ function runReceiptPdfChecks(){
     assert(Array.isArray(job.materials), 'Completed job has a materials array (may legitimately be empty for some categories)');
   });
 
-  step('39. Materials are drawn from the agreed price, never added on top — labor plus materials never exceeds the receipt total the customer actually approved', () => {
+  step('39. Materials are additive — receipt total includes labor plus approved materials', () => {
     click('🧾 View Receipt');
     const totalMatch = document.body.textContent.match(/TOTAL PAID\$?(\d+(?:\.\d+)?)/) || document.body.textContent.match(/Total paid\$?(\d+(?:\.\d+)?)/);
     const jobsData = JSON.parse(storedData['haven_jobs']);
