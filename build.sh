@@ -26,6 +26,7 @@ cd "$(dirname "$0")"
 # Ordered list of source files to concatenate (Step 1 adds locked constants first)
 SOURCE_FILES=(
   "locked_constants.js"
+  "pure_helpers.js"
   "home_services_app.jsx"
 )
 
