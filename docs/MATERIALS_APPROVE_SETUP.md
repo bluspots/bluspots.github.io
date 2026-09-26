@@ -5,8 +5,9 @@ This note describes the minimal SQL to allow a demo customer to approve material
 ## Files and apply order
 
 1. `supabase/migrations/0008_chunk4_materials_approve.sql`
+2. `supabase/migrations/0009_chunk4_materials_request.sql`
 
-If you have not yet applied earlier chunks, follow the existing order through `0007` first (see `docs/CHUNK3_SETUP.md`), then apply `0008`.
+If you have not yet applied earlier chunks, follow the existing order through `0007` first (see `docs/CHUNK3_SETUP.md`), then apply `0008`, then `0009`.
 
 ## What `0008` does
 
@@ -42,4 +43,31 @@ Customer app dual-writes approval when configured (same localStorage keys as pri
 Soft-fails: if the PATCH cannot be performed (e.g., missing `backendJobId` or RLS mismatch), the app proceeds locally and surfaces a non-blocking toast. Decline terminals remain unchanged from Chunk 3 (`inspection_completed` at $45 for diagnosis; `materials_declined` at $30 for standard; Haven $0 on materials and fees).
 
 Note: Pro-side (#11) already polls `materials_approved`; no Pro edits are included here. If Pro needs a tiny fix during testing, coordinate separately. 
+
+## What `0009` does
+
+- RLS UPDATE policy to allow an assigned Pro to set `status='materials_requested'` from mid-job states:
+  - USING: `pro_id IS NOT NULL AND status IN ('en_route','arrived','diagnosing','in_progress')`
+  - WITH CHECK: `status='materials_requested' AND pro_id IS NOT NULL`
+- Re-includes the three optional materials columns with `ADD COLUMN IF NOT EXISTS` for paste-safety (if `0008` was skipped).
+- No new GRANTs; claims/approve/decline policies remain unchanged.
+
+Paste-friendly SQL (same as the migration file):
+
+```sql
+drop policy if exists jobs_update_assigned_to_materials_requested on public.jobs;
+create policy jobs_update_assigned_to_materials_requested
+  on public.jobs
+  for update
+  to anon, authenticated
+  using (
+    pro_id is not null
+    and status in ('en_route','arrived','diagnosing','in_progress')
+  )
+  with check (
+    status = 'materials_requested'
+    and pro_id is not null
+  );
+```
+
 

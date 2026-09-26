@@ -1220,6 +1220,86 @@ export default function App(){
       return false;
     }
   };
+
+  // Batch fetch helper — reads canonical jobs by backend ids
+  const fetchCanonicalJobsByIds=async(backendIds)=>{
+    const cfg=getSupabaseConfig();
+    if(!cfg) return [];
+    if(!backendIds||backendIds.length===0) return [];
+    const unique=[...new Set(backendIds.filter(Boolean))];
+    if(unique.length===0) return [];
+    // PostgREST IN filter — uuid list
+    const inList=unique.join(",");
+    try{
+      const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&select=id,status,materials_items,materials_estimate_cents`;
+      const res=await fetch(url,{
+        headers:{
+          "Accept":"application/json",
+          "apikey":cfg.anonKey,
+          "Authorization":`Bearer ${cfg.anonKey}`,
+        }
+      });
+      if(!res.ok){
+        const text=await res.text().catch(()=>"(no body)");
+        console.warn("Haven CHUNK4 fetch failed:", res.status, text);
+        return [];
+      }
+      const rows=await res.json();
+      return Array.isArray(rows)?rows:[];
+    }catch(err){
+      console.warn("Haven CHUNK4 fetch error:", err);
+      return [];
+    }
+  };
+
+  // Lightweight polling while Tracking or Bookings are open and there are backend-linked active jobs
+  const isTerminalStatus=(s)=>TERMINAL_STATUSES.has(s)||s==="cancelled";
+  useEffect(()=>{
+    const onScreen = (scr==="tracking") || (scr==="home" && tab==="bookings");
+    if(!onScreen) return;
+    const activeLinked = jobs.filter(j=>j.backendJobId && !isTerminalStatus(j.status));
+    if(activeLinked.length===0) return;
+    let cancelled=false;
+    const tick=async()=>{
+      if(cancelled) return;
+      const rows=await fetchCanonicalJobsByIds(activeLinked.map(j=>j.backendJobId));
+      if(rows.length===0) return;
+      const byId=new Map(rows.map(r=>[r.id,r]));
+      setJobs(js=>js.map(j=>{
+        if(!j.backendJobId) return j;
+        const row=byId.get(j.backendJobId);
+        if(!row) return j;
+        const remoteStatus=row.status;
+        // Map materials metadata if present
+        let mappedRequest=null;
+        if(Array.isArray(row.materials_items)||typeof row.materials_estimate_cents==="number"){
+          const items=(Array.isArray(row.materials_items)?row.materials_items:[]).map(it=>({
+            description: it?.name ?? "",
+            qty: (it&&typeof it.qty==="number"&&it.qty>0)?it.qty:1,
+            amount: Math.max(0, Math.floor((it?.cost_cents||0)))/100,
+          }));
+          const estCents = typeof row.materials_estimate_cents==="number"?row.materials_estimate_cents:null;
+          const est = estCents!=null ? Math.max(0, Math.floor(estCents))/100
+            : items.reduce((s,m)=>s+m.amount*(m.qty||1),0);
+          mappedRequest={items,estimatedTotal:est};
+        }
+        // Only update when remote is ahead or adds materials
+        if(remoteStatus==="materials_requested"){
+          return {...j,status:"materials_requested",materialsRequest:mappedRequest||j.materialsRequest};
+        }
+        if(remoteStatus==="materials_approved"||remoteStatus==="inspection_completed"||remoteStatus==="materials_declined"){
+          return {...j,status:remoteStatus,materialsRequest:mappedRequest||j.materialsRequest};
+        }
+        // Otherwise, leave as-is
+        return j;
+      }));
+    };
+    // Start immediately, then periodic
+    tick();
+    const id=setInterval(tick,4500);
+    return ()=>{ cancelled=true; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[scr,tab,jobs]);
   // Appearance — System / Light / Dark. Persisted so it survives reopening
   // the installed PWA. "Tokens, not per-screen styles": every screen in this
   // file already references BG/W/TX/TS/TM/BD/SL by name via closure, so
