@@ -1281,17 +1281,23 @@ function App(){
     }
   };
 
+  // Live jobs ref to avoid effect thrash on polling
+  const jobsRef = useRef(jobs);
+  useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+
   // Lightweight polling while Tracking or Bookings are open and there are backend-linked active jobs
   const isTerminalStatus=(s)=>TERMINAL_STATUSES.has(s)||s==="cancelled";
   useEffect(()=>{
     const onScreen = (scr==="tracking") || (scr==="home" && tab==="bookings");
     if(!onScreen) return;
-    const activeLinked = jobs.filter(j=>j.backendJobId && !isTerminalStatus(j.status));
-    if(activeLinked.length===0) return;
     let cancelled=false;
     const tick=async()=>{
       if(cancelled) return;
+      const currentJobs = jobsRef.current||[];
+      const activeLinked = currentJobs.filter(j=>j.backendJobId && !isTerminalStatus(j.status));
+      if(activeLinked.length===0) return;
       const rows=await fetchCanonicalJobsByIds(activeLinked.map(j=>j.backendJobId));
+      if(cancelled) return;
       if(rows.length===0) return;
       const byId=new Map(rows.map(r=>[r.id,r]));
       setJobs(js=>js.map(j=>{
@@ -1327,8 +1333,7 @@ function App(){
     tick();
     const id=setInterval(tick,4500);
     return ()=>{ cancelled=true; clearInterval(id); };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[scr,tab,jobs]);
+  },[scr,tab]);
   // Appearance — System / Light / Dark. Persisted so it survives reopening
   // the installed PWA. "Tokens, not per-screen styles": every screen in this
   // file already references BG/W/TX/TS/TM/BD/SL by name via closure, so
