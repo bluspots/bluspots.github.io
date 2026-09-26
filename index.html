@@ -2535,7 +2535,21 @@ function App(){
       handleJobTransition(vjid,next,vj.pro?.n||"Your pro");
     }
   };
-  const cancelJobDirect=()=>{ updateJob(vjid,{status:"cancelled"}); setShowCancelConfirm(false); goHome(); };
+  const cancelJobDirect=async()=>{ 
+    if(!vj) return;
+    // Local update first for responsiveness
+    updateJob(vjid,{status:"cancelled"});
+    // Prototype backend dual-write (best-effort; narrow RLS allows posted → cancelled)
+    if(vj.backendJobId){
+      try{
+        await updateCanonicalJob(vj.backendJobId,{status:"cancelled", cancelled_at:new Date().toISOString()});
+      }catch(err){
+        console.warn("Haven: cancel dual-write failed; proceeding locally.", err);
+      }
+    }
+    setShowCancelConfirm(false); 
+    goHome(); 
+  };
   const requestCancellation=()=>{ updateJob(vjid,{cancelStatus:"requested",cancellationRequestedAt:Date.now()}); setShowCancelRequest(false); handleCancellationTransition(vjid,"requested"); };
 
   // Materials approval/decline — customer actions when vj.status === 'materials_requested'
