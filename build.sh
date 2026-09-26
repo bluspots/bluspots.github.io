@@ -23,13 +23,14 @@ cd "$(dirname "$0")"
 
 # Phase 3 Step 0 — concat source list (Option A). See docs/PHASE3_MODULARIZATION_ORDER.md.
 
-# Ordered list of source files to concatenate (Step 1 adds locked constants first; Step 4 adds ui_atoms.js; Step 5 adds persistence.js)
+# Ordered list of source files to concatenate (Step 1 adds locked constants first; Step 4 adds ui_atoms.js; Step 5 adds persistence.js; Step 6 adds intent_matching.js)
 SOURCE_FILES=(
   "locked_constants.js"
   "pure_helpers.js"
   "catalog_seeds.js"
   "ui_atoms.js"
   "persistence.js"
+  "intent_matching.js"
   "home_services_app.jsx"
 )
 
