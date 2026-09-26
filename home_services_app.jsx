@@ -5018,6 +5018,7 @@ export default function App(){
                 </div>
                 <button onClick={goBookings} style={{padding:"10px 14px",borderRadius:10,border:"none",background:N,color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>← Back to Bookings</button>
                 </div>
+            );
           })()}
         </div>
       </div>
