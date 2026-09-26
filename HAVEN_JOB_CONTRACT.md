@@ -142,15 +142,11 @@ materials-decline outcomes (`inspection_completed` for diagnosis categories,
 
 **Pro App** now has a live, stateful job lifecycle (accept → `en_route` → `arrived` → `diagnosing` → `materials_requested` → `materials_approved` → `in_progress` → `complete`/`inspection_completed`) written by real UI actions. Exact status names and transition boundaries in the Pro App may differ from the Customer App’s lowercase‑snake_case set and from the original architecture doc. This document records the shared rules; see §2 for the canonical enum.
 
-**Why this matters right now:** the Pro App is about to write its first
-lifecycle code. That's the cheapest possible moment to align vocabulary —
-before either side has to migrate anything. Waiting until after the Pro
-App's lifecycle ships would mean reconciling two independently-invented
-status enums instead of adopting one from the start.
+This appendix retains historical notes where helpful, but the canonical product rules and enum live at the top of this document; use those as authoritative.
 
 ---
 
-## 2. Status Vocabulary — reconciliation DEFERRED in this slice
+## 2. Status Vocabulary — historical context (superseded by canonical §1)
 
 The Customer App already ships with a working, tested status enum (Customer‑side
 record only for now):
@@ -164,22 +160,14 @@ posted → en_route → arrived → diagnosing → (materials_requested → mate
 (lowercase snake_case; source: `home_services_app.jsx`, `SF` array and
 `VALID_JOB_STATUSES`)
 
-The Pro App's architecture doc independently proposed:
+The Pro App's architecture doc originally proposed (historical naming, not canonical):
 ```
 AVAILABLE → ACCEPTED → DRIVING → ARRIVED → DIAGNOSING → WORKING → COMPLETED
-                                                       ↘ MATERIALS_REQUESTED → WORKING | INSPECTION_ONLY_COMPLETE
+                                                       ↘ MATERIALS_REQUESTED → WORKING | INSPECTION_COMPLETED  (historical doc used “INSPECTION_ONLY_COMPLETE”)
 ```
 (SCREAMING_SNAKE_CASE; source: `haven-pro-app-architecture-v2.md` §8)
 
-Decision for a single shared cross‑app enum is DEFERRED in this slice.
-Actions for now:
-- Keep the Customer App’s lowercase snake_case names as the
-  Customer‑side record.
-- Acknowledge that the Pro App now has its own implemented lifecycle with
-  potentially different names.
-- Do not rename statuses in code on either side in this PR.
-- Do not publish a new canonical combined enum here; reconciliation is a
-  follow‑up task.
+Note: The canonical shared enum is defined in §1 of this document (lowercase snake_case). This historical block is retained only for reference; do not derive behavior from it.
 
 ### Prior proposal (non‑canonical reference; DEFERRED)
 
@@ -195,11 +183,7 @@ Actions for now:
 | `inspection_completed` | Diagnosis performed, customer declined materials, job ends at the inspection fee | Proposed |
 | `cancelled` | Job cancelled before or during the above (see §5 for cancellation sub-states) | Customer App (existing) |
 
-Open question (DEFERRED): whether to distinguish “accepted” vs “en_route”
-as separate shared statuses. Today, the Customer App models “posted”
-as “waiting to be accepted,” with no separate “accepted, not yet en_route”
-state; the Pro App may represent an “accepted” pre‑drive moment in its UI
-without that being a shared enum value — see §6.
+Historical note: distinguishing an “accepted” pre‑drive state versus `en_route` is handled as a Pro‑local UI moment; the shared status remains `en_route` (see §1).
 
 ---
 
@@ -319,20 +303,13 @@ Not everything the Pro App tracks needs to be a shared job field:
 
 ---
 
-## 7. Open questions this document surfaces (not resolved here)
+## 7. Open questions (historical; updated where decisions are locked)
 
 Carried over from the Pro App architecture doc's own open questions,
 restated here because they directly affect the shared schema:
 
-1. Should `materials_requested` (the general capability) be available on
-   *any* job, or scoped only to the five `requiresDiagnosis` categories?
-   Architecture doc v2 recommends "any job" — if adopted, `materials_requested`
-   in §2's enum applies universally, not just to diagnosis categories.
-2. Standard (non-diagnosis) categories currently have no fallback
-   compensation if materials are discovered mid-job and declined — real
-   risk of uncompensated pro labor. Needs a product decision (minimum
-   trip/attempt fee?) before `materials_requested` ships for standard
-   categories.
+1. Should `materials_requested` (the general capability) be available on any job, or scoped only to diagnosis categories? — Resolved: available on any job (see §1/§4).
+2. Standard (non‑diagnosis) materials‑decline compensation — Resolved (LOCKED): terminal = `materials_declined` with $30 convenience fee to the Pro; Haven $0 (see §1/§3c).
 3. Whole-request materials approval only (no line-item negotiation) —
    confirmed acceptable for v1 per architecture doc; carried here as a
    schema implication: `materialsRequest` is one object per request, not
