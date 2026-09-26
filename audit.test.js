@@ -127,10 +127,23 @@ async function waitForNewReply(countBefore, msgOptions) {
   );
 }
 
-const src = fs.readFileSync('home_services_app.jsx', 'utf8')
-  .replace('import React, { useState, useRef, useEffect } from "react";', '')
+// Build a faithful concatenated source exactly like build.sh does, then evaluate.
+const SOURCE_FILES = [
+  'locked_constants.js',
+  'pure_helpers.js',
+  'catalog_seeds.js',
+  'ui_atoms.js',
+  'persistence.js',
+  'intent_matching.js',
+  'backend_adapter.js',
+  'job_factories.js',
+  'home_services_app.jsx',
+];
+const concatenated = SOURCE_FILES.map(f => fs.readFileSync(f, 'utf8')).join('\n');
+const transformedSource = concatenated
+  .replace(/^import React, { useState, useRef, useEffect } from "react";$/m, '')
   .replace('export default function App(){', 'function App(){');
-const { code } = babel.transformSync(src, { presets: [['@babel/preset-react', { runtime: 'classic' }]], filename: 'x.jsx' });
+const { code } = babel.transformSync(transformedSource, { presets: [['@babel/preset-react', { runtime: 'classic' }]], filename: 'concat.jsx' });
 const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports = typeof App !== 'undefined' ? App : undefined;
   module.exports2 = typeof ErrorBoundary !== 'undefined' ? ErrorBoundary : undefined;
