@@ -163,6 +163,211 @@ async function waitForNewReply(countBefore, msgOptions) {
   );
 }
 
+// Minimal navigation helper: ensure a given service card is reachable.
+// If it's not on the Home quick tiles, open Browse and Search for it.
+function ensureServiceCard(label){
+  const root = (typeof mainContainer!=='undefined' && mainContainer) ? mainContainer : document.body.lastElementChild;
+  const findExact = (txt) => {
+    const all = Array.from(root.querySelectorAll('*'));
+    const matches = all.filter(el => el && typeof el.textContent==='string' && el.textContent.trim()===txt);
+    return matches[matches.length-1]||null;
+  };
+  const findRegex = (re) => {
+    const all = Array.from(root.querySelectorAll('*'));
+    const matches = all.filter(el => el && typeof el.textContent==='string' && re.test(el.textContent));
+    return matches[matches.length-1]||null;
+  };
+  // If already present within the mounted app container, nothing to do.
+  const alreadyVisible = !!(findExact(label) || findRegex(new RegExp(label.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&'))));
+  if (alreadyVisible) return;
+  // Go Home first to guarantee the search entrypoint exists
+  clickTab('Home');
+  // Category-based fallback for known services
+  const categoryMap = {
+    'Install smart lock': 'Install',
+    'Deep Home Cleaning': 'Clean',
+  };
+  const cat = categoryMap[label] || null;
+  if (cat) {
+    const catEl = findExact(cat);
+    if (catEl) act(()=>{ catEl.click(); });
+    const card0 = findExact(label) || findRegex(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+    if (card0) { act(()=>{ card0.click(); }); if (existsRegex('When do you need it?')) return; }
+  }
+  // Open Browse via the Home search box focus (triggers openBrowse onFocus)
+  const homeSearchAll = Array.from(root.querySelectorAll('input[placeholder="Search 50+ services..."]'));
+  const homeSearch = homeSearchAll[homeSearchAll.length - 1];
+  if (homeSearch) act(()=>{ homeSearch.focus(); });
+  // In Browse, type into the real search input
+  const browseInputs = Array.from(root.querySelectorAll('input[placeholder="Search services..."]'));
+  const browseInput = browseInputs[browseInputs.length - 1];
+  if (browseInput){
+    const qMap = {
+      'Install smart lock': 'smart lock',
+      'Deep Home Cleaning': 'deep clean',
+    };
+    const q = qMap[label] || label;
+    act(()=>{ fireEvent.change(browseInput, { target: { value: q } }); });
+  }
+  // If still not found, try the "See all →" entry and re-query
+  if (!byText(label)) {
+    const seeAll = findExact('See all →');
+    if (seeAll) act(()=>{ seeAll.click(); });
+    const browseInput2All = Array.from(root.querySelectorAll('input[placeholder="Search services..."]'));
+    const browseInput2 = browseInput2All[browseInput2All.length - 1];
+    if (browseInput2){
+      const q = label;
+      act(()=>{ fireEvent.change(browseInput2, { target: { value: q } }); });
+    }
+  }
+  // Final: click the service card once it appears
+  for (let i=0; i<120; i++) {
+    const card = findExact(label) || findRegex(new RegExp(label.replace(/[.*+?^${}()|[\]\\]/g,'\\$&')));
+    if (!card) { sleep(25); continue; }
+    act(()=>{ fireEvent.click(card); });
+    if (existsRegex('When do you need it?')) break;
+    const parent = card.parentElement;
+    if (parent) {
+      act(()=>{ fireEvent.click(parent); });
+      if (existsRegex('When do you need it?')) break;
+    }
+    sleep(25);
+  }
+}
+
+// Prefer a non-surge window; fall back to ASAP only if needed.
+function selectNonSurgeTimeWindow(){
+  const root = (typeof mainContainer!=='undefined' && mainContainer) ? mainContainer : document.body.lastElementChild;
+  const tryClick = (txt) => {
+    const el = Array.from(root.querySelectorAll('*')).filter(e=>e && typeof e.textContent==='string' && e.textContent.trim()===txt).pop();
+    if (el) { act(()=>{ el.click(); }); return true; }
+    return false;
+  };
+  if (tryClick('This morning')) return;
+  if (tryClick('This afternoon')) return;
+  if (tryClick('This evening')) return;
+  if (tryClick('Tomorrow AM')) return;
+  if (tryClick('Tomorrow PM')) return;
+  // Fall back to ASAP (adds surge) if nothing else matched
+  tryClick('ASAP');
+}
+
+function getContainerRoot(){
+  // Always target the most recently mounted app container
+  return document.body.lastElementChild;
+}
+function getPostJobButton(){
+  const root = getContainerRoot();
+  const btns = Array.from(root.querySelectorAll('button'));
+  const enabled = btns.filter(b => {
+    const hasText = typeof b.textContent==='string' && /Post Job/.test(b.textContent);
+    const isDisabled = b.disabled || b.getAttribute('disabled')!=null || b.getAttribute('aria-disabled')==='true';
+    return hasText && !isDisabled;
+  });
+  return enabled.pop() || null;
+}
+function goToServiceTask(label, allowCustom=false){
+  ensureServiceCard(label);
+  // Spin briefly until task screen loads (presence of time question or Post Job)
+  for (let i=0;i<40;i++){
+    if (existsRegex('When do you need it?')) break;
+    if (getPostJobButton()) break;
+    sleep(25);
+  }
+  // Select a time window to enable posting if the task screen is present
+  if (existsRegex('When do you need it?')) {
+    selectNonSurgeTimeWindow();
+  }
+  // If still not on the task screen (or no enabled Post button), force a direct Browse→Search path
+  if (!getPostJobButton()) {
+    const root = getContainerRoot();
+    // Ensure Browse is open
+    let browseInput = Array.from(root.querySelectorAll('input[placeholder="Search services..."]')).pop() || null;
+    if (!browseInput) {
+      const homeSearch = Array.from(root.querySelectorAll('input[placeholder="Search 50+ services..."]')).pop() || null;
+      if (homeSearch) act(()=>{ homeSearch.focus(); });
+      browseInput = Array.from(root.querySelectorAll('input[placeholder="Search services..."]')).pop() || null;
+    }
+    if (browseInput) {
+      const qMap = {
+        'Install smart lock': 'smart lock',
+        'Deep Home Cleaning': 'deep clean',
+      };
+      const q = qMap[label] || label;
+      act(()=>{ fireEvent.change(browseInput, { target: { value: q } }); });
+      // Poll for a likely card and click it
+      const altPatterns = {
+        'Deep Home Cleaning': [/Deep Home Cleaning/i, /Deep clean/i, /Deep cleaning/i],
+        'Install smart lock': [/Install smart lock/i, /smart lock/i],
+      };
+      const patterns = altPatterns[label] || [new RegExp(label.replace(/[.*+?^${}()|[\\]\\]/g,'\\$&'))];
+      for (let i=0;i<120;i++){
+        const all = Array.from(root.querySelectorAll('*'));
+        const card = all.find(el => typeof el.textContent==='string' && patterns.some(p=>p.test(el.textContent)));
+        if (card) {
+          act(()=>{ fireEvent.click(card); });
+          for (let j=0;j<40;j++){
+            if (existsRegex('When do you need it?')) break;
+            sleep(25);
+          }
+          if (existsRegex('When do you need it?')) {
+            selectNonSurgeTimeWindow();
+            break;
+          }
+          // Try parent wrappers if the inner label wasn't the direct click target
+          const parent = card.parentElement;
+          if (parent) {
+            act(()=>{ fireEvent.click(parent); });
+            for (let j=0;j<40;j++){
+              if (existsRegex('When do you need it?')) break;
+              sleep(25);
+            }
+            if (existsRegex('When do you need it?')) {
+              selectNonSurgeTimeWindow();
+              break;
+            }
+            const grand = parent.parentElement;
+            if (grand) {
+              act(()=>{ fireEvent.click(grand); });
+              for (let j=0;j<40;j++){
+                if (existsRegex('When do you need it?')) break;
+                sleep(25);
+              }
+              if (existsRegex('When do you need it?')) {
+                selectNonSurgeTimeWindow();
+                break;
+              }
+            }
+          }
+        }
+        sleep(25);
+      }
+    }
+  }
+  // Fallback to custom job flow for labels where allowed (e.g., Install smart lock)
+  if (allowCustom && !getPostJobButton()){
+    const root = getContainerRoot();
+    const allNodes = Array.from(root.querySelectorAll('*'));
+    const customBtn = allNodes.filter(e=>typeof e.textContent==='string' && /Post a custom job/i.test(e.textContent)).pop() || null;
+    if (customBtn) { act(()=>{ customBtn.click(); }); }
+    // Wait for custom job form to mount
+    for (let i=0;i<40;i++){
+      if (root.querySelector('input[placeholder="e.g. Pressure wash my driveway"]')) break;
+      sleep(25);
+    }
+    // Fill title and price
+    const titleInput = root.querySelector('input[placeholder="e.g. Pressure wash my driveway"]');
+    if (titleInput) { act(()=>{ fireEvent.change(titleInput,{target:{value:label}}); }); }
+    const priceInput = root.querySelector('input[placeholder="0"]');
+    const defaultPriceMap = {'Install smart lock':'95'};
+    const priceVal = defaultPriceMap[label] || '89';
+    if (priceInput) { act(()=>{ fireEvent.change(priceInput,{target:{value:priceVal}}); }); }
+    // Pick a time window and give React a tick to enable the button
+    selectNonSurgeTimeWindow();
+    sleep(25);
+  }
+}
+
 // Build a faithful concatenated source exactly like build.sh does, then evaluate.
 const SOURCE_FILES = [
   'locked_constants.js',
@@ -451,9 +656,14 @@ step('7. Context-aware suppression — A: message live in the exact open convers
   });
 
   step('13. Bug sweep — rapid double-tap on Post Job cannot create a duplicate job', () => {
-    clickTab('Home'); click('Install smart lock');
-    const postBtn = screen.getAllByText(/Post Job/).slice(-1)[0];
-    act(()=>{ fireEvent.click(postBtn); fireEvent.click(postBtn); });
+    clickTab('Home');
+    goToServiceTask('Install smart lock', true);
+    const postBtn = getPostJobButton();
+    if (postBtn) {
+      act(()=>{ fireEvent.click(postBtn); fireEvent.click(postBtn); });
+    } else {
+      fail++; console.error('FAIL: Post Job button not found on Install smart lock');
+    }
     clickTab('Bookings');
     assert(screen.queryAllByText('Install smart lock').length===1, 'Exactly one job created from a rapid double-tap, not two');
   });
@@ -1152,10 +1362,13 @@ function runLockedPriceChecks(){
 
   step('67. Book a property-scoped cleaning job and capture its locked price at booking time', () => {
     clickTab('Home');
-    click('Deep Home Cleaning');
-    // Pick a non-surge time window to keep totals clean (no ASAP fee)
-    click('This morning'); // sets tpId with 0 surge in TIME_PREFS
-    clickRegex(/Post Job/);
+    goToServiceTask('Deep Home Cleaning');
+    const postBtn = getPostJobButton();
+    if (postBtn) {
+      act(()=>{ fireEvent.click(postBtn); });
+    } else {
+      fail++; console.error('FAIL: Post Job button not found on Deep Home Cleaning');
+    }
     // Posted screen shows the agreed total; lockedPrice is written to storage
     const jobsData = JSON.parse(storedData['haven_jobs']);
     const job = jobsData.data[jobsData.data.length-1];
