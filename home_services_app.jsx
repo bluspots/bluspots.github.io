@@ -917,10 +917,15 @@ function matchDiagnosis(text){
 }
 const SF=["en_route","arrived","in_progress","complete"];
 const SI={
-  en_route:   {label:"Pro is on the way",  sub:"is heading to you",     em:"🚗"},
-  arrived:    {label:"Pro has arrived",    sub:"is at your door",       em:"📍"},
-  in_progress:{label:"Job in Progress",   sub:"is working on your job", em:"🔨"},
-  complete:   {label:"Job Complete! 🎉",  sub:"— tap below to review",  em:"⭐"},
+  en_route:            {label:"Pro is on the way",                 sub:"is heading to you",                 em:"🚗"},
+  arrived:             {label:"Pro has arrived",                   sub:"is at your door",                   em:"📍"},
+  diagnosing:          {label:"Assessing the job",                 sub:"is diagnosing the issue",           em:"🧪"},
+  materials_requested: {label:"Materials needed — your approval",  sub:"review and approve",                em:"🧾"},
+  materials_approved:  {label:"Materials approved — pro is buying",sub:"authorized purchase",               em:"🧾"},
+  in_progress:         {label:"Job in progress",                   sub:"is working on your job",            em:"🔨"},
+  inspection_completed:{label:"Inspection visit completed",        sub:"",                                  em:"🧪"},
+  materials_declined:  {label:"Job ended — materials declined",    sub:"",                                  em:"⛔"},
+  complete:            {label:"Job Complete! 🎉",                  sub:"— tap below to review",             em:"⭐"},
 };
 const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
 const PRO_REPLIES=["Got it! 👍","On it!","Thanks for the heads up!","Almost there!","Sounds good!","Will do!"];
@@ -1055,6 +1060,8 @@ function makeJob({
   jobPreferences=[], // snapshot of enabled preference labels at booking time — the shape a future Pro-app surface would read
   workPerformed=[], materials=[], proNotes="", // populated once, at completion — see getCompletionDetails()
   lockedPrice=null, // the actual labor price agreed to at booking time (property-aware for scoped tasks like Deep/Standard/Move-Out Cleaning). null for older jobs or non-scoped tasks — those fall back to the catalog's reference price, which is safe since it was never property-dependent to begin with.
+  requiresDiagnosis=false, // computed once at creation for diagnosis categories; used for materials-decline outcome
+  materialsRequest=null,   // {items:[{description,qty,amount}], estimatedTotal} — shown while awaiting approval
 }={}){
   return {
     id:Date.now(), // known limitation: two jobs in the same millisecond would collide — impossible via UI, fix when a backend exists
@@ -1067,6 +1074,8 @@ function makeJob({
     jobPreferences,
     workPerformed, materials, proNotes,
     lockedPrice,
+    requiresDiagnosis,
+    materialsRequest,
     // Backend (canonical) UUID once dual-write succeeds — null until then.
     backendJobId:null,
   };
@@ -1183,6 +1192,34 @@ export default function App(){
       return null;
     }
   };
+  // Prototype PATCH helper — updates fields on jobs by backend UUID.
+  // RLS currently allows terminals (inspection_completed/materials_declined) on assigned rows.
+  const updateCanonicalJob=async(backendJobId,fields)=>{
+    const cfg=getSupabaseConfig();
+    if(!cfg||!backendJobId) return false;
+    try{
+      const res=await fetch(`${cfg.url}/rest/v1/jobs?id=eq.${backendJobId}`,{
+        method:"PATCH",
+        headers:{
+          "Content-Type":"application/json",
+          "Accept":"application/json",
+          "apikey":cfg.anonKey,
+          "Authorization":`Bearer ${cfg.anonKey}`,
+          "Prefer":"return=representation",
+        },
+        body:JSON.stringify(fields),
+      });
+      if(!res.ok){
+        const text=await res.text().catch(()=>"(no body)");
+        console.warn("Haven CHUNK3 update failed:", res.status, text);
+        return false;
+      }
+      return true;
+    }catch(err){
+      console.warn("Haven CHUNK3 update error:", err);
+      return false;
+    }
+  };
   // Appearance — System / Light / Dark. Persisted so it survives reopening
   // the installed PWA. "Tokens, not per-screen styles": every screen in this
   // file already references BG/W/TX/TS/TM/BD/SL by name via closure, so
@@ -1234,7 +1271,12 @@ export default function App(){
   const [ctitle,setCtitle] = useState("");
   const [ccat,setCcat]     = useState("Repair");
   const [cprice,setCprice] = useState("");
-  const VALID_JOB_STATUSES=new Set(["posted","en_route","arrived","in_progress","complete","cancelled"]);
+  const VALID_JOB_STATUSES=new Set([
+    "posted","en_route","arrived","diagnosing",
+    "materials_requested","materials_approved",
+    "in_progress","inspection_completed","materials_declined",
+    "complete","cancelled"
+  ]);
   const [jobs,setJobs] = usePersistedState("haven_jobs",[],{
     version:1,
     validate:v=>{
@@ -1661,6 +1703,7 @@ export default function App(){
   const [showAddressPicker,setShowAddressPicker]=useState(false);
   const [showCancelConfirm,setShowCancelConfirm]=useState(false); // pre-accept direct cancel confirmation
   const [showCancelRequest,setShowCancelRequest]=useState(false); // post-accept support-mediated cancel panel
+  const [showMaterialsDeclineConfirm,setShowMaterialsDeclineConfirm]=useState(false); // decline-materials confirmation sheet
   const [tabScr,setTabScr]=useState({}); // per-tab remembered last screen — {home:..., bookings:..., profile:...}
   const [lastTabTap,setLastTabTap]=useState({tab:null,time:0}); // for double-tap-to-reset detection
   const [showDiscardConfirm,setShowDiscardConfirm]=useState(false); // "Discard draft?" prompt
@@ -1709,7 +1752,13 @@ export default function App(){
   const vjPro = vj?.pro||PROS[0];
   const vjPname=vjPro.n.split(" ")[0];
   const vjTotal=vjTask?(vj?.lockedPrice??vjTask.p)+(vj?.surge||0)+(vj?.emergencyFee||0):0;
-  const vjSIdx= vj?SF.indexOf(vj.status):-1;
+  // Map extended statuses to the nearest progress step for the tracker UI
+  const progressStatus=vj?(
+    vj.status==="diagnosing"||vj.status==="materials_requested" ? "arrived"
+    : vj.status==="materials_approved" ? "in_progress"
+    : vj.status
+  ):null;
+  const vjSIdx= vj?SF.indexOf(progressStatus):-1;
   // Progressively-tightening arrival estimate — deterministic, anchored to
   // real elapsed time since the pro accepted (not random), so it always
   // counts down smoothly and believably rather than jumping around.
@@ -1802,8 +1851,9 @@ export default function App(){
     if(bFilter==="done")   return j.status==="complete";
     return true;
   });
-  const activeCount= allJobs.filter(j=>j.status!=="complete").length;
-  const doneCount  = allJobs.filter(j=>j.status==="complete").length;
+  const TERMINAL_STATUSES=new Set(["complete","inspection_completed","materials_declined"]);
+  const activeCount= allJobs.filter(j=>!TERMINAL_STATUSES.has(j.status)).length;
+  const doneCount  = allJobs.filter(j=>TERMINAL_STATUSES.has(j.status)).length;
   const hasActive  = activeCount>0;
 
   useEffect(()=>{
@@ -2234,6 +2284,19 @@ export default function App(){
     if(currentTask.propertyScoped&&effectiveTaskPrice==null)return; // missing property data — never post with a guessed price
     if(isPostingRef.current)return; // already posted this draft — a rapid second tap must not create a duplicate job
     isPostingRef.current=true;
+    // Compute and persist diagnosis requirement on the local job
+    const isCatalogLocal = !!tid;
+    const catLocal      = isCatalogLocal ? (currentTask?.c||"") : (ccat||"");
+    const titleLocal    = isCatalogLocal ? (currentTask?.n||"") : (ctitle||"");
+    const taskIdLocal   = tid;
+    const DIAGNOSIS_CATEGORY_SET_LOCAL = new Set(["Plumbing","Electrical","Appliance","HVAC"]);
+    let requiresDiagnosisLocal = DIAGNOSIS_CATEGORY_SET_LOCAL.has(catLocal);
+    if(!requiresDiagnosisLocal && catLocal==="Repair"){
+      const tlc=(titleLocal||"").toLowerCase();
+      if(taskIdLocal===53 || tlc.includes("ac/heating") || tlc.includes("hvac")){
+        requiresDiagnosisLocal = true;
+      }
+    }
     const nj=makeJob({
       taskId:tid,
       custom:tid?null:{title:ctitle,cat:ccat,price:parseInt(cprice)||0},
@@ -2243,6 +2306,7 @@ export default function App(){
       paymentBrand:selectedCard?.brand||"Card",paymentLast4:selectedCard?.last4||"----",
       jobPreferences:jobPrefs.filter(p=>p.enabled).map(p=>p.label),
       lockedPrice:tid?effectiveTaskPrice:null, // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
+      requiresDiagnosis:requiresDiagnosisLocal,
     });
     setJobs(p=>[...p,nj]);setVjid(nj.id);
     setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
@@ -2339,6 +2403,28 @@ export default function App(){
   };
   const cancelJobDirect=()=>{ updateJob(vjid,{status:"cancelled"}); setShowCancelConfirm(false); goHome(); };
   const requestCancellation=()=>{ updateJob(vjid,{cancelStatus:"requested",cancellationRequestedAt:Date.now()}); setShowCancelRequest(false); handleCancellationTransition(vjid,"requested"); };
+
+  // Materials approval/decline — customer actions when vj.status === 'materials_requested'
+  const approveMaterials=()=>{
+    if(!vj) return;
+    // Local-only transition for now (authorize purchase) — backend RLS for this transition may not be open yet
+    updateJob(vjid,{status:"materials_approved"});
+    handleJobTransition(vjid,"materials_approved",vj.pro?.n||"Your pro");
+  };
+  const declineMaterials=async()=>{
+    if(!vj) return;
+    const isDiag = !!vj.requiresDiagnosis;
+    const nextStatus = isDiag ? "inspection_completed" : "materials_declined";
+    // Local update first for responsiveness
+    updateJob(vjid,{status:nextStatus});
+    handleJobTransition(vjid,nextStatus,vj.pro?.n||"Your pro");
+    setShowMaterialsDeclineConfirm(false);
+    // Prototype backend dual-write (best-effort; RLS may require assigned pro)
+    const extraFields = isDiag ? {} : {convenience_fee_cents:3000};
+    if(vj.backendJobId){
+      await updateCanonicalJob(vj.backendJobId,{status:nextStatus, ...extraFields});
+    }
+  };
 
   const sendMsg=()=>{
     if(!minput.trim()||vj?.status==="complete")return;
@@ -2744,11 +2830,23 @@ export default function App(){
           const jtp=ALL_TIME_PREFS.find(t=>t.id===j.tpId);
           const basePrice=j.taskId?(j.lockedPrice??(jt?jt.p:0)):(j.custom?.price||0);
           const jTotal=basePrice+(j.surge||0)+(j.emergencyFee||0);
-          const isPending=j.status==="posted";const isDone=j.status==="complete";
+          const isPending=j.status==="posted";
+          const isDone=TERMINAL_STATUSES.has(j.status);
           const isCancelPending=j.cancelStatus==="requested"&&!isDone;
-          const statusLabel=isCancelPending?"Pending Cancellation":isPending?"Waiting for pro":isDone?"Completed":SI[j.status]?.label||"Active";
-          const statusColor=isCancelPending?"#DC2626":isPending?AM:isDone?SC:N;
-          const statusBg=isCancelPending?"#FEF2F2":isPending?"#FEF3C7":isDone?SL:"#EEF2FF";
+          const statusLabel=isCancelPending?"Pending Cancellation"
+            : isPending?"Waiting for pro"
+            : isDone?(j.status==="complete"?"Completed":(j.status==="inspection_completed"?"Inspection visit completed":"Job ended — materials declined"))
+            : (SI[j.status]?.label||"Active");
+          const statusColor=isCancelPending?"#DC2626"
+            : j.status==="materials_requested"?"#92400E"
+            : isPending?AM
+            : isDone?SC
+            : N;
+          const statusBg=isCancelPending?"#FEF2F2"
+            : j.status==="materials_requested"?"#FEF3C7"
+            : isPending?"#FEF3C7"
+            : isDone?SL
+            : "#EEF2FF";
           return(
             <div key={j.id} onClick={()=>{setVjid(j.id);setShowCancelConfirm(false);setShowCancelRequest(false);goTo(isPending?"posted":"tracking");}} style={{background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:12,cursor:"pointer"}}>
               <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:12}}>
@@ -2760,11 +2858,14 @@ export default function App(){
                 </div>
                 <span style={{color:TM,fontSize:20,flexShrink:0}}>›</span>
               </div>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",flexWrap:"wrap",gap:6}}>
                 <div style={{display:"flex",alignItems:"center",gap:6}}>
                   <span style={{fontSize:12,fontWeight:700,color:statusColor,background:statusBg,padding:"5px 12px",borderRadius:20}}>{statusLabel}</span>
                   {j.emergency&&<span style={{fontSize:11,fontWeight:700,color:"#C2410C",background:"#FFF1EE",padding:"4px 10px",borderRadius:20}}>🚨 Emergency</span>}
                 </div>
+                  {j.status==="materials_requested"&&(
+                    <span style={{fontSize:11,fontWeight:800,color:W,background:"#DC2626",padding:"2px 8px",borderRadius:10}}>Action needed</span>
+                  )}
                 {!isPending&&j.pro&&<span style={{fontSize:12,color:TS}}>Pro: {j.pro.n}</span>}
                 {isDone&&!j.rated&&<span style={{fontSize:12,color:AM,fontWeight:700}}>⭐ Rate now</span>}
                 {isDone&&j.rated&&<span style={{fontSize:12,color:SC,fontWeight:600,display:"inline-flex",alignItems:"center",gap:4}}>{starDisplay(j.stars,11)} Reviewed</span>}
@@ -4662,6 +4763,57 @@ export default function App(){
             <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{info.label}</div><div style={{fontSize:13,color:TS}}>{vjPname} {info.sub}</div></div>
           </div>
           <div style={{margin:"12px 20px",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>{trackMap()}</div>
+          {/* Materials approval card — shown only while awaiting customer decision */}
+          {vj.status==="materials_requested"&&(()=>{
+            const jt=vjTask?{n:vjTask.n,c: (TASKS.find(t=>t.id===vj.taskId)?.c)}:(vj.custom?{n:vj.custom.title,c:vj.custom.cat}:null);
+            // Fallback demo materials from completion template when no explicit request attached
+            const computeFallback=()=>{
+              const category=vj.taskId?(TASKS.find(t=>t.id===vj.taskId)?.c):vj.custom?.cat;
+              const price=vjTask?(vj.lockedPrice??vjTask.p):(vj.custom?.price||0);
+              const {materials}=getCompletionDetails(category,price);
+              const est=materials.reduce((s,m)=>s+(m.amount*(m.qty||1)),0);
+              return {items:materials,estimatedTotal:est};
+            };
+            const req=vj.materialsRequest||computeFallback();
+            const estTotal=req.items.reduce((s,m)=>s+(m.amount*(m.qty||1)),0);
+            return(
+              <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                  <span style={{fontSize:11,fontWeight:800,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Materials needed — your approval</span>
+                  <span style={{fontSize:11,fontWeight:700,color:"#92400E",background:"#FEF3C7",padding:"4px 10px",borderRadius:20}}>Action needed</span>
+                </div>
+                <div style={{fontSize:14,fontWeight:700,color:TX,marginBottom:6}}>{jt?.n||"Your job"}</div>
+                <div style={{fontSize:12,color:TS,marginBottom:12}}>Your pro requested these materials to complete the job.</div>
+                <div style={{border:`1px solid ${BD}`,borderRadius:12,overflow:"hidden",marginBottom:12}}>
+                  {req.items.map((m,i)=>(
+                    <div key={i} style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",padding:"10px 12px",background:i%2===0?BG:W}}>
+                      <div style={{fontSize:13,color:TX}}>{m.description}</div>
+                      <div style={{fontSize:13,color:TS}}>×{m.qty||1}</div>
+                      <div style={{fontSize:13,fontWeight:700,color:TX}}>${(m.amount*(m.qty||1)).toFixed(2)}</div>
+                    </div>
+                  ))}
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 12px",borderTop:`1px solid ${BD}`,background:W}}>
+                    <div style={{fontSize:12,color:TM,fontWeight:700}}>Estimated total</div>
+                    <div style={{fontSize:16,fontWeight:900,color:AM}}>${estTotal.toFixed(2)}</div>
+                  </div>
+                </div>
+                <div style={{fontSize:11,color:TS,marginBottom:12,lineHeight:1.5}}>Approving authorizes the purchase only. The receipt later locks the actual total. Haven takes $0 on materials.</div>
+                <button onClick={approveMaterials} style={{width:"100%",padding:13,borderRadius:14,border:"none",background:AM,color:W,fontWeight:800,fontSize:14,cursor:"pointer",marginBottom:8}}>Approve materials</button>
+                <button onClick={()=>setShowMaterialsDeclineConfirm(true)} style={{width:"100%",padding:13,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:"#DC2626",fontWeight:800,fontSize:14,cursor:"pointer"}}>Decline and end job</button>
+              </div>
+            );
+          })()}
+          {vj.status==="materials_approved"&&(()=>{
+            const req=vj.materialsRequest;
+            const est=req?req.items.reduce((s,m)=>s+(m.amount*(m.qty||1)),0):null;
+            return(
+              <div style={{margin:"0 20px 12px",background:SL,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                <div style={{fontSize:14,fontWeight:800,color:SC,marginBottom:6}}>✓ Materials approved — pro is buying</div>
+                <div style={{fontSize:12,color:SC,opacity:.9,lineHeight:1.5,marginBottom:6}}>Receipt later locks the actual total. Haven takes $0 on materials.</div>
+                {est!=null&&<div style={{fontSize:12,color:SC}}>Estimated total: <span style={{fontWeight:900}}>${est.toFixed(2)}</span></div>}
+              </div>
+            );
+          })()}
           {vjArrivalSim&&(
             <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
               {vjArrivalSim.stage!=="tight"?(
@@ -4714,46 +4866,67 @@ export default function App(){
             ))}
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div></div>}
           </div>
-          {vj.status!=="complete"?(
-            <>
-              {demoProControlsPanel([[{en_route:"Arrive",arrived:"Start work",in_progress:"Complete job"}[vj.status]||"Advance",advance]])}
-              {vj.cancelStatus==="requested"?(
+          {(()=>{
+            const isTerminal=["complete","inspection_completed","materials_declined"].includes(vj.status);
+            if(!isTerminal){
+              return(
+                <>
+                  {demoProControlsPanel([[{en_route:"Arrive",arrived:"Start work",in_progress:"Complete job"}[vj.status]||"Advance",advance]])}
+                  {vj.cancelStatus==="requested"?(
+                    <div style={{margin:"0 20px 24px",background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:16,padding:16,textAlign:"center"}}>
+                      <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:4}}>Pending Cancellation</div>
+                      <div style={{fontSize:12,color:"#991B1B",lineHeight:1.5}}>Haven Support will review timing and any work already performed, then follow up with you.</div>
+                    </div>
+                  ):!showCancelRequest?(
+                    <div style={{margin:"0 20px 24px",textAlign:"center"}}>
+                      <button onClick={()=>setShowCancelRequest(true)} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:"8px 0"}}>Need to cancel this job?</button>
+                    </div>
+                  ):(
+                    <div style={{margin:"0 20px 24px",background:W,borderRadius:18,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                      <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:6}}>Cancel this job?</div>
+                      <div style={{fontSize:12,color:TS,lineHeight:1.5,marginBottom:14}}>A pro has already accepted. Haven Support may need to review timing, work already performed, or applicable fees before this can be cancelled.</div>
+                      <button onClick={()=>setShowCancelRequest(false)} style={{width:"100%",padding:12,borderRadius:12,border:"none",background:AM,color:W,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Continue with job</button>
+                      <button onClick={requestCancellation} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Request cancellation</button>
+                      <button onClick={()=>{setShowCancelRequest(false);openHelp();}} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:13,cursor:"pointer"}}>Contact Haven Support</button>
+                    </div>
+                  )}
+                </>
+              );
+            }
+            if(vj.status==="complete"){
+              return(
+                <div style={{margin:"0 20px 24px"}}>
+                  {!vj.rated?(
+                    <button onClick={openRating} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`,marginBottom:10}}>⭐ Rate {vjPname}</button>
+                  ):(
+                    <div style={{background:SL,borderRadius:18,padding:16,textAlign:"center",marginBottom:10}}>
+                      <div style={{marginBottom:4}}>{starDisplay(vj.stars,22)}</div>
+                      <div style={{fontWeight:700,fontSize:14,color:SC}}>Review submitted — thanks!</div>
+                    </div>
+                  )}
+                  {vj.tipStatus==="paid"?(
+                    <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:SC,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>✓ Tip sent: ${vj.tipAmount.toFixed(2)}</button>
+                  ):(
+                    <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>💛 Tip Pro</button>
+                  )}
+                  <button onClick={()=>openReceipt(vj.id)} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:"pointer"}}>🧾 View Receipt</button>
+                </div>
+              );
+            }
+            // Terminal non-complete: inspection_completed or materials_declined
+            return(
                 <div style={{margin:"0 20px 24px",background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:16,padding:16,textAlign:"center"}}>
-                  <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:4}}>Pending Cancellation</div>
-                  <div style={{fontSize:12,color:"#991B1B",lineHeight:1.5}}>Haven Support will review timing and any work already performed, then follow up with you.</div>
+                <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:6}}>
+                  {vj.status==="inspection_completed"?"Inspection visit completed":"Job ended — materials declined"}
                 </div>
-              ):!showCancelRequest?(
-                <div style={{margin:"0 20px 24px",textAlign:"center"}}>
-                  <button onClick={()=>setShowCancelRequest(true)} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:"8px 0"}}>Need to cancel this job?</button>
+                <div style={{fontSize:12,color:"#991B1B",lineHeight:1.5,marginBottom:8}}>
+                  {vj.status==="inspection_completed"
+                    ? "A $45 Inspection Visit applies. Haven takes $0."
+                    : "A $30 convenience fee applies. Haven takes $0."}
                 </div>
-              ):(
-                <div style={{margin:"0 20px 24px",background:W,borderRadius:18,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-                  <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:6}}>Cancel this job?</div>
-                  <div style={{fontSize:12,color:TS,lineHeight:1.5,marginBottom:14}}>A pro has already accepted. Haven Support may need to review timing, work already performed, or applicable fees before this can be cancelled.</div>
-                  <button onClick={()=>setShowCancelRequest(false)} style={{width:"100%",padding:12,borderRadius:12,border:"none",background:AM,color:W,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Continue with job</button>
-                  <button onClick={requestCancellation} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Request cancellation</button>
-                  <button onClick={()=>{setShowCancelRequest(false);openHelp();}} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:13,cursor:"pointer"}}>Contact Haven Support</button>
+                <button onClick={goBookings} style={{padding:"10px 14px",borderRadius:10,border:"none",background:N,color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>← Back to Bookings</button>
                 </div>
-              )}
-            </>
-          ):(
-            <div style={{margin:"0 20px 24px"}}>
-              {!vj.rated?(
-                <button onClick={openRating} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:W,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`,marginBottom:10}}>⭐ Rate {vjPname}</button>
-              ):(
-                <div style={{background:SL,borderRadius:18,padding:16,textAlign:"center",marginBottom:10}}>
-                  <div style={{marginBottom:4}}>{starDisplay(vj.stars,22)}</div>
-                  <div style={{fontWeight:700,fontSize:14,color:SC}}>Review submitted — thanks!</div>
-                </div>
-              )}
-              {vj.tipStatus==="paid"?(
-                <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:SC,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>✓ Tip sent: ${vj.tipAmount.toFixed(2)}</button>
-              ):(
-                <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>💛 Tip Pro</button>
-              )}
-              <button onClick={()=>openReceipt(vj.id)} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:"pointer"}}>🧾 View Receipt</button>
-            </div>
-          )}
+          })()}
         </div>
       </div>
     );
@@ -5076,6 +5249,22 @@ export default function App(){
                 <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:18,textAlign:"center"}}>This booking hasn't been posted yet. Your progress will be lost.</div>
                 <button onClick={()=>setShowDiscardConfirm(false)} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:AM,color:W,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:10}}>Keep Editing</button>
                 <button onClick={()=>discardDraftAndGo(()=>backFrom(tid?"task":"custom",{scr:"home",tab:"home"}))} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:"#DC2626",fontWeight:700,fontSize:15,cursor:"pointer"}}>Discard Draft</button>
+              </div>
+            </div>
+          )}
+          {showMaterialsDeclineConfirm&&(
+            <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:10}}>
+              <div style={{background:W,borderRadius:"20px 20px 0 0",padding:24,width:"100%"}}>
+                <div style={{fontWeight:800,fontSize:17,color:TX,marginBottom:6,textAlign:"center"}}>
+                  {vj?.requiresDiagnosis?"End with Inspection Visit?":"Decline materials and end job?"}
+                </div>
+                <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:18,textAlign:"center"}}>
+                  {vj?.requiresDiagnosis
+                    ? "This ends the job as an Inspection Visit. $45 Inspection fee applies. Haven takes $0."
+                    : "This ends the job. A $30 convenience fee applies to the pro. Haven takes $0."}
+                </div>
+                <button onClick={()=>setShowMaterialsDeclineConfirm(false)} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:10}}>Go back</button>
+                <button onClick={declineMaterials} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"#DC2626",color:W,fontWeight:800,fontSize:15,cursor:"pointer"}}>Decline and end job</button>
               </div>
             </div>
           )}
