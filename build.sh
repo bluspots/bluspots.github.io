@@ -21,12 +21,25 @@
 set -e
 cd "$(dirname "$0")"
 
+# Phase 3 Step 0 — concat source list (Option A). See docs/PHASE3_MODULARIZATION_ORDER.md.
+
+# Ordered list of source files to concatenate (Step 0: single file to keep ship byte-stable)
+SOURCE_FILES=(
+  "home_services_app.jsx"
+)
+
+# Concatenate sources into a single temp body, then apply today's strip rules
+TMP_CAT=$(mktemp)
+for src in "${SOURCE_FILES[@]}"; do
+  cat "$src" >> "$TMP_CAT"
+done
+
 TMP=$(mktemp)
-sed '/^import React, { useState, useRef, useEffect } from "react";$/d' home_services_app.jsx \
+sed '/^import React, { useState, useRef, useEffect } from "react";$/d' "$TMP_CAT" \
   | sed 's/^export default function App(){/function App(){/' > "$TMP"
 
 cat _shell_pre.txt "$TMP" _shell_post.txt > prototype.html
 cp prototype.html index.html
-rm -f "$TMP"
+rm -f "$TMP" "$TMP_CAT"
 
 echo "prototype.html and index.html regenerated from home_services_app.jsx"
