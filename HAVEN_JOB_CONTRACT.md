@@ -163,7 +163,7 @@ posted → en_route → arrived → diagnosing → (materials_requested → mate
 The Pro App's architecture doc originally proposed (historical naming, not canonical):
 ```
 AVAILABLE → ACCEPTED → DRIVING → ARRIVED → DIAGNOSING → WORKING → COMPLETED
-                                                       ↘ MATERIALS_REQUESTED → WORKING | INSPECTION_COMPLETED  (historical doc used “INSPECTION_ONLY_COMPLETE”)
+                                                       ↘ MATERIALS_REQUESTED → WORKING | INSPECTION_COMPLETED  (historical naming varied; canonical shown)
 ```
 (SCREAMING_SNAKE_CASE; source: `haven-pro-app-architecture-v2.md` §8)
 
