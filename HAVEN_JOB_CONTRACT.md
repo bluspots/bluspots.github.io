@@ -140,18 +140,7 @@ diagnosis-required categories and a materials-approval UI; terminal
 materials-decline outcomes (`inspection_completed` for diagnosis categories,
 `materials_declined` for standard categories) are recognized and rendered.
 
-**Pro App** currently has *no job lifecycle code at all*. `SIM_JOBS` is a
-static array (`const [jobs] = useState(SIM_JOBS)` — no setter is even
-destructured). What's built is the job feed, eligibility/geographic
-filtering, category filters, sort controls, Profile, Settings, and dark
-mode. Accept, Driving, Arrived, Diagnosing, Materials Request, Working,
-Completed — all of it is designed in `haven-pro-app-architecture-v2.md`
-but it is no longer accurate to say “not yet written as code.” The Pro App
-now implements a working job lifecycle. Exact status names and transition
-boundaries in the Pro App may differ from the Customer App’s
-lowercase-snake_case set and from the original architecture doc. This
-document does not publish a cross‑app canonical enum in this slice; see §2
-— reconciliation is explicitly DEFERRED.
+**Pro App** now has a live, stateful job lifecycle (accept → `en_route` → `arrived` → `diagnosing` → `materials_requested` → `materials_approved` → `in_progress` → `complete`/`inspection_completed`) written by real UI actions. Exact status names and transition boundaries in the Pro App may differ from the Customer App’s lowercase‑snake_case set and from the original architecture doc. This document records the shared rules; see §2 for the canonical enum.
 
 **Why this matters right now:** the Pro App is about to write its first
 lifecycle code. That's the cheapest possible moment to align vocabulary —
@@ -203,7 +192,7 @@ Actions for now:
 | `materials_requested` | Pro found the job needs more than expected; awaiting customer approve/decline | Proposed |
 | `in_progress` | Actively doing the work | Customer App (existing). Proposed earlier as the shared “Working” state mapping. |
 | `complete` | Job finished, full repair, standard payout/pricing applies | Customer App (existing) |
-| `inspection_only_complete` | Diagnosis performed, customer declined materials, job ends at the inspection fee | Proposed |
+| `inspection_completed` | Diagnosis performed, customer declined materials, job ends at the inspection fee | Proposed |
 | `cancelled` | Job cancelled before or during the above (see §5 for cancellation sub-states) | Customer App (existing) |
 
 Open question (DEFERRED): whether to distinguish “accepted” vs “en_route”
@@ -258,13 +247,12 @@ The following product decisions are locked and adopted in both code and docs.
 - The Customer App treats materials as additive; labor remains the full service/labor price.
 - The customer sees one fixed labor/service price. Haven keeps 20% inside the listed labor price; the customer price does not increase. The founder set that margin at 20% of the listed labor price. The Pro's fixed labor payout is 80% of the listed labor price. The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later. It is not TBD.
 
-### 3c. Standard materials‑decline outcome wording
+### 3c. Standard materials‑decline outcome wording (locked)
 
 - For standard (non‑diagnosis) categories, when materials are requested
   mid‑job and the customer declines, the terminal outcome is:
   “Job Ended — Materials Declined.”
-- A flat visit fee for that outcome is approved in principle; the exact
-  amount is FOUNDER‑TBD. This PR does not set a dollar amount.
+- A flat $30 convenience fee is LOCKED for this outcome (Haven $0). Credited to the Pro.
 - Existing diagnosis fees and the diagnosis‑inspection path remain as they
   are; do not rename or merge that path into this new standard outcome.
 
@@ -303,7 +291,7 @@ out of sync with each other the way job status already has.
 | `diagnosing → in_progress` | Pro App | Scope matched what was listed |
 | `diagnosing → materials_requested` | Pro App | Scope exceeded what was listed |
 | `materials_requested → in_progress` | **Customer App** (approve) | Customer-triggered, not Pro-triggered — the Pro App is blocked waiting on this |
-| `materials_requested → inspection_only_complete` | **Customer App** (decline) | Same — customer-triggered terminal state |
+| `materials_requested → inspection_completed` | **Customer App** (decline) | Same — customer-triggered terminal state |
 | `in_progress → complete` | Pro App | |
 | `(any pre-complete) → cancelled` | Either, with different sub-rules: Customer may cancel before acceptance freely, and *request* cancellation after acceptance (`cancelStatus:"requested"` — already built); Pro App cancellation/abandonment handling is an open edge case per architecture doc §23, not yet designed in detail | |
 | Rating / tip | Customer App only, post-`complete` | Already fully built on Customer side |
