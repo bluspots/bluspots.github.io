@@ -17,6 +17,7 @@ Recommended order for a fresh project:
 4. `migrations/0004_chunk3_accept_and_decline.sql` (enum + column only)
 5. `migrations/0005_chunk3_grants.sql` (privilege fix for UPDATE + optional status‑event inserts)
 6. `migrations/0006_chunk3_rls_policies.sql` (prototype RLS policies for claim + terminals)
+7. `migrations/0007_chunk3_select_assigned.sql` (SELECT policy so NEW rows after UPDATE are visible)
 
 Warning:
 - Use this PR branch’s latest files (Files tab → raw URL), not any older paste or copy.
@@ -28,6 +29,45 @@ Notes:
   - column `convenience_fee_cents int not null default 0 check (>=0)`
 - `0005` grants `UPDATE` on `public.jobs` to `anon`, `authenticated` (and `INSERT` on `public.job_status_events` optionally)
 - `0006` defines the prototype RLS UPDATE policies for claim and demo terminals
+- `0007` adds a permissive `SELECT` policy for assigned/active/terminal rows so that the NEW row produced by `UPDATE` (e.g. `posted → en_route`) passes RLS visibility. Without this, claim can fail with 42501 even if UPDATE policies are correct.
+
+### RLS claim 42501 repair (existing projects)
+
+Symptom:
+- On claiming a job (`posted, pro_id null → en_route, pro_id set`), you see 42501 “new row violates row-level security policy”.
+
+Root cause:
+- In Postgres/Supabase, the NEW row after an `UPDATE` must also be visible under a `SELECT` policy. If only `status='posted'` rows are selectable, `en_route` (and other non‑posted) rows are not visible, causing the 42501 failure even when `UPDATE` policies allow the transition.
+
+Fix:
+- Apply `migrations/0007_chunk3_select_assigned.sql`, or paste the following in the SQL Editor:
+
+```sql
+-- Allow SELECT of assigned/active/terminal jobs so UPDATE posted→en_route passes RLS
+-- (Postgres/Supabase requires the NEW row to pass a SELECT policy).
+drop policy if exists jobs_select_assigned_or_active on public.jobs;
+create policy jobs_select_assigned_or_active
+  on public.jobs
+  for select
+  to anon, authenticated
+  using (
+    pro_id is not null
+    or status in (
+      'en_route','arrived','diagnosing',
+      'materials_requested','materials_approved','in_progress',
+      'inspection_completed','materials_declined','complete','cancelled'
+    )
+  );
+```
+
+Diagnostic query (optional):
+
+```sql
+select policyname, cmd, roles, qual, with_check
+from pg_policies
+where tablename = 'jobs'
+order by policyname;
+```
 
 ## 2) Configure the Customer App dual‑write (unchanged keys)
 
