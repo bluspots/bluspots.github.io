@@ -253,8 +253,7 @@ function selectNonSurgeTimeWindow(){
 }
 
 function getContainerRoot(){
-  // Always target the most recently mounted app container
-  return document.body.lastElementChild;
+  return (typeof mainContainer!=='undefined' && mainContainer) ? mainContainer : document.body.lastElementChild;
 }
 function getPostJobButton(){
   const root = getContainerRoot();
@@ -1358,7 +1357,10 @@ function runLockedPriceChecks(){
   storedData['haven_jobs'] = JSON.stringify({__v:1, data:[]});
   const container = document.createElement('div');
   document.body.appendChild(container);
-  act(()=>{ render(React.createElement(App), container); });
+  let renderResult;
+  act(()=>{ renderResult = render(React.createElement(App), container); });
+  // Align all helpers to this fresh mount for Phase 14
+  mainContainer = (renderResult && renderResult.container) ? renderResult.container : container;
 
   step('67. Book a property-scoped cleaning job and capture its locked price at booking time', () => {
     clickTab('Home');
