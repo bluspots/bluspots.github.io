@@ -27,6 +27,7 @@ cd "$(dirname "$0")"
 SOURCE_FILES=(
   "locked_constants.js"
   "pure_helpers.js"
+  "catalog_seeds.js"
   "home_services_app.jsx"
 )
 
