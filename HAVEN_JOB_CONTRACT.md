@@ -1,3 +1,112 @@
+# HAVEN — CANONICAL JOB CONTRACT (Product Rules)
+Status: Canonical · Scope: Product/job rules only (Customer + Pro)
+
+Purpose and boundary
+
+- This file is the single source of truth for WHAT the Haven job lifecycle and economics are.
+- It defines product rules: lifecycle statuses, who may trigger which transition, economics (20/80 labor), materials and decline outcomes, “one active job per pro,” and category‑naming parity.
+- It does not define HOW these rules are represented in tables/APIs/enums or how they are enforced technically. That contract lives in `HAVEN_SHARED_BACKEND_CONTRACT.md` and must mirror these rules exactly.
+
+If any other document (including the Pro repo’s copy or the backend contract) disagrees with this one on a product rule, this document wins. The backend contract must be updated to reflect this file.
+
+---
+
+## 1) Canonical lifecycle (status vocabulary)
+
+Statuses (lowercase snake_case):
+
+```
+posted → en_route → arrived → diagnosing? → (materials_requested → materials_approved →) in_progress → complete
+                                                                                     ↘ inspection_completed (diagnosis decline)
+                                                                                     ↘ materials_declined   (standard decline)
+any pre‑complete → cancelled
+```
+
+Definitions:
+- posted: Job created; waiting for a pro to accept.
+- en_route: Pro accepted; traveling to the property.
+- arrived: Pro is at the property.
+- diagnosing: For categories where requires_diagnosis=true; pro is assessing scope.
+- materials_requested: Pro requested customer approval to buy materials; waiting on customer.
+- materials_approved: Customer approved; pro is authorized to purchase (no reimbursement yet).
+- in_progress: Pro is actively doing the work.
+- complete: Job finished with full repair.
+- inspection_completed: Diagnosis performed; customer declined materials on a diagnosis category; job ends at the inspection fee.
+- materials_declined: Standard category materials decline; job could not proceed; ends with a $30 convenience fee.
+- cancelled: Cancelled from any pre‑complete status (role rules below).
+
+Naming principles:
+- Use shared, lowercase snake_case names everywhere.
+- No separate “accepted” or “driving” statuses — those are Pro‑app‑local UI moments; the shared status remains `en_route`.
+
+---
+
+## 2) Transition ownership (permissions)
+
+| Transition | May trigger | Notes |
+|---|---|---|
+| (none) → posted | Customer | Job creation |
+| posted → en_route | Pro | Accepts job |
+| en_route → arrived | Pro | Arrival confirmation |
+| arrived → diagnosing | Pro | Diagnosis categories only |
+| diagnosing → in_progress | Pro | Scope matched what was listed |
+| diagnosing → materials_requested | Pro | Scope exceeded what was listed |
+| materials_requested → materials_approved | Customer | Approves request; authorizes purchase only |
+| materials_approved → in_progress | Pro | Submits receipt w/ actual materials cost + photo |
+| materials_requested → inspection_completed | Customer | Declines on diagnosis categories |
+| in_progress → complete | Pro | Mark job complete |
+| any pre‑complete → cancelled | Either | Different sub‑rules by phase; Customer after accept is “request cancel” |
+| Rating / tip | Customer | Post‑complete only |
+
+Backend enforcement must reject out‑of‑turn and role‑unauthorized transitions.
+
+---
+
+## 3) Locked economics (authoritative)
+
+- 20/80 labor split: The customer’s listed labor price is authoritative. Haven retains 20% inside that price; the pro’s fixed labor payout is 80%. The payout shown before accept is exactly what the pro receives.
+- Haven takes 0% of materials, 0% of tips, 0% of Inspection Visits, and 0% of the $30 convenience fee.
+- Materials are additive to labor — never carved out of the service/labor price.
+- Diagnosis decline: `inspection_completed` with a hard‑locked $45 inspection fee (pro receives it).
+- Standard (non‑diagnosis) decline: `materials_declined` with a $30 convenience fee (pro receives it).
+
+---
+
+## 4) Materials workflow (product rules)
+
+- Customer approval authorizes purchase; it does not reimburse an estimate.
+- Reimbursement occurs only on receipt submission with an actual amount and a receipt photo.
+- Whole‑request approval (no line‑item negotiation) is acceptable for v1.
+- Materials may be requested on any job category (not restricted to diagnosis categories).
+
+---
+
+## 5) One active job per pro (product rule)
+
+- A pro may hold at most one active job at a time across statuses {en_route, arrived, diagnosing, materials_requested, materials_approved, in_progress}.
+- The backend enforces this as a constraint; clients must respect it in UX.
+
+---
+
+## 6) Category naming parity (product rule)
+
+- Pro‑side category names must exactly match Customer‑side category names. The shared vocabulary is product‑owned here; the backend carries category strings verbatim.
+
+---
+
+## 7) Insurance (product rule)
+
+- Insurance is OUT. No blanket “Insured” messaging; no insurance product exists. Credentials surfaced to customers may include “Identity verified,” “Background checked,” and “Licensed” only when verified.
+
+---
+
+## 8) Document boundary (what lives where)
+
+- HAVEN_JOB_CONTRACT.md (this file): authoritative product/job rules — lifecycle, permissions, economics, materials, declines, one‑active, category naming, insurance policy.
+- HAVEN_SHARED_BACKEND_CONTRACT.md: technical representation and enforcement — enums, columns, RLS/policies, APIs. It MUST mirror these rules exactly and never invent different product behavior.
+
+---
+
 # HAVEN — SHARED JOB DATA CONTRACT
 **Status:** Living document · **Version:** 0.1 · **Scope:** Customer App ↔ Pro App ↔ (future) Backend
 

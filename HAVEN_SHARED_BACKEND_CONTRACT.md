@@ -2,7 +2,12 @@
 
 Status: draft for foundation · Scope: Customer ↔ Pro ↔ Backend (Supabase/Postgres shaped)
 
-Purpose: Canonical, backend‑owned data model and rules for jobs and closely related records (pricing, materials, inspection, tips, messaging, completion, receipts, earnings). Keeps clients simple; avoids unused‑field sprawl.
+Purpose: Canonical, backend‑owned data model and enforcement for jobs and closely related records (pricing, materials, inspection, tips, messaging, completion, receipts, earnings). Keeps clients simple; avoids unused‑field sprawl.
+
+Boundary with product rules
+
+- Product/job rules (WHAT) live in `HAVEN_JOB_CONTRACT.md` and are authoritative for lifecycle, permissions, economics, materials/declines, one‑active, category naming, and insurance policy.
+- This backend contract (HOW) must mirror those rules exactly in enums/columns/RLS/APIs. If a discrepancy is found, update this file to match the product contract — never reinterpret product behavior here.
 
 Do not wire any live clients in this PR. This is the source of truth for future client changes.
 
@@ -21,6 +26,10 @@ Do not wire any live clients in this PR. This is the source of truth for future 
 - Messaging in‑app only; no phone‑call feature.
 - Insurance out of scope; credentials are not “trust badges.”
 - Backend is authoritative for cross‑app rules.
+
+Category naming
+
+- Pro‑side category names must exactly match Customer‑side category names. Backend stores category strings verbatim; no alternate naming exists server‑side.
 
 Security: No raw card/CVV/SSN/bank login or raw sensitive ID docs in app schema. Use provider references only (Stripe Connect, Persona, Checkr, etc.).
 
