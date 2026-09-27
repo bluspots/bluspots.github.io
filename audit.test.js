@@ -1345,12 +1345,138 @@ function runHomeIntentArchitectureChecks(){
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 
-  runArrivedVisibilityChecks().then(() => {
+  runArrivedVisibilityChecks().then(() => runApproveAndDeclineChecks()).then(() => {
     if (fail > 0) process.exit(1);
   }).catch((e) => {
     console.error('FAIL (arrived visibility crashed):', e);
     process.exit(1);
   });
+}
+
+// Approve fails closed when the backend is configured and the PATCH does not land.
+// Decline still local-advances to inspection_completed / materials_declined.
+async function runApproveAndDeclineChecks(){
+  const backendId = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff';
+  const origFetch = global.fetch;
+  let patchOk = false;
+  let remoteStatus = 'materials_requested';
+  const patches = [];
+  global.fetch = async (url, opts) => {
+    const method = (opts && opts.method) || 'GET';
+    const u = String(url);
+    if (u.includes('/rest/v1/jobs') && method === 'PATCH') {
+      let body = {};
+      try { body = JSON.parse(opts.body || '{}'); } catch { body = {}; }
+      patches.push(body);
+      if (!patchOk) return { ok: false, status: 403, json: async () => ({}), text: async () => 'denied' };
+      if (body.status) remoteStatus = body.status;
+      return { ok: true, json: async () => ({}), text: async () => '' };
+    }
+    if (u.includes('/rest/v1/jobs')) {
+      return { ok: true, json: async () => [{ id: backendId, status: remoteStatus }], text: async () => '' };
+    }
+    return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+  };
+
+  const pro = { i: 'MT', n: 'Marcus T.', r: 4.97, j: 543, s: 'TV Mount Pro', col: '#1E40AF', trustScore: 98 };
+  const makeJob = (id, extra) => ({
+    id,
+    status: 'materials_requested',
+    taskId: 1,
+    tpId: 2,
+    backendJobId: backendId,
+    acceptedAt: Date.now(),
+    pro,
+    msgs: [],
+    photos: [],
+    desc: '',
+    materialsRequest: { items: [{ description: 'Pipe', qty: 1, amount: 12 }], estimatedTotal: 12 },
+    ...extra,
+  });
+
+  const mount = async (job, { backend = true } = {}) => {
+    cleanup();
+    remoteStatus = job.status;
+    if (backend) {
+      storedData['haven_supabase_url'] = 'https://example.supabase.co';
+      storedData['haven_supabase_anon_key'] = 'test-anon-key';
+    } else {
+      delete storedData['haven_supabase_url'];
+      delete storedData['haven_supabase_anon_key'];
+    }
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
+    storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    await act(async () => { render(React.createElement(App), container); });
+    clickTab('Bookings');
+    const cards = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(cards[cards.length - 1]); });
+    await act(async () => { await delay(50); });
+  };
+
+  try {
+    patchOk = false;
+    patches.length = 0;
+    await mount(makeJob(9101));
+    assert(existsRegex('Materials needed'), 'Materials request is open before a failed approve');
+    const approve = byText('Approve materials');
+    await act(async () => { fireEvent.click(approve); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex("Couldn't sync approval"), 'Failed approve shows an error toast');
+    assert(existsRegex('Materials needed'), 'Failed approve stays on the materials request');
+    assert(!existsRegex('pro is buying'), 'Failed approve does not local-advance to materials approved');
+    const failedJobs = JSON.parse(storedData['haven_jobs']);
+    assert(failedJobs.data[0].status === 'materials_requested', 'Failed approve does not persist a local advance');
+
+    patchOk = true;
+    patches.length = 0;
+    await mount(makeJob(9102));
+    const approveOk = byText('Approve materials');
+    await act(async () => { fireEvent.click(approveOk); });
+    await waitForCondition(
+      () => existsRegex('pro is buying'),
+      { timeout: 3000, message: 'Successful approve did not advance to materials approved' }
+    );
+    assert(patches.some(p => p.status === 'materials_approved'), 'Successful approve PATCHes materials_approved');
+
+    await mount(makeJob(9103, { backendJobId: null }), { backend: false });
+    const approveDemo = byText('Approve materials');
+    await act(async () => { fireEvent.click(approveDemo); });
+    await waitForCondition(
+      () => existsRegex('pro is buying'),
+      { timeout: 3000, message: 'Demo approve without a backend did not advance locally' }
+    );
+
+    patchOk = true;
+    patches.length = 0;
+    await mount(makeJob(9104, { requiresDiagnosis: true }));
+    click('Decline and end job');
+    click('Decline and end job');
+    await waitForCondition(
+      () => existsRegex('Inspection visit completed') && patches.some(p => p.status === 'inspection_completed'),
+      { timeout: 3000, message: 'Diagnosis decline did not land inspection_completed' }
+    );
+    assert(!patches.some(p => p.convenience_fee_cents != null), 'Diagnosis decline does not send a convenience fee');
+
+    patches.length = 0;
+    await mount(makeJob(9105, { requiresDiagnosis: false }));
+    click('Decline and end job');
+    click('Decline and end job');
+    await waitForCondition(
+      () => existsRegex('materials declined') && patches.some(p => p.status === 'materials_declined' && p.convenience_fee_cents === 3000),
+      { timeout: 3000, message: 'Standard decline did not land materials_declined with the $30 convenience fee' }
+    );
+  } catch (e) {
+    fail++;
+    console.error('FAIL (approve/decline):', (e && e.stack) || e);
+  } finally {
+    global.fetch = origFetch;
+    delete storedData['haven_supabase_url'];
+    delete storedData['haven_supabase_anon_key'];
+    cleanup();
+  }
+  console.log(`\n--- Approve/decline audit: ${pass} passing, ${fail} failing ---`);
 }
 
 // PHASE 14 helper: locked price checks for property-scoped cleaning services.
@@ -1427,8 +1553,9 @@ function runLockedPriceChecks(){
 }
 
 // Backend status is source of truth for the customer poll.
-// arrived, diagnosing, and in_progress map forward onto the local job.
-// Materials mapping stays. complete is not mapped here. Later statuses are not walked backward.
+// arrived, diagnosing, in_progress, and complete map forward onto the local job.
+// in_progress also advances materials_requested and materials_approved.
+// Materials mapping stays. Later statuses are not walked backward.
 async function runArrivedVisibilityChecks(){
   const backendId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const origFetch = global.fetch;
@@ -1580,8 +1707,21 @@ async function runArrivedVisibilityChecks(){
     remoteStatus = 'complete';
     await mountWithJob({ ...baseJob, id: 9004, status: 'en_route' });
     await openBookingsAndPoll();
-    assert(existsRegex('Pro is on the way'), 'Backend complete is not copied onto the customer job in this slice');
-    assert(!existsRegex('Job Complete'), 'Complete copy is not shown from the status poll');
+    assert(existsRegex('Completed'), 'Bookings shows backend complete without a reload');
+    assert(existsRegex('Rate now'), 'Bookings offers rating after backend complete');
+    assert(!existsRegex('Pro is on the way'), 'Complete replaces the en_route label on Bookings');
+    const completeCards = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(completeCards[completeCards.length - 1]); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Job Complete'), 'Tracking shows backend complete without a reload');
+    assert(existsRegex(/Rate Marcus/), 'Tracking shows Rate after backend complete');
+    assert(existsRegex('View Receipt'), 'Tracking shows View Receipt after backend complete');
+    await waitForCondition(() => {
+      try {
+        const notifs = JSON.parse(storedData['haven_notifications'] || '{}');
+        return Array.isArray(notifs.data) && notifs.data.some(n => n.title === 'Job completed');
+      } catch { return false; }
+    }, { timeout: 3000, message: 'Complete poll did not create the job-completed notification' });
 
     remoteStatus = 'arrived';
     await mountWithJob({
@@ -1613,8 +1753,35 @@ async function runArrivedVisibilityChecks(){
       materialsRequest: { items: [{ description: 'Pipe', qty: 1, amount: 12 }], estimatedTotal: 12 },
     });
     await openBookingsAndPoll();
-    assert(existsRegex('Materials approved'), 'A materials-approved job is not walked backward to in_progress');
-    assert(!existsRegex('Job in progress'), 'in_progress mapping does not replace materials_approved');
+    assert(existsRegex('Job in progress'), 'Bookings shows in_progress after a materials-approved receipt');
+    assert(!existsRegex('Materials approved'), 'in_progress replaces materials_approved after the pro receipt');
+    const approvedWorkCards = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(approvedWorkCards[approvedWorkCards.length - 1]); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Job in progress'), 'Tracking shows in_progress after a materials-approved receipt');
+    assert(existsRegex('is working on your job'), 'Tracking shows the in_progress subtitle after materials approval');
+
+    remoteStatus = 'in_progress';
+    await mountWithJob({
+      ...baseJob,
+      id: 9014,
+      status: 'materials_requested',
+      materialsRequest: { items: [{ description: 'Pipe', qty: 1, amount: 12 }], estimatedTotal: 12 },
+    });
+    await openBookingsAndPoll();
+    assert(existsRegex('Job in progress'), 'Bookings shows in_progress when a materials request is already in progress remotely');
+    assert(!existsRegex('Materials needed'), 'in_progress replaces materials_requested');
+
+    remoteStatus = 'arrived';
+    await mountWithJob({
+      ...baseJob,
+      id: 9015,
+      status: 'materials_approved',
+      materialsRequest: { items: [{ description: 'Pipe', qty: 1, amount: 12 }], estimatedTotal: 12 },
+    });
+    await openBookingsAndPoll();
+    assert(existsRegex('Materials approved'), 'A materials-approved job is not walked backward to arrived');
+    assert(!existsRegex('Pro has arrived'), 'Arrived mapping does not replace materials_approved');
 
     remoteStatus = 'diagnosing';
     await mountWithJob({ ...baseJob, id: 9012, status: 'in_progress' });
@@ -1627,6 +1794,37 @@ async function runArrivedVisibilityChecks(){
     await openBookingsAndPoll();
     assert(existsRegex('Materials needed'), 'Materials mapping still applies after the diagnosing poll');
     assert(!existsRegex('Pro has arrived'), 'Materials mapping still replaces arrived');
+
+    remoteStatus = 'materials_approved';
+    await mountWithJob({
+      ...baseJob,
+      id: 9016,
+      status: 'materials_approved',
+      materialsRequest: { items: [{ description: 'Pipe', qty: 1, amount: 12 }], estimatedTotal: 12 },
+    });
+    await openBookingsAndPoll();
+    const liveApproved = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(liveApproved[liveApproved.length - 1]); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Materials approved'), 'Tracking is open on materials approved before the receipt');
+    remoteStatus = 'in_progress';
+    await waitForCondition(
+      () => existsRegex('Job in progress') && !existsRegex('Materials approved'),
+      { timeout: 7000, message: 'Tracking did not show in_progress from materials_approved without a reload' }
+    );
+
+    remoteStatus = 'in_progress';
+    await mountWithJob({ ...baseJob, id: 9017, status: 'in_progress' });
+    await openBookingsAndPoll();
+    const liveWork = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(liveWork[liveWork.length - 1]); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Job in progress'), 'Tracking is open on in_progress before complete');
+    remoteStatus = 'complete';
+    await waitForCondition(
+      () => existsRegex('Job Complete') && existsRegex('View Receipt') && existsRegex(/Rate Marcus/),
+      { timeout: 7000, message: 'Tracking did not show complete Rate/View Receipt without a reload' }
+    );
   } catch (e) {
     fail++;
     console.error('FAIL (arrived visibility):', (e && e.stack) || e);
