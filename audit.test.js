@@ -1426,8 +1426,9 @@ function runLockedPriceChecks(){
 
 }
 
-// Backend `arrived` is source of truth for the customer poll (#26 pattern).
-// These mounts talk to a fake jobs row — no diagnosing/materials/complete mapping.
+// Backend status is source of truth for the customer poll.
+// arrived, diagnosing, and in_progress map forward onto the local job.
+// Materials mapping stays. complete is not mapped here. Later statuses are not walked backward.
 async function runArrivedVisibilityChecks(){
   const backendId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const origFetch = global.fetch;
@@ -1505,16 +1506,82 @@ async function runArrivedVisibilityChecks(){
     assert(existsRegex('is at your door'), 'Posted leaves for Tracking once the backend says arrived');
 
     remoteStatus = 'diagnosing';
-    await mountWithJob({ ...baseJob, id: 9003, status: 'en_route' });
+    await mountWithJob({ ...baseJob, id: 9003, status: 'arrived' });
     await openBookingsAndPoll();
-    assert(existsRegex('Pro is on the way'), 'Backend diagnosing is not copied onto the customer job in this slice');
-    assert(!existsRegex('Assessing the job'), 'Diagnosing copy is not shown from the arrived poll');
+    assert(existsRegex('Assessing the job'), 'Bookings shows backend diagnosing without a reload');
+    assert(!existsRegex('Pro has arrived'), 'Diagnosing replaces the arrived label on Bookings');
+    const diagCards = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(diagCards[diagCards.length - 1]); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Assessing the job'), 'Tracking shows backend diagnosing without a reload');
+    assert(existsRegex('is diagnosing the issue'), 'Tracking shows the diagnosing subtitle');
+    assert(!existsRegex("They're on their way"), 'Diagnosing does not reuse the accept on-the-way toast');
+
+    remoteStatus = 'in_progress';
+    await mountWithJob({ ...baseJob, id: 9006, status: 'diagnosing' });
+    await openBookingsAndPoll();
+    assert(existsRegex('Job in progress'), 'Bookings shows backend in_progress without a reload');
+    assert(!existsRegex('Assessing the job'), 'in_progress replaces the diagnosing label on Bookings');
+    const workCards = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(workCards[workCards.length - 1]); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Job in progress'), 'Tracking shows backend in_progress without a reload');
+    assert(existsRegex('is working on your job'), 'Tracking shows the in_progress subtitle');
+
+    remoteStatus = 'arrived';
+    await mountWithJob({ ...baseJob, id: 9007, status: 'arrived' });
+    await openBookingsAndPoll();
+    const stayCards = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(stayCards[stayCards.length - 1]); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Pro has arrived'), 'Tracking is open on arrived before diagnosing');
+    remoteStatus = 'diagnosing';
+    await waitForCondition(
+      () => existsRegex('Assessing the job') && !existsRegex('Pro has arrived'),
+      { timeout: 7000, message: 'Tracking did not show diagnosing without a reload' }
+    );
+    remoteStatus = 'in_progress';
+    await waitForCondition(
+      () => existsRegex('Job in progress') && !existsRegex('Assessing the job'),
+      { timeout: 7000, message: 'Tracking did not show in_progress without a reload' }
+    );
+
+    remoteStatus = 'posted';
+    await mountWithJob({ ...baseJob, id: 9008, status: 'posted', pro: null, acceptedAt: null });
+    await openBookingsAndPoll();
+    const postedDiagCards = screen.queryAllByText(/Assemble furniture/);
+    const beforePostedDiagPoll = fetches;
+    act(() => { fireEvent.click(postedDiagCards[postedDiagCards.length - 1]); });
+    await waitForCondition(() => fetches > beforePostedDiagPoll, { timeout: 3000, message: 'Posted screen poll did not run for diagnosing' });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Looking for a pro'), 'Posted screen is open before diagnosing');
+    remoteStatus = 'diagnosing';
+    await waitForCondition(
+      () => existsRegex('Assessing the job') && !existsRegex('Looking for a pro'),
+      { timeout: 7000, message: 'Posted did not show diagnosing without a reload' }
+    );
+    assert(existsRegex('is diagnosing the issue'), 'Posted leaves for Tracking once the backend says diagnosing');
+
+    remoteStatus = 'posted';
+    await mountWithJob({ ...baseJob, id: 9009, status: 'posted', pro: null, acceptedAt: null });
+    await openBookingsAndPoll();
+    const postedWorkCards = screen.queryAllByText(/Assemble furniture/);
+    const beforePostedWorkPoll = fetches;
+    act(() => { fireEvent.click(postedWorkCards[postedWorkCards.length - 1]); });
+    await waitForCondition(() => fetches > beforePostedWorkPoll, { timeout: 3000, message: 'Posted screen poll did not run for in_progress' });
+    await act(async () => { await delay(40); });
+    remoteStatus = 'in_progress';
+    await waitForCondition(
+      () => existsRegex('Job in progress') && !existsRegex('Looking for a pro'),
+      { timeout: 7000, message: 'Posted did not show in_progress without a reload' }
+    );
+    assert(existsRegex('is working on your job'), 'Posted leaves for Tracking once the backend says in_progress');
 
     remoteStatus = 'complete';
     await mountWithJob({ ...baseJob, id: 9004, status: 'en_route' });
     await openBookingsAndPoll();
     assert(existsRegex('Pro is on the way'), 'Backend complete is not copied onto the customer job in this slice');
-    assert(!existsRegex('Job Complete'), 'Complete copy is not shown from the arrived poll');
+    assert(!existsRegex('Job Complete'), 'Complete copy is not shown from the status poll');
 
     remoteStatus = 'arrived';
     await mountWithJob({
@@ -1526,6 +1593,40 @@ async function runArrivedVisibilityChecks(){
     await openBookingsAndPoll();
     assert(existsRegex('Materials needed'), 'A job already past arrived is not walked backward');
     assert(!existsRegex('Pro has arrived'), 'Arrived mapping does not replace materials_requested');
+
+    remoteStatus = 'diagnosing';
+    await mountWithJob({
+      ...baseJob,
+      id: 9010,
+      status: 'materials_requested',
+      materialsRequest: { items: [{ description: 'Pipe', qty: 1, amount: 12 }], estimatedTotal: 12 },
+    });
+    await openBookingsAndPoll();
+    assert(existsRegex('Materials needed'), 'A materials job is not walked backward to diagnosing');
+    assert(!existsRegex('Assessing the job'), 'Diagnosing mapping does not replace materials_requested');
+
+    remoteStatus = 'in_progress';
+    await mountWithJob({
+      ...baseJob,
+      id: 9011,
+      status: 'materials_approved',
+      materialsRequest: { items: [{ description: 'Pipe', qty: 1, amount: 12 }], estimatedTotal: 12 },
+    });
+    await openBookingsAndPoll();
+    assert(existsRegex('Materials approved'), 'A materials-approved job is not walked backward to in_progress');
+    assert(!existsRegex('Job in progress'), 'in_progress mapping does not replace materials_approved');
+
+    remoteStatus = 'diagnosing';
+    await mountWithJob({ ...baseJob, id: 9012, status: 'in_progress' });
+    await openBookingsAndPoll();
+    assert(existsRegex('Job in progress'), 'in_progress is not walked backward to diagnosing');
+    assert(!existsRegex('Assessing the job'), 'Diagnosing mapping does not replace in_progress');
+
+    remoteStatus = 'materials_requested';
+    await mountWithJob({ ...baseJob, id: 9013, status: 'arrived' });
+    await openBookingsAndPoll();
+    assert(existsRegex('Materials needed'), 'Materials mapping still applies after the diagnosing poll');
+    assert(!existsRegex('Pro has arrived'), 'Materials mapping still replaces arrived');
   } catch (e) {
     fail++;
     console.error('FAIL (arrived visibility):', (e && e.stack) || e);
