@@ -811,10 +811,19 @@ export default function App(){
         }
         // Remote arrive mapping: backend status is source of truth.
         // Step posted/en_route forward to arrived so Tracking, Bookings, and
-        // Posted update without a reload. Do not apply diagnosing, materials,
-        // or complete here, and do not walk a later local status backward.
+        // Posted update without a reload. Do not walk a later local status backward.
         if(remoteStatus==="arrived" && (j.status==="posted"||j.status==="en_route")){
           return {job:{...j,status:"arrived",justAccepted:false},accepted:null,arrived:j.id};
+        }
+        // Remote diagnosing / in_progress: same forward-only poll as arrived.
+        // Order: posted → en_route → arrived → diagnosing OR in_progress.
+        // Do not walk backward from in_progress, materials, or later statuses.
+        // Materials mapping below is unchanged. Complete is not mapped in this poll.
+        if(remoteStatus==="diagnosing" && (j.status==="posted"||j.status==="en_route"||j.status==="arrived")){
+          return {job:{...j,status:"diagnosing",justAccepted:false},accepted:null,arrived:null,track:j.id};
+        }
+        if(remoteStatus==="in_progress" && (j.status==="posted"||j.status==="en_route"||j.status==="arrived"||j.status==="diagnosing")){
+          return {job:{...j,status:"in_progress",justAccepted:false},accepted:null,arrived:null,track:j.id};
         }
         // Map materials metadata if present
         let mappedRequest=null;
@@ -840,13 +849,16 @@ export default function App(){
       };
       let acceptedJobId=null;
       let arrivedJobId=null;
+      let trackJobId=null;
       const applyRemote=(list)=>{
         acceptedJobId=null;
         arrivedJobId=null;
+        trackJobId=null;
         return list.map(j=>{
           const mapped=mapRemoteJob(j);
           if(mapped.accepted) acceptedJobId=mapped.accepted;
           if(mapped.arrived) arrivedJobId=mapped.arrived;
+          if(mapped.track) trackJobId=mapped.track;
           return mapped.job;
         });
       };
@@ -855,6 +867,7 @@ export default function App(){
       applyRemote(currentJobs);
       const acceptedNow=acceptedJobId;
       const arrivedNow=arrivedJobId;
+      const trackNow=trackJobId;
       setJobs(js=>applyRemote(js));
       // Navigate to tracking and clear the transient toast flag if we just observed an accept
       if(acceptedNow){
@@ -867,6 +880,12 @@ export default function App(){
       // Tracking update in place from the status mapped above.
       if(arrivedNow && scr==="posted"){
         setVjid(arrivedNow);
+        goTo("tracking");
+      }
+      // diagnosing / in_progress use the same leave-for-Tracking path. Tracking
+      // already renders those labels; Bookings updates in place.
+      if(trackNow && scr==="posted"){
+        setVjid(trackNow);
         goTo("tracking");
       }
     };
