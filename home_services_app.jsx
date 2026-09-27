@@ -782,7 +782,7 @@ export default function App(){
   const doneCount  = allJobs.filter(j=>TERMINAL_STATUSES.has(j.status)).length;
   const hasActive  = activeCount>0;
 
-  // Lightweight polling while Tracking or Bookings are open and there are backend-linked active jobs
+  // Lightweight polling while Tracking, Bookings, or Posted are open and there are backend-linked active jobs
   const isTerminalStatus=(s)=>TERMINAL_STATUSES.has(s)||s==="cancelled";
   useEffect(()=>{
     const onScreen = (scr==="tracking") || (scr==="home" && tab==="bookings") || (scr==="posted");
@@ -797,17 +797,24 @@ export default function App(){
       if(cancelled) return;
       if(rows.length===0) return;
       const byId=new Map(rows.map(r=>[r.id,r]));
-      let acceptedJobId=null;
-      setJobs(js=>js.map(j=>{
-        if(!j.backendJobId) return j;
+      // Map outside setJobs. A deferred updater would run after this tick
+      // continues, so accept/arrive navigation would miss the id.
+      const mapRemoteJob=(j)=>{
+        if(!j.backendJobId) return {job:j,accepted:null,arrived:null};
         const row=byId.get(j.backendJobId);
-        if(!row) return j;
+        if(!row) return {job:j,accepted:null,arrived:null};
         const remoteStatus=row.status;
         // Remote accept mapping: when backend transitions posted -> en_route,
         // reflect it locally and trigger navigation to tracking outside this map.
         if(remoteStatus==="en_route" && j.status!=="en_route"){
-          acceptedJobId=j.id;
-          return {...j,status:"en_route",acceptedAt:j.acceptedAt||Date.now(),justAccepted:true};
+          return {job:{...j,status:"en_route",acceptedAt:j.acceptedAt||Date.now(),justAccepted:true},accepted:j.id,arrived:null};
+        }
+        // Remote arrive mapping: backend status is source of truth.
+        // Step posted/en_route forward to arrived so Tracking, Bookings, and
+        // Posted update without a reload. Do not apply diagnosing, materials,
+        // or complete here, and do not walk a later local status backward.
+        if(remoteStatus==="arrived" && (j.status==="posted"||j.status==="en_route")){
+          return {job:{...j,status:"arrived",justAccepted:false},accepted:null,arrived:j.id};
         }
         // Map materials metadata if present
         let mappedRequest=null;
@@ -824,18 +831,43 @@ export default function App(){
         }
         // Remote wins over local for these transitions
         if(remoteStatus==="materials_requested"){
-          return {...j,status:"materials_requested",materialsRequest:mappedRequest||j.materialsRequest};
+          return {job:{...j,status:"materials_requested",materialsRequest:mappedRequest||j.materialsRequest},accepted:null,arrived:null};
         }
         if(remoteStatus==="materials_approved"||remoteStatus==="inspection_completed"||remoteStatus==="materials_declined"){
-          return {...j,status:remoteStatus,materialsRequest:mappedRequest||j.materialsRequest};
+          return {job:{...j,status:remoteStatus,materialsRequest:mappedRequest||j.materialsRequest},accepted:null,arrived:null};
         }
-        return j;
-      }));
+        return {job:j,accepted:null,arrived:null};
+      };
+      let acceptedJobId=null;
+      let arrivedJobId=null;
+      const applyRemote=(list)=>{
+        acceptedJobId=null;
+        arrivedJobId=null;
+        return list.map(j=>{
+          const mapped=mapRemoteJob(j);
+          if(mapped.accepted) acceptedJobId=mapped.accepted;
+          if(mapped.arrived) arrivedJobId=mapped.arrived;
+          return mapped.job;
+        });
+      };
+      // Read the ids from the committed list now. setJobs still applies the
+      // same mapping to whatever state is current when it flushes.
+      applyRemote(currentJobs);
+      const acceptedNow=acceptedJobId;
+      const arrivedNow=arrivedJobId;
+      setJobs(js=>applyRemote(js));
       // Navigate to tracking and clear the transient toast flag if we just observed an accept
-      if(acceptedJobId){
-        if(scr==="posted"){ setVjid(acceptedJobId); goTo("tracking"); }
+      if(acceptedNow){
+        if(scr==="posted"){ setVjid(acceptedNow); goTo("tracking"); }
         // Clear justAccepted after a short celebratory toast window
-        setTimeout(()=>updateJob(acceptedJobId,{justAccepted:false}),3500);
+        setTimeout(()=>updateJob(acceptedNow,{justAccepted:false}),3500);
+      }
+      // Posted is the waiting screen. Once the backend says the pro has arrived,
+      // leave it for Tracking, which already renders arrived. Bookings and
+      // Tracking update in place from the status mapped above.
+      if(arrivedNow && scr==="posted"){
+        setVjid(arrivedNow);
+        goTo("tracking");
       }
     };
     // Start immediately, then periodic
@@ -3656,18 +3688,20 @@ export default function App(){
   // ── POSTED / PENDING ────────────────────────────────────────────────────────
   const postedScreen=()=>{
     if(!vj) return unavailableScreen("Booking",goBookings);
+    const postedWaiting = vj.status==="posted";
+    const postedArrived = vj.status==="arrived";
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div style={{background:N,padding:"14px 20px 20px",flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <button onClick={goBookings} style={{background:"rgba(255,255,255,.12)",border:"none",color:W,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6}}>← Bookings</button>
-          <span style={{color:"rgba(255,255,255,.6)",fontSize:13,fontWeight:600}}>Pending</span>
+          <span style={{color:"rgba(255,255,255,.6)",fontSize:13,fontWeight:600}}>{postedArrived?"Arrived":"Pending"}</span>
         </div>
         <div className="sc" style={{flex:1,overflowY:"auto",padding:"0 20px 24px"}}>
           <div style={{textAlign:"center",padding:"28px 0 22px"}}>
             <div style={{width:72,height:72,borderRadius:36,background:vj.emergency?"#FFF1EE":"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 16px",animation:"pulse 1.8s ease-in-out infinite"}}>{vj.emergency?"🚨":"📋"}</div>
             {vj.emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:5,background:"#FFF1EE",color:"#C2410C",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,marginBottom:10}}>Emergency priority</span>}
-            <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{vj.emergency?"Prioritizing nearby available pros…":"Looking for a pro…"}</div>
-            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Verified pros near you can see your job and are deciding whether to accept."}</div>
+            <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{postedArrived?SI.arrived.label:(vj.emergency?"Prioritizing nearby available pros…":"Looking for a pro…")}</div>
+            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Verified pros near you can see your job and are deciding whether to accept.")}</div>
           </div>
           <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{display:"flex",gap:14,alignItems:"center",paddingBottom:14,marginBottom:14,borderBottom:`1px solid ${BD}`}}>
@@ -3679,7 +3713,7 @@ export default function App(){
             ))}
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5,fontStyle:"italic"}}>"{vj.desc}"</div></div>}
           </div>
-          <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+          {postedWaiting&&(<div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:14}}>Pros near you viewing this job</div>
             {PROS.map((p,i)=>(
               <div key={p.i} onClick={()=>openProProfile(p,"posted")} style={{display:"flex",gap:12,alignItems:"center",marginBottom:i<PROS.length-1?12:0,cursor:"pointer"}}>
@@ -3691,9 +3725,9 @@ export default function App(){
                 <div style={{display:"flex",gap:3,alignItems:"center"}}>{[0,1,2].map(d=><div key={d} style={{width:5,height:5,borderRadius:2.5,background:AM,animation:`bounce 0.5s ${d*0.18}s infinite alternate`}}/>)}</div>
               </div>
             ))}
-          </div>
-          {demoProControlsPanel([["Accept job (start travel)",proAccepts]])}
-          {!showCancelConfirm?(
+          </div>)}
+          {postedWaiting&&demoProControlsPanel([["Accept job (start travel)",proAccepts]])}
+          {postedWaiting&&(!showCancelConfirm?(
             <div style={{textAlign:"center"}}>
               <button onClick={()=>setShowCancelConfirm(true)} style={{background:"none",border:`1.5px solid #FCA5A5`,color:"#DC2626",fontSize:13,fontWeight:700,cursor:"pointer",padding:"10px 20px",borderRadius:12}}>Cancel Job</button>
             </div>
@@ -3706,7 +3740,7 @@ export default function App(){
                 <button onClick={cancelJobDirect} style={{flex:1,padding:"9px 0",borderRadius:10,border:"none",background:"#DC2626",color:W,fontWeight:700,fontSize:12,cursor:"pointer"}}>Yes, cancel</button>
               </div>
             </div>
-          )}
+          ))}
         </div>
       </div>
     );

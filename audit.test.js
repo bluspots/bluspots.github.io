@@ -1344,6 +1344,13 @@ function runHomeIntentArchitectureChecks(){
 
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
+
+  runArrivedVisibilityChecks().then(() => {
+    if (fail > 0) process.exit(1);
+  }).catch((e) => {
+    console.error('FAIL (arrived visibility crashed):', e);
+    process.exit(1);
+  });
 }
 
 // PHASE 14 helper: locked price checks for property-scoped cleaning services.
@@ -1417,4 +1424,116 @@ function runLockedPriceChecks(){
   // Note: Historical totals are stored on the job itself (lockedPrice), not recomputed.
   // Property changes after completion therefore do not alter past totals by design.
 
+}
+
+// Backend `arrived` is source of truth for the customer poll (#26 pattern).
+// These mounts talk to a fake jobs row — no diagnosing/materials/complete mapping.
+async function runArrivedVisibilityChecks(){
+  const backendId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const origFetch = global.fetch;
+  let remoteStatus = 'en_route';
+  let fetches = 0;
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/rest/v1/jobs')) {
+      fetches += 1;
+      return { ok: true, json: async () => [{ id: backendId, status: remoteStatus }], text: async () => '' };
+    }
+    return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+  };
+
+  const baseJob = {
+    id: 9001,
+    status: 'en_route',
+    taskId: 1,
+    tpId: 2,
+    backendJobId: backendId,
+    acceptedAt: Date.now(),
+    pro: { i: 'MT', n: 'Marcus T.', r: 4.97, j: 543, s: 'TV Mount Pro', col: '#1E40AF', trustScore: 98 },
+    msgs: [],
+    photos: [],
+    desc: '',
+  };
+
+  const mountWithJob = async (job) => {
+    cleanup();
+    fetches = 0;
+    storedData['haven_supabase_url'] = 'https://example.supabase.co';
+    storedData['haven_supabase_anon_key'] = 'test-anon-key';
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
+    storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    await act(async () => { render(React.createElement(App), container); });
+  };
+
+  const openBookingsAndPoll = async () => {
+    const before = fetches;
+    clickTab('Bookings');
+    await waitForCondition(() => fetches > before, { timeout: 3000, message: 'Customer status poll did not run' });
+    await act(async () => { await delay(40); });
+  };
+
+  try {
+    remoteStatus = 'arrived';
+    await mountWithJob({ ...baseJob, status: 'en_route' });
+    await openBookingsAndPoll();
+    assert(existsRegex('Pro has arrived'), 'Bookings shows backend arrived without a reload');
+
+    const cards = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(cards[cards.length - 1]); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Pro has arrived'), 'Tracking shows backend arrived without a reload');
+    assert(existsRegex('is at your door'), 'Tracking shows the arrived subtitle');
+    assert(!existsRegex("They're on their way"), 'Arrived does not reuse the accept on-the-way toast');
+
+    remoteStatus = 'posted';
+    await mountWithJob({ ...baseJob, id: 9002, status: 'posted', pro: null, acceptedAt: null });
+    await openBookingsAndPoll();
+    assert(existsRegex('Waiting for pro'), 'A posted job stays waiting while the backend status is still posted');
+    const postedCards = screen.queryAllByText(/Assemble furniture/);
+    const beforePostedPoll = fetches;
+    act(() => { fireEvent.click(postedCards[postedCards.length - 1]); });
+    await waitForCondition(() => fetches > beforePostedPoll, { timeout: 3000, message: 'Posted screen poll did not run' });
+    await act(async () => { await delay(40); });
+    assert(existsRegex('Looking for a pro'), 'Posted screen is open while the backend status is still posted');
+    remoteStatus = 'arrived';
+    await waitForCondition(
+      () => existsRegex('Pro has arrived') && !existsRegex('Looking for a pro'),
+      { timeout: 7000, message: 'Posted did not show arrived without a reload' }
+    );
+    assert(existsRegex('is at your door'), 'Posted leaves for Tracking once the backend says arrived');
+
+    remoteStatus = 'diagnosing';
+    await mountWithJob({ ...baseJob, id: 9003, status: 'en_route' });
+    await openBookingsAndPoll();
+    assert(existsRegex('Pro is on the way'), 'Backend diagnosing is not copied onto the customer job in this slice');
+    assert(!existsRegex('Assessing the job'), 'Diagnosing copy is not shown from the arrived poll');
+
+    remoteStatus = 'complete';
+    await mountWithJob({ ...baseJob, id: 9004, status: 'en_route' });
+    await openBookingsAndPoll();
+    assert(existsRegex('Pro is on the way'), 'Backend complete is not copied onto the customer job in this slice');
+    assert(!existsRegex('Job Complete'), 'Complete copy is not shown from the arrived poll');
+
+    remoteStatus = 'arrived';
+    await mountWithJob({
+      ...baseJob,
+      id: 9005,
+      status: 'materials_requested',
+      materialsRequest: { items: [{ description: 'Pipe', qty: 1, amount: 12 }], estimatedTotal: 12 },
+    });
+    await openBookingsAndPoll();
+    assert(existsRegex('Materials needed'), 'A job already past arrived is not walked backward');
+    assert(!existsRegex('Pro has arrived'), 'Arrived mapping does not replace materials_requested');
+  } catch (e) {
+    fail++;
+    console.error('FAIL (arrived visibility):', (e && e.stack) || e);
+  } finally {
+    global.fetch = origFetch;
+    delete storedData['haven_supabase_url'];
+    delete storedData['haven_supabase_anon_key'];
+    cleanup();
+  }
+  console.log(`\n--- Arrived visibility audit: ${pass} passing, ${fail} failing ---`);
 }
