@@ -5,6 +5,9 @@
 -- - Narrow: each policy permits only its own target status and requires pro_id is not null.
 -- - Does not weaken claim / cancel / materials / decline / arrived / complete policies.
 -- - SELECT visibility for 'diagnosing' and 'in_progress' already exists in 0007; unchanged here.
+-- - Predecessor guard is 0015_tighten_diagnosing_in_progress_from_status.sql (applied
+--   after this file). Re-applying this file restores the permissive USING only.
+--   It does not drop the 0015 restrictive policy.
 
 -- Ensure RLS is enabled (safe if already enabled)
 alter table public.jobs enable row level security;
