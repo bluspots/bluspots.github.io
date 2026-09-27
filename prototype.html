@@ -1975,15 +1975,24 @@ function App(){
         if(remoteStatus==="arrived" && (j.status==="posted"||j.status==="en_route")){
           return {job:{...j,status:"arrived",justAccepted:false},accepted:null,arrived:j.id};
         }
-        // Remote diagnosing / in_progress: same forward-only poll as arrived.
-        // Order: posted → en_route → arrived → diagnosing OR in_progress.
-        // Do not walk backward from in_progress, materials, or later statuses.
-        // Materials mapping below is unchanged. Complete is not mapped in this poll.
+        // Remote diagnosing / in_progress / complete: forward-only poll.
+        // Order: posted → en_route → arrived → diagnosing OR in_progress,
+        // and materials_requested|materials_approved → in_progress (pro receipt),
+        // then any active status → complete (pro mark-complete).
+        // Do not walk backward (arrived/diagnosing must not replace materials_*
+        // or in_progress). Materials mapping below is unchanged.
         if(remoteStatus==="diagnosing" && (j.status==="posted"||j.status==="en_route"||j.status==="arrived")){
           return {job:{...j,status:"diagnosing",justAccepted:false},accepted:null,arrived:null,track:j.id};
         }
-        if(remoteStatus==="in_progress" && (j.status==="posted"||j.status==="en_route"||j.status==="arrived"||j.status==="diagnosing")){
+        if(remoteStatus==="in_progress" && (j.status==="posted"||j.status==="en_route"||j.status==="arrived"||j.status==="diagnosing"||j.status==="materials_requested"||j.status==="materials_approved")){
           return {job:{...j,status:"in_progress",justAccepted:false},accepted:null,arrived:null,track:j.id};
+        }
+        if(remoteStatus==="complete" && (j.status==="posted"||j.status==="en_route"||j.status==="arrived"||j.status==="diagnosing"||j.status==="materials_requested"||j.status==="materials_approved"||j.status==="in_progress")){
+          const cat=j.taskId?(TASKS.find(t=>t.id===j.taskId)?.c):j.custom?.cat;
+          const task=j.taskId?TASKS.find(t=>t.id===j.taskId):null;
+          const price=j.taskId?(j.lockedPrice??(task?task.p:0)):(j.custom?.price||0);
+          const {workPerformed,materials,proNotes}=getCompletionDetails(cat,price);
+          return {job:{...j,status:"complete",justAccepted:false,completedAt:Date.now(),workPerformed,materials,proNotes},accepted:null,arrived:null,track:j.id,completed:j.id,proName:j.pro?.n||"Your pro"};
         }
         // Map materials metadata if present
         let mappedRequest=null;
@@ -2010,15 +2019,18 @@ function App(){
       let acceptedJobId=null;
       let arrivedJobId=null;
       let trackJobId=null;
+      let completedTransitions=[];
       const applyRemote=(list)=>{
         acceptedJobId=null;
         arrivedJobId=null;
         trackJobId=null;
+        completedTransitions=[];
         return list.map(j=>{
           const mapped=mapRemoteJob(j);
           if(mapped.accepted) acceptedJobId=mapped.accepted;
           if(mapped.arrived) arrivedJobId=mapped.arrived;
           if(mapped.track) trackJobId=mapped.track;
+          if(mapped.completed) completedTransitions.push({id:mapped.completed,proName:mapped.proName||"Your pro"});
           return mapped.job;
         });
       };
@@ -2028,7 +2040,11 @@ function App(){
       const acceptedNow=acceptedJobId;
       const arrivedNow=arrivedJobId;
       const trackNow=trackJobId;
+      const completedNow=completedTransitions.slice();
       setJobs(js=>applyRemote(js));
+      // Same completion notice the demo Advance path emits, so Rate / receipt
+      // are reachable from the notification as well as Tracking.
+      completedNow.forEach(({id,proName})=>handleJobTransition(id,"complete",proName));
       // Navigate to tracking and clear the transient toast flag if we just observed an accept
       if(acceptedNow){
         if(scr==="posted"){ setVjid(acceptedNow); goTo("tracking"); }
@@ -2042,8 +2058,8 @@ function App(){
         setVjid(arrivedNow);
         goTo("tracking");
       }
-      // diagnosing / in_progress use the same leave-for-Tracking path. Tracking
-      // already renders those labels; Bookings updates in place.
+      // diagnosing / in_progress / complete use the same leave-for-Tracking path.
+      // Tracking already renders those labels; Bookings updates in place.
       if(trackNow && scr==="posted"){
         setVjid(trackNow);
         goTo("tracking");
@@ -2621,17 +2637,19 @@ function App(){
   const [showApproveSyncFailed,setShowApproveSyncFailed]=useState(false);
   const approveMaterials=async()=>{
     if(!vj) return;
-    let patched=false;
-    if(vj.backendJobId){
-      patched = await updateCanonicalJob(vj.backendJobId,{status:"materials_approved"});
-    }else{
-      // If Supabase is configured but we don't have a backend id, surface a soft error
-      const cfg=getSupabaseConfig();
-      if(cfg){ setShowApproveSyncFailed(true); setTimeout(()=>setShowApproveSyncFailed(false),2500); }
-    }
-    if(!patched){
-      // Soft-fail: proceed locally so the customer isn't blocked
-      console.warn("Haven: materials approval dual-write failed or unavailable; proceeding locally.");
+    const cfg=getSupabaseConfig();
+    // Backend configured: fail closed. A failed or missing PATCH must not
+    // local-advance, or Pro never sees the approval.
+    if(cfg){
+      const patched = vj.backendJobId
+        ? await updateCanonicalJob(vj.backendJobId,{status:"materials_approved"})
+        : false;
+      if(!patched){
+        console.warn("Haven: materials approval sync failed; not advancing locally.");
+        setShowApproveSyncFailed(true);
+        setTimeout(()=>setShowApproveSyncFailed(false),2500);
+        return;
+      }
     }
     updateJob(vjid,{status:"materials_approved"});
     handleJobTransition(vjid,"materials_approved",vj.pro?.n||"Your pro");
@@ -5498,7 +5516,7 @@ function App(){
           )}
           {showApproveSyncFailed&&(
             <div style={{position:"absolute",left:16,right:16,bottom:96,background:"#DC2626",borderRadius:14,padding:"12px 16px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)",zIndex:21}}>
-              <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>Couldn't sync approval — saved locally</span>
+              <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>Couldn't sync approval — try again</span>
             </div>
           )}
         </div>
