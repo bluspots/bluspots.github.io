@@ -18,6 +18,8 @@
 --   the predecessor in the existing-row check.
 -- - Diagnosis path: arrived → diagnosing, then diagnosing → in_progress.
 -- - Fixed-service path: arrived → in_progress.
+-- - Materials path: materials_approved → in_progress (canonical Start Job).
+-- - Diagnosing itself only from arrived. en_route and posted stay blocked.
 -- - A row already at diagnosing or in_progress may stay there (retry or a
 --   non-status column touch). That is not a new entry from en_route.
 -- - Does not change claim / cancel / materials / decline / arrived / complete
@@ -42,7 +44,7 @@ create policy jobs_update_assigned_to_diagnosing
     status = 'diagnosing'
   );
 
--- Update policy: arrived or diagnosing → in_progress
+-- Update policy: arrived, diagnosing, or materials_approved → in_progress
 -- USING is the existing row. WITH CHECK is the new row.
 drop policy if exists jobs_update_assigned_to_in_progress on public.jobs;
 create policy jobs_update_assigned_to_in_progress
@@ -51,14 +53,15 @@ create policy jobs_update_assigned_to_in_progress
   to anon, authenticated
   using (
     pro_id is not null
-    and status in ('arrived','diagnosing')
+    and status in ('arrived','diagnosing','materials_approved')
   )
   with check (
     status = 'in_progress'
   );
 
 -- Restrictive AND: new status diagnosing / in_progress must already be at a
--- legal predecessor (or already be that status). This is what makes
+-- legal predecessor (or already be that status). in_progress predecessors are
+-- arrived, diagnosing, and materials_approved. This is what makes
 -- en_route → diagnosing and en_route → in_progress raise 42501.
 drop policy if exists jobs_restrict_diagnosing_in_progress_predecessor on public.jobs;
 create policy jobs_restrict_diagnosing_in_progress_predecessor
@@ -84,7 +87,7 @@ create policy jobs_restrict_diagnosing_in_progress_predecessor
         from public.jobs as existing
         where existing.id = jobs.id
           and existing.pro_id is not null
-          and existing.status in ('arrived','diagnosing','in_progress')
+          and existing.status in ('arrived','diagnosing','materials_approved','in_progress')
       )
     )
   );
