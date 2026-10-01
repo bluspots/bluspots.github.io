@@ -1,6 +1,6 @@
 ## Haven CHUNK 2 — Customer → Canonical (Supabase) setup
 
-Purpose: allow the Customer app to dual-write a canonical `jobs` row to a shared Supabase/Postgres backend when a customer posts a job. This is a prototype: no real auth yet; RLS policies are intentionally narrow and will be tightened later.
+Purpose: allow the Customer app to dual-write a canonical `jobs` row to a shared Supabase/Postgres backend when a customer posts a job. This is a prototype: job RLS stays narrow on purpose. Slice 1 adds optional Customer Auth and `profiles` (`docs/SLICE1_AUTH_PROFILES.md`) but job dual-write still uses the demo customer id and the anon key.
 
 What this adds in this repo:
 - SQL migration enabling RLS and prototype policies: `supabase/migrations/0002_chunk2_rls.sql`
@@ -50,7 +50,7 @@ localStorage.setItem('haven_supabase_anon_key', 'eyJhbGciOi...<anon-key>...');
    - The Customer app stores the returned UUID on the local job as `backendJobId` (visible only in dev tools).
 
 Demo customer
-- Until auth exists, a fixed demo `customer_id` is used on insert:
+- Slice 1 adds optional Auth, but job inserts still use a fixed demo `customer_id`:
   - `11111111-1111-4111-8111-111111111111`
 
 Notes and guardrails

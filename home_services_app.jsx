@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
  
-// CHUNK 2 demo customer until real auth exists (documented in CHUNK2_SETUP.md)
+// CHUNK 2 demo customer. Slice 1 Auth does not replace this id.
+// Job writes keep using it until a later ownership slice.
 const DEMO_CUSTOMER_ID = "11111111-1111-4111-8111-111111111111";
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
 const TIME_PREFS=[
@@ -522,6 +523,78 @@ export default function App(){
       };
     },
   });
+  // Slice 1 session mirror. Job writes do not read this.
+  const [havenAuth,setHavenAuth]=useState(()=>readHavenAuthMirror());
+  const [authEmailInput,setAuthEmailInput]=useState("");
+  const [authPasswordInput,setAuthPasswordInput]=useState("");
+  const [authBusy,setAuthBusy]=useState(false);
+  const [authNotice,setAuthNotice]=useState("");
+  const [anonModeOn,setAnonModeOn]=useState(()=>havenPrototypeAnonModeEnabled());
+  useEffect(()=>{
+    let cancelled=false;
+    const client=getHavenAuthClient();
+    if(!client) return undefined;
+    const applyView=()=>{ if(!cancelled) setHavenAuth(readHavenAuthMirror()); };
+    (async()=>{
+      try{
+        const {data,error}=await client.auth.getSession();
+        if(cancelled) return;
+        if(error) console.warn("Haven auth getSession:", error.message||error);
+        if(data&&data.session) applyHavenAuthSession(data.session, data.session.user);
+        else clearHavenAuthMirror();
+        applyView();
+        if(data&&data.session&&data.session.user){
+          const row=await havenFetchOwnProfile(client, data.session.user.id);
+          if(cancelled||!row) return;
+          havenApplyProfileRow(row);
+          applyView();
+        }
+      }catch(err){
+        console.warn("Haven auth session restore failed:", err);
+      }
+    })();
+    let subscription=null;
+    try{
+      const {data}=client.auth.onAuthStateChange((_event, session)=>{
+        if(session) applyHavenAuthSession(session, session.user);
+        else clearHavenAuthMirror();
+        applyView();
+      });
+      subscription=data&&data.subscription?data.subscription:null;
+    }catch(err){
+      console.warn("Haven auth listener failed:", err);
+    }
+    return ()=>{
+      cancelled=true;
+      try{ if(subscription) subscription.unsubscribe(); }catch{}
+    };
+  },[]);
+  const submitHavenAuth=async(mode)=>{
+    if(authBusy) return;
+    setAuthBusy(true);
+    setAuthNotice("");
+    const client=getHavenAuthClient();
+    const result=mode==="signup"
+      ? await havenSignUpCustomer(authEmailInput, authPasswordInput)
+      : await havenSignInCustomer(authEmailInput, authPasswordInput);
+    if(result.ok && result.signedIn && result.userId && client){
+      const row=await havenFetchOwnProfile(client, result.userId);
+      if(row) havenApplyProfileRow(row);
+    }
+    setHavenAuth(readHavenAuthMirror());
+    setAuthBusy(false);
+    if(!result.ok) setAuthNotice(result.error||"Something went wrong.");
+    else if(result.needsEmailConfirm) setAuthNotice("Account created as customer. Confirm the email, then sign in.");
+    else { setAuthPasswordInput(""); setAuthNotice("Signed in."); }
+  };
+  const submitHavenSignOut=async()=>{
+    if(authBusy || !havenAuth) return;
+    setAuthBusy(true);
+    await havenSignOut();
+    setHavenAuth(null);
+    setAuthNotice("Signed out.");
+    setAuthBusy(false);
+  };
   const [draftName,setDraftName] = useState("");
   const [draftBio,setDraftBio]   = useState("");
   const [draftPhoto,setDraftPhoto]= useState(null);
@@ -1396,7 +1469,7 @@ export default function App(){
         : (nj.addressText?.split(",")[1]?.trim() || "Unknown");
       const payload={
         schema_version:1,
-        customer_id:DEMO_CUSTOMER_ID,
+        customer_id:DEMO_CUSTOMER_ID, // Slice 1: still the demo id, even when signed in
         pro_id:null,
         category:cat||"General",
         title:title||"General service",
@@ -1969,6 +2042,9 @@ export default function App(){
         <div style={{flex:1}}>
           <div style={{fontWeight:700,fontSize:16,color:W}}>{profile.name}</div>
           <div style={{color:"rgba(255,255,255,.55)",fontSize:13,marginTop:2}}>{profile.bio||`Member since ${new Date(profile.accountCreatedAt).getFullYear()}`}</div>
+          {havenAuth&&havenAuth.email?(
+            <div style={{color:"rgba(255,255,255,.72)",fontSize:12,marginTop:4}}>{havenAuth.email} · {havenAuth.role||"customer"}</div>
+          ):null}
         </div>
         <span style={{color:"rgba(255,255,255,.6)",fontSize:12,fontWeight:600}}>Edit ›</span>
       </button>
@@ -2011,8 +2087,8 @@ export default function App(){
             </div>
           </div>
         ))}
-        <div onClick={()=>{}} style={{padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"default"}}>
-          <span style={{fontWeight:500,fontSize:15,color:TM}}>Sign Out</span>
+        <div onClick={havenAuth?()=>{void submitHavenSignOut();}:undefined} role={havenAuth?"button":undefined} aria-disabled={havenAuth?undefined:"true"} style={{padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:havenAuth?"pointer":"default"}}>
+          <span style={{fontWeight:500,fontSize:15,color:havenAuth?"#B42318":TM}}>Sign Out</span>
         </div>
       </div>
       <div style={{textAlign:"center",marginTop:28}}>
@@ -3340,6 +3416,32 @@ export default function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         {subHeader("Settings")}
         <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+          <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Account</div>
+          <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:24}}>
+            {havenAuth&&havenAuth.email?(
+              <div>
+                <div style={{fontWeight:700,fontSize:15,color:TX}}>Signed in</div>
+                <div style={{fontSize:13,color:TS,marginTop:4}}>{havenAuth.email}</div>
+                <div style={{fontSize:12,color:TM,marginTop:2}}>Role · {havenAuth.role||"customer"}</div>
+                <div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:10}}>This session is stored for a later slice. Job writes stay on the demo customer and the anon key.</div>
+                <button type="button" onClick={()=>{void submitHavenSignOut();}} disabled={authBusy} style={{marginTop:14,width:"100%",padding:12,borderRadius:12,border:"none",background:authBusy?"#DDD9D2":"#B42318",color:W,fontWeight:700,fontSize:14,cursor:authBusy?"default":"pointer"}}>Sign out</button>
+              </div>
+            ):(
+              <div>
+                <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:12}}>Email and password. New accounts are created as customer.</div>
+                <div style={{background:BG,borderRadius:12,padding:"12px 14px",marginBottom:10}}>
+                  <input value={authEmailInput} onChange={e=>setAuthEmailInput(e.target.value)} type="email" autoComplete="email" placeholder="you@email.com" aria-label="Email" style={{width:"100%",border:"none",fontSize:14,fontWeight:500,color:TX,background:"transparent",outline:"none",padding:0}}/>
+                </div>
+                <div style={{background:BG,borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+                  <input value={authPasswordInput} onChange={e=>setAuthPasswordInput(e.target.value)} type="password" autoComplete="current-password" placeholder="Password" aria-label="Password" style={{width:"100%",border:"none",fontSize:14,fontWeight:500,color:TX,background:"transparent",outline:"none",padding:0}}/>
+                </div>
+                <button type="button" onClick={()=>{void submitHavenAuth("signin");}} disabled={authBusy} style={{width:"100%",padding:12,borderRadius:12,border:"none",background:authBusy?"#DDD9D2":N,color:W,fontWeight:700,fontSize:14,cursor:authBusy?"default":"pointer",marginBottom:8}}>Sign in</button>
+                <button type="button" onClick={()=>{void submitHavenAuth("signup");}} disabled={authBusy} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:authBusy?"default":"pointer"}}>Create customer account</button>
+              </div>
+            )}
+            {authNotice?(<div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:12}}>{authNotice}</div>):null}
+          </div>
+
           <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Notifications</div>
           <div style={{background:W,borderRadius:18,padding:"4px 16px",boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:6}}>
             {notifRow("Push notifications","Enable notifications on this device","push")}
@@ -3379,6 +3481,19 @@ export default function App(){
           </button>
 
           <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Testing</div>
+          <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
+            <div style={{flex:1}}>
+              <div style={{fontWeight:700,fontSize:15,color:TX}}>Prototype anon mode</div>
+              <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>Default is on. Job writes stay on the demo customer in this slice.</div>
+            </div>
+            <button type="button" onClick={()=>{
+              const next=!havenPrototypeAnonModeEnabled();
+              try{ localStorage.setItem(HAVEN_PROTOTYPE_ANON_MODE_KEY, next?"1":"0"); }catch{}
+              setAnonModeOn(next);
+            }} role="switch" aria-checked={anonModeOn} aria-label="Prototype anon mode" style={{width:44,height:26,borderRadius:13,background:anonModeOn?AM:BD,border:"none",padding:0,position:"relative",cursor:"pointer",flexShrink:0}}>
+              <div style={{width:20,height:20,borderRadius:10,background:W,position:"absolute",top:3,left:anonModeOn?21:3,transition:"left .15s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
+            </button>
+          </div>
           <button onClick={()=>setShowResetConfirm(true)} style={{width:"100%",padding:16,borderRadius:18,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:700,fontSize:14,cursor:"pointer",textAlign:"left"}}>Reset Prototype Data</button>
           <div style={{fontSize:11,color:TM,lineHeight:1.5,padding:"8px 4px 0"}}>Prototype/testing utility — not a real customer-facing feature. Clears all locally saved Haven data on this device.</div>
 

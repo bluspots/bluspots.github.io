@@ -376,6 +376,7 @@ const SOURCE_FILES = [
   'persistence.js',
   'intent_matching.js',
   'backend_adapter.js',
+  'auth_session.js',
   'job_factories.js',
   'home_services_app.jsx',
 ];
@@ -389,6 +390,11 @@ const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports2 = typeof ErrorBoundary !== 'undefined' ? ErrorBoundary : undefined;
   module.exports3 = typeof matchRepairIntent !== 'undefined' ? matchRepairIntent : undefined;
   module.exports4 = typeof interpretHomeIntent !== 'undefined' ? interpretHomeIntent : undefined;
+  module.exports5 = typeof resolveProfileRole !== 'undefined' ? resolveProfileRole : undefined;
+  module.exports6 = typeof havenPrototypeAnonModeEnabled !== 'undefined' ? havenPrototypeAnonModeEnabled : undefined;
+  module.exports7 = typeof havenCustomerSignUpMetadata !== 'undefined' ? havenCustomerSignUpMetadata : undefined;
+  module.exports8 = typeof havenJobRestBearer !== 'undefined' ? havenJobRestBearer : undefined;
+  module.exports9 = typeof DEMO_CUSTOMER_ID !== 'undefined' ? DEMO_CUSTOMER_ID : undefined;
 })`;
 const moduleObj = { exports: {} };
 eval(wrapped)(React, React.useState, React.useRef, React.useEffect, moduleObj);
@@ -397,8 +403,56 @@ const ErrorBoundary = moduleObj.exports2;
 const App = function WrappedApp(props){ return React.createElement(ErrorBoundary, null, React.createElement(RawApp, props)); };
 const matchRepairIntent = moduleObj.exports3;
 const interpretHomeIntent = moduleObj.exports4;
+const resolveProfileRole = moduleObj.exports5;
+const havenPrototypeAnonModeEnabled = moduleObj.exports6;
+const havenCustomerSignUpMetadata = moduleObj.exports7;
+const havenJobRestBearer = moduleObj.exports8;
+const DEMO_CUSTOMER_ID = moduleObj.exports9;
 
 assert(typeof App === 'function', 'App component loaded from compiled source');
+
+step('0. Slice 1 profile role, anon-mode default, and job bearer stay demo-safe', () => {
+  assert(typeof resolveProfileRole === 'function', 'resolveProfileRole loaded');
+  assert(resolveProfileRole({role:'customer'}) === 'customer', 'customer metadata stays customer');
+  assert(resolveProfileRole({role:' Customer '}) === 'customer', 'customer role is trimmed and lowercased');
+  assert(resolveProfileRole({role:'pro'}) === 'pro', 'pro metadata stays pro');
+  assert(resolveProfileRole({role:'PRO'}) === 'pro', 'PRO metadata normalizes to pro');
+  assert(resolveProfileRole({role:'admin'}) === 'customer', 'unknown role defaults to customer');
+  assert(resolveProfileRole({}) === 'customer', 'missing role defaults to customer');
+  assert(resolveProfileRole(null) === 'customer', 'null metadata defaults to customer');
+  assert(havenCustomerSignUpMetadata().role === 'customer', 'Customer sign-up metadata role is customer');
+  assert(Object.keys(havenCustomerSignUpMetadata()).join(',') === 'role', 'Customer sign-up metadata only sets role');
+  assert(DEMO_CUSTOMER_ID === '11111111-1111-4111-8111-111111111111', 'DEMO_CUSTOMER_ID is unchanged');
+
+  delete storedData['haven_prototype_anon_mode'];
+  assert(havenPrototypeAnonModeEnabled() === true, 'missing haven_prototype_anon_mode defaults ON');
+  storedData['haven_prototype_anon_mode'] = '';
+  assert(havenPrototypeAnonModeEnabled() === true, 'blank flag stays ON');
+  storedData['haven_prototype_anon_mode'] = '1';
+  assert(havenPrototypeAnonModeEnabled() === true, '1 keeps anon mode ON');
+  storedData['haven_prototype_anon_mode'] = 'true';
+  assert(havenPrototypeAnonModeEnabled() === true, 'true keeps anon mode ON');
+  storedData['haven_prototype_anon_mode'] = '0';
+  assert(havenPrototypeAnonModeEnabled() === false, '0 turns the flag off');
+  storedData['haven_prototype_anon_mode'] = 'false';
+  assert(havenPrototypeAnonModeEnabled() === false, 'false turns the flag off');
+  storedData['haven_prototype_anon_mode'] = 'off';
+  assert(havenPrototypeAnonModeEnabled() === false, 'off turns the flag off');
+  storedData['haven_prototype_anon_mode'] = 'later';
+  assert(havenPrototypeAnonModeEnabled() === true, 'unrecognized flag values stay ON');
+
+  storedData['haven_supabase_url'] = 'https://example.supabase.co';
+  storedData['haven_supabase_anon_key'] = 'test-anon-key';
+  storedData['haven_auth_access_token'] = 'signed-in-access-token';
+  storedData['haven_prototype_anon_mode'] = '0';
+  assert(havenJobRestBearer() === 'test-anon-key', 'job REST bearer stays the anon key when a session token exists and anon mode is off');
+  delete storedData['haven_supabase_url'];
+  delete storedData['haven_supabase_anon_key'];
+  delete storedData['haven_auth_access_token'];
+  delete storedData['haven_prototype_anon_mode'];
+  assert(havenJobRestBearer() === null, 'job REST bearer is absent without Supabase config');
+  assert(havenPrototypeAnonModeEnabled() === true, 'cleared flag defaults anon mode ON before the app mounts');
+});
 assert(typeof ErrorBoundary === 'function', 'ErrorBoundary class loaded from compiled source');
 
 console.log('--- Running audit ---');
@@ -429,6 +483,10 @@ step('2. Settings consolidation', () => {
   click('Settings');
   assert(existsRegex('Notifications') && existsRegex('Job updates'), 'Notification preferences present inside Settings');
   assert(existsRegex('Appearance') && existsRegex('System') && existsRegex('Dark'), 'Appearance options present inside Settings');
+  assert(existsRegex('Create customer account'), 'Settings includes Customer sign-up');
+  assert(existsRegex('Prototype anon mode'), 'Settings shows the demo anon flag');
+  assert(existsRegex('Job writes stay on the demo customer'), 'Slice 1 copy says job writes are unchanged');
+  assert(document.querySelector('[aria-label="Prototype anon mode"]')?.getAttribute('aria-checked') === 'true', 'Prototype anon mode defaults on');
   click('Dark');
   click('‹');
   const bg1 = document.querySelector('.sc')?.style.background;
