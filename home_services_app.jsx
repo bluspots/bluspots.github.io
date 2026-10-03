@@ -1410,7 +1410,7 @@ export default function App(){
     setTid(diagResult.task.id);setTpid(2);setDesc(diagInput);setEmergency(false);resetBookingSelections();goTo("task");
   };
 
-  const postJob=()=>{
+  const postJob=async()=>{
     if(!currentTask||!tpid)return;
     if(currentTask.propertyScoped&&effectiveTaskPrice==null)return; // missing property data — never post with a guessed price
     if(isPostingRef.current)return; // already posted this draft — a rapid second tap must not create a duplicate job
@@ -1439,27 +1439,23 @@ export default function App(){
       lockedPrice:tid?effectiveTaskPrice:null, // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
       requiresDiagnosis:requiresDiagnosisLocal,
     });
-    setJobs(p=>[...p,nj]);setVjid(nj.id);
-    setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
-    setShowCancelConfirm(false);setShowCancelRequest(false);
-    scrubDraftFromTabMemory();
-    // CHUNK 2: dual‑write to canonical jobs table (fail‑soft; no UX block)
-    (async()=>{
-      // Build canonical payload from local job shape
+    // Supabase configured: do not save the job or open Posted until the
+    // signed-in create lands. No session stops here. No config stays local.
+    const cfg=getSupabaseConfig();
+    let backendId=null;
+    if(cfg){
       const isCatalog = !!nj.taskId;
       const cat      = isCatalog ? (currentTask?.c||"") : (nj.custom?.cat||"");
       const title    = isCatalog ? (currentTask?.n||"") : (nj.custom?.title||"");
-        const taskId   = nj.taskId;
-        // CHUNK 3: compute diagnosis requirement once at creation and persist it
-        const DIAGNOSIS_CATEGORY_SET = new Set(["Plumbing","Electrical","Appliance","HVAC"]);
-        let requiresDiagnosis = DIAGNOSIS_CATEGORY_SET.has(cat);
-        if(!requiresDiagnosis && cat==="Repair"){
-          const tlc=(title||"").toLowerCase();
-          // Treat HVAC repair visit as diagnosis even though category label is "Repair" in this app
-          if(taskId===53 || tlc.includes("ac/heating") || tlc.includes("hvac")){
-            requiresDiagnosis = true;
-          }
+      const taskId   = nj.taskId;
+      const DIAGNOSIS_CATEGORY_SET = new Set(["Plumbing","Electrical","Appliance","HVAC"]);
+      let requiresDiagnosis = DIAGNOSIS_CATEGORY_SET.has(cat);
+      if(!requiresDiagnosis && cat==="Repair"){
+        const tlc=(title||"").toLowerCase();
+        if(taskId===53 || tlc.includes("ac/heating") || tlc.includes("hvac")){
+          requiresDiagnosis = true;
         }
+      }
       const customerPriceDollars = isCatalog
         ? (nj.lockedPrice??0)
         : (parseInt(nj.custom?.price)||0);
@@ -1469,36 +1465,48 @@ export default function App(){
         ? `${selectedAddress.city}${selectedAddress.state?`, ${selectedAddress.state}`:""}`
         : (nj.addressText?.split(",")[1]?.trim() || "Unknown");
       const customerId=havenJobCustomerId();
-      if(customerId){
-        const payload={
-          schema_version:1,
-          customer_id:customerId,
-          pro_id:null,
-          category:cat||"General",
-          title:title||"General service",
-          requires_diagnosis:!!requiresDiagnosis,
-          city_label:cityLabel||"Unknown",
-          address_snapshot:null,
-          lat:null,
-          lng:null,
-          fixed_customer_labor_price_cents,
-          fixed_pro_labor_payout_cents,
-          margin_rate_bps:2000,
-          emergency:!!nj.emergency,
-          emergency_fee_cents:Math.max(0,Math.floor((nj.emergencyFee||0)*100)),
-          inspection_fee_cents:requiresDiagnosis?4500:0,
-          status:"posted",
-          customer_preferences_snapshot:Array.isArray(nj.jobPreferences)?nj.jobPreferences:[],
-          payment_snapshot:{brand:nj.paymentBrand||"Card",last4:nj.paymentLast4||"----"},
-          materials_reimbursed_cents:0,
-          tip_amount_cents:0,
-        };
-        const backendId = await postCanonicalJob(payload);
-        if(backendId){
-          setJobs(js=>js.map(j=>j.id===nj.id?{...j,backendJobId:backendId}:j));
-        }
+      if(!customerId){
+        isPostingRef.current=false;
+        setWriteSyncNotice("Couldn't post the job — try again");
+        setTimeout(()=>setWriteSyncNotice(""),2500);
+        return;
       }
-    })();
+      const payload={
+        schema_version:1,
+        customer_id:customerId,
+        pro_id:null,
+        category:cat||"General",
+        title:title||"General service",
+        requires_diagnosis:!!requiresDiagnosis,
+        city_label:cityLabel||"Unknown",
+        address_snapshot:null,
+        lat:null,
+        lng:null,
+        fixed_customer_labor_price_cents,
+        fixed_pro_labor_payout_cents,
+        margin_rate_bps:2000,
+        emergency:!!nj.emergency,
+        emergency_fee_cents:Math.max(0,Math.floor((nj.emergencyFee||0)*100)),
+        inspection_fee_cents:requiresDiagnosis?4500:0,
+        status:"posted",
+        customer_preferences_snapshot:Array.isArray(nj.jobPreferences)?nj.jobPreferences:[],
+        payment_snapshot:{brand:nj.paymentBrand||"Card",last4:nj.paymentLast4||"----"},
+        materials_reimbursed_cents:0,
+        tip_amount_cents:0,
+      };
+      backendId = await postCanonicalJob(payload);
+      if(!backendId){
+        isPostingRef.current=false;
+        setWriteSyncNotice("Couldn't post the job — try again");
+        setTimeout(()=>setWriteSyncNotice(""),2500);
+        return;
+      }
+      nj.backendJobId=backendId;
+    }
+    setJobs(p=>[...p,nj]);setVjid(nj.id);
+    setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
+    setShowCancelConfirm(false);setShowCancelRequest(false);
+    scrubDraftFromTabMemory();
     goTo("posted");
   };
 
@@ -1535,23 +1543,32 @@ export default function App(){
       handleJobTransition(vjid,next,vj.pro?.n||"Your pro");
     }
   };
-  const cancelJobDirect=()=>{
-    // Local cancel first for responsiveness
+  const cancelJobDirect=async()=>{
+    const cfg=getSupabaseConfig();
+    // Configured backend: stay on this job unless the cancel write lands.
+    // No session does not send the demo customer and does not leave the screen.
+    if(cfg){
+      const when=new Date().toISOString();
+      const ok = vj?.backendJobId
+        ? await updateCanonicalJob(vj.backendJobId,{status:"cancelled",cancelled_at:when})
+        : false;
+      if(!ok){
+        console.warn("Haven: cancel sync failed; not advancing locally.");
+        setShowCancelConfirm(false);
+        setWriteSyncNotice("Couldn't cancel the job — try again");
+        setTimeout(()=>setWriteSyncNotice(""),2500);
+        return;
+      }
+    }
     updateJob(vjid,{status:"cancelled"});
     setShowCancelConfirm(false);
     goHome();
-    // Best-effort dual-write to canonical backend (do not block UX)
-    if(vj?.backendJobId){
-      const when=new Date().toISOString();
-      updateCanonicalJob(vj.backendJobId,{status:"cancelled",cancelled_at:when})
-        .then(ok=>{ if(!ok) console.warn("Haven: cancel dual-write failed; proceeding locally."); })
-        .catch(()=>{ /* swallow */ });
-    }
   };
   const requestCancellation=()=>{ updateJob(vjid,{cancelStatus:"requested",cancellationRequestedAt:Date.now()}); setShowCancelRequest(false); handleCancellationTransition(vjid,"requested"); };
 
   // Materials approval/decline — customer actions when vj.status === 'materials_requested'
   const [showApproveSyncFailed,setShowApproveSyncFailed]=useState(false);
+  const [writeSyncNotice,setWriteSyncNotice]=useState("");
   const approveMaterials=async()=>{
     if(!vj) return;
     const cfg=getSupabaseConfig();
@@ -1575,15 +1592,24 @@ export default function App(){
     if(!vj) return;
     const isDiag = !!vj.requiresDiagnosis;
     const nextStatus = isDiag ? "inspection_completed" : "materials_declined";
-    // Local update first for responsiveness
+    const extraFields = isDiag ? {} : {convenience_fee_cents:3000};
+    const cfg=getSupabaseConfig();
+    // Same bar as approve: a configured backend must accept the write first.
+    if(cfg){
+      const patched = vj.backendJobId
+        ? await updateCanonicalJob(vj.backendJobId,{status:nextStatus, ...extraFields})
+        : false;
+      if(!patched){
+        console.warn("Haven: materials decline sync failed; not advancing locally.");
+        setShowMaterialsDeclineConfirm(false);
+        setWriteSyncNotice("Couldn't decline materials — try again");
+        setTimeout(()=>setWriteSyncNotice(""),2500);
+        return;
+      }
+    }
     updateJob(vjid,{status:nextStatus});
     handleJobTransition(vjid,nextStatus,vj.pro?.n||"Your pro");
     setShowMaterialsDeclineConfirm(false);
-    // Prototype backend dual-write (best-effort; RLS may require assigned pro)
-    const extraFields = isDiag ? {} : {convenience_fee_cents:3000};
-    if(vj.backendJobId){
-      await updateCanonicalJob(vj.backendJobId,{status:nextStatus, ...extraFields});
-    }
   };
 
   const sendMsg=()=>{
@@ -4478,6 +4504,11 @@ export default function App(){
               <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>Couldn't sync approval — try again</span>
             </div>
           )}
+          {writeSyncNotice?(
+            <div style={{position:"absolute",left:16,right:16,bottom:96,background:"#DC2626",borderRadius:14,padding:"12px 16px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)",zIndex:21}}>
+              <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>{writeSyncNotice}</span>
+            </div>
+          ):null}
         </div>
       </div>
     </>

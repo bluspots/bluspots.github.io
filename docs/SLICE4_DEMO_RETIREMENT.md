@@ -29,7 +29,7 @@ Signed-out Customer, post or update a job:
 - The shared write does not happen. No `POST` or `PATCH` to `/rest/v1/jobs`.
 - The request does not send `customer_id` `11111111-1111-4111-8111-111111111111`.
 - The request does not send `Authorization: Bearer <anon key>` as the user identity.
-- The local prototype screen can still move. That is not a canonical job row.
+- While Supabase is configured, create, cancel, and materials decline stay on the current screen and show that the write did not land. With no Supabase config, the local prototype can still move and does not call the jobs API.
 
 Signed-in Pro, claim a posted unassigned job:
 
@@ -39,7 +39,7 @@ Signed-in Pro, claim a posted unassigned job:
 
 Signed-out Pro, claim or later job write:
 
-- The write does not happen. The client does not call `pro_claim_job` and does not `PATCH` the job.
+- The write does not happen, and the screen does not advance. The client does not call `pro_claim_job` and does not `PATCH` the job. Materials request and decline terminals are included.
 - The request does not send `pro_id` `22222222-2222-4222-8222-222222222222`.
 - Calling `pro_claim_job` directly with no `auth.uid()` (anon key as Bearer) fails and leaves `pro_id` null. It does not assign the demo pro.
 
