@@ -36,4 +36,5 @@ Applying migrations
 - If prior chunks were already applied, run `0004`, then `0005`, then `0006`, then `0007` to add CHUNK 3 without editing migration history.
 - Slice 1 (`0016_auth_profiles.sql`) adds `public.profiles` and an `auth.users` insert trigger. It does not change `public.jobs` RLS. See `docs/SLICE1_AUTH_PROFILES.md`.
 - Slice 2 does not add a migration. Job policies in `0002`–`0015` are already `to anon, authenticated`, with the same status rules. Signed-in Customer writes use the Auth user id and access token; no session still uses the demo customer id and the anon bearer. See `docs/SLICE2_SESSION_JOB_WRITES.md`.
+- Slice 3 (`0017_auth_job_ownership.sql`) adds restrictive `authenticated` ownership policies on `public.jobs`. Anon demo writes stay on the 0002–0015 permissive policies. See `docs/SLICE3_OWNERSHIP.md`.
 
