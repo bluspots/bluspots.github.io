@@ -1,5 +1,7 @@
 # Slice 1 — Customer Auth + role profiles
 
+Slice 2 now binds signed-in Customer job writes to this session. See `docs/SLICE2_SESSION_JOB_WRITES.md`. The rest of this page is what Slice 1 shipped.
+
 Founder note. This slice adds Supabase Auth and a `profiles` row. It does **not** change job lifecycle, pricing, materials, or jobs RLS. Demo booking stays the default until you turn Auth-required on in a later slice.
 
 ## 1. Apply migration `0016`

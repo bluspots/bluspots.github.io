@@ -1013,31 +1013,117 @@ function matchDiagnosis(text){
       return {url, anonKey:key};
     }catch{ return null; }
   };
-  // Slice 1 stores an Auth access token for a later slice, but job REST keeps
-  // using the anon key as Bearer. haven_prototype_anon_mode does not change
-  // this. Ownership RLS and anon lockdown are not this slice.
+  // Slice 2: a signed-in session binds Customer job REST to that user.
+  // Authorization is the access token. apikey stays the anon key — Supabase
+  // rejects a user JWT in apikey. With no access token, Bearer stays the
+  // anon key so the demo path can still run. haven_prototype_anon_mode does
+  // not choose the identity. Ownership RLS and anon lockdown are not this slice.
+  const havenSignedInAccessToken=()=>{
+    try{
+      if(typeof readHavenAuthMirror!=="function") return null;
+      const mirror=readHavenAuthMirror();
+      const token=mirror && mirror.accessToken ? String(mirror.accessToken).trim() : "";
+      return token || null;
+    }catch{
+      return null;
+    }
+  };
+  const havenDecodeBase64Url=(b64url)=>{
+    try{
+      let b64=String(b64url||"").replace(/-/g,"+").replace(/_/g,"/");
+      while(b64.length%4) b64+="=";
+      if(typeof atob==="function") return atob(b64);
+      if(typeof Buffer!=="undefined") return Buffer.from(b64,"base64").toString("utf8");
+      return "";
+    }catch{
+      return "";
+    }
+  };
+  const havenUserIdFromAccessToken=(token)=>{
+    try{
+      const parts=String(token||"").split(".");
+      if(parts.length<2 || !parts[1]) return "";
+      const json=JSON.parse(havenDecodeBase64Url(parts[1])||"{}");
+      const sub=json && json.sub!=null ? String(json.sub).trim() : "";
+      return sub;
+    }catch{
+      return "";
+    }
+  };
+  const havenDemoCustomerId=()=> (typeof DEMO_CUSTOMER_ID==="string" ? DEMO_CUSTOMER_ID : "");
+  const havenSameCustomerId=(a,b)=>{
+    const left=a ? String(a).trim() : "";
+    const right=b ? String(b).trim() : "";
+    if(!left || !right) return false;
+    return left.toLowerCase()===right.toLowerCase();
+  };
+  // Signed-in: that user's id (mirror, else JWT sub). Never DEMO_CUSTOMER_ID.
+  // No session: explicit demo id. A session with no resolvable user id returns
+  // null so callers skip the write instead of stamping the demo customer.
+  const havenJobCustomerId=()=>{
+    const token=havenSignedInAccessToken();
+    const demoId=havenDemoCustomerId();
+    if(!token) return demoId || null;
+    let fromMirror="";
+    try{
+      const mirror=readHavenAuthMirror();
+      fromMirror=mirror && mirror.userId ? String(mirror.userId).trim() : "";
+    }catch{}
+    if(fromMirror && !havenSameCustomerId(fromMirror, demoId)) return fromMirror;
+    const fromJwt=havenUserIdFromAccessToken(token);
+    if(fromJwt && !havenSameCustomerId(fromJwt, demoId)) return fromJwt;
+    return null;
+  };
   const havenJobRestBearer=()=>{
+    const token=havenSignedInAccessToken();
+    if(token) return token;
     const cfg=getSupabaseConfig();
     return cfg ? cfg.anonKey : null;
   };
   const havenJobRestHeaders=(extra)=>{
+    const cfg=getSupabaseConfig();
+    if(!cfg) return null;
     const bearer=havenJobRestBearer();
     if(!bearer) return null;
     const headers=Object.assign({"Accept":"application/json"}, extra||{});
-    headers.apikey=bearer;
+    headers.apikey=cfg.anonKey;
     headers.Authorization=`Bearer ${bearer}`;
     return headers;
+  };
+  // True when customer_id is missing, blank, or the demo id.
+  const havenCustomerIdIsDemoOrEmpty=(payload)=>{
+    if(!payload || !Object.prototype.hasOwnProperty.call(payload, "customer_id")) return true;
+    const customerId=payload.customer_id!=null ? String(payload.customer_id).trim() : "";
+    const demoId=havenDemoCustomerId();
+    return !customerId || havenSameCustomerId(customerId, demoId);
+  };
+  // Creates must carry the signed-in id. Updates that omit customer_id
+  // (status, cancel, materials) stay allowed. Updates that stamp the demo id
+  // are refused.
+  const havenSignedInCreateUsesDemoCustomer=(payload)=>{
+    return !!havenSignedInAccessToken() && havenCustomerIdIsDemoOrEmpty(payload);
+  };
+  const havenSignedInUpdateStampsDemoCustomer=(fields)=>{
+    if(!havenSignedInAccessToken()) return false;
+    if(!fields || !Object.prototype.hasOwnProperty.call(fields, "customer_id")) return false;
+    return havenCustomerIdIsDemoOrEmpty(fields);
   };
   const postCanonicalJob=async(payload)=>{
     const cfg=getSupabaseConfig();
     if(!cfg) return null; // no‑op until configured
+    if(havenSignedInCreateUsesDemoCustomer(payload)){
+      console.warn("Haven: signed-in job create refused the demo customer id.");
+      return null;
+    }
+    const headers=havenJobRestHeaders({
+      "Content-Type":"application/json",
+      "Prefer":"return=representation",
+    });
+    if(!headers) return null;
     try{
       const res=await fetch(`${cfg.url}/rest/v1/jobs`,{
         method:"POST",
-        headers:havenJobRestHeaders({
-          "Content-Type":"application/json",
-          "Prefer":"return=representation",
-        }),
+        headers,
         body:JSON.stringify(payload),
       });
       if(!res.ok){
@@ -1058,13 +1144,19 @@ function matchDiagnosis(text){
   const updateCanonicalJob=async(backendJobId,fields)=>{
     const cfg=getSupabaseConfig();
     if(!cfg||!backendJobId) return false;
+    if(havenSignedInUpdateStampsDemoCustomer(fields)){
+      console.warn("Haven: signed-in job update refused the demo customer id.");
+      return false;
+    }
+    const headers=havenJobRestHeaders({
+      "Content-Type":"application/json",
+      "Prefer":"return=minimal",
+    });
+    if(!headers) return false;
     try{
       const res=await fetch(`${cfg.url}/rest/v1/jobs?id=eq.${backendJobId}`,{
         method:"PATCH",
-        headers:havenJobRestHeaders({
-          "Content-Type":"application/json",
-          "Prefer":"return=minimal",
-        }),
+        headers,
         body:JSON.stringify(fields),
       });
       if(!res.ok){
@@ -1088,10 +1180,12 @@ function matchDiagnosis(text){
     if(unique.length===0) return [];
     // PostgREST IN filter — uuid list
     const inList=unique.join(",");
+    const headers=havenJobRestHeaders();
+    if(!headers) return [];
     try{
       const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&select=id,status,materials_items,materials_estimate_cents`;
       const res=await fetch(url,{
-        headers:havenJobRestHeaders(),
+        headers,
       });
       if(!res.ok){
         const text=await res.text().catch(()=>"(no body)");
@@ -1106,11 +1200,12 @@ function matchDiagnosis(text){
     }
   };
 // Slice 1 — Customer Supabase Auth session bootstrap.
-// Job REST stays on the anon key and DEMO_CUSTOMER_ID (see backend_adapter.js).
+// Slice 2 reads this mirror for Customer job writes (backend_adapter.js):
+// a signed-in access token is the Bearer, and that user's id is customer_id.
+// No session still uses the anon key and DEMO_CUSTOMER_ID.
 // This file does not change lifecycle, economics, materials, or jobs RLS.
-// haven_prototype_anon_mode defaults ON so the current demo keeps working.
-// Turning it off only records the founder's later intent. Slice 1 still
-// does not require Auth for job create or lifecycle writes.
+// haven_prototype_anon_mode defaults ON. It does not choose the job identity
+// and does not require Auth for job create or lifecycle writes.
 
 const HAVEN_PROTOTYPE_ANON_MODE_KEY = "haven_prototype_anon_mode";
 const HAVEN_AUTH_ACCESS_TOKEN_KEY = "haven_auth_access_token";
@@ -1411,8 +1506,8 @@ function makeNotification({
 }
 
  
-// CHUNK 2 demo customer. Slice 1 Auth does not replace this id.
-// Job writes keep using it until a later ownership slice.
+// CHUNK 2 demo customer. Kept on purpose. Signed-out job writes still use it.
+// A signed-in session uses that user's id and must not fall back to this one.
 const DEMO_CUSTOMER_ID = "11111111-1111-4111-8111-111111111111";
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
 const TIME_PREFS=[
@@ -1934,7 +2029,8 @@ function App(){
       };
     },
   });
-  // Slice 1 session mirror. Job writes do not read this.
+  // Session mirror for Profile/Settings. Job writes read the same storage keys
+  // at request time (havenJobCustomerId / havenJobRestBearer), not this state.
   const [havenAuth,setHavenAuth]=useState(()=>readHavenAuthMirror());
   const [authEmailInput,setAuthEmailInput]=useState("");
   const [authPasswordInput,setAuthPasswordInput]=useState("");
@@ -2878,32 +2974,37 @@ function App(){
       const cityLabel = selectedAddress?.city
         ? `${selectedAddress.city}${selectedAddress.state?`, ${selectedAddress.state}`:""}`
         : (nj.addressText?.split(",")[1]?.trim() || "Unknown");
-      const payload={
-        schema_version:1,
-        customer_id:DEMO_CUSTOMER_ID, // Slice 1: still the demo id, even when signed in
-        pro_id:null,
-        category:cat||"General",
-        title:title||"General service",
+      const customerId=havenJobCustomerId();
+      if(!customerId){
+        console.warn("Haven: signed-in session has no user id; canonical job create skipped instead of using the demo customer.");
+      }else{
+        const payload={
+          schema_version:1,
+          customer_id:customerId,
+          pro_id:null,
+          category:cat||"General",
+          title:title||"General service",
           requires_diagnosis:!!requiresDiagnosis,
-        city_label:cityLabel||"Unknown",
-        address_snapshot:null,
-        lat:null,
-        lng:null,
-        fixed_customer_labor_price_cents,
-        fixed_pro_labor_payout_cents,
-        margin_rate_bps:2000,
-        emergency:!!nj.emergency,
-        emergency_fee_cents:Math.max(0,Math.floor((nj.emergencyFee||0)*100)),
+          city_label:cityLabel||"Unknown",
+          address_snapshot:null,
+          lat:null,
+          lng:null,
+          fixed_customer_labor_price_cents,
+          fixed_pro_labor_payout_cents,
+          margin_rate_bps:2000,
+          emergency:!!nj.emergency,
+          emergency_fee_cents:Math.max(0,Math.floor((nj.emergencyFee||0)*100)),
           inspection_fee_cents:requiresDiagnosis?4500:0,
-        status:"posted",
-        customer_preferences_snapshot:Array.isArray(nj.jobPreferences)?nj.jobPreferences:[],
-        payment_snapshot:{brand:nj.paymentBrand||"Card",last4:nj.paymentLast4||"----"},
-        materials_reimbursed_cents:0,
-        tip_amount_cents:0,
-      };
-      const backendId = await postCanonicalJob(payload);
-      if(backendId){
-        setJobs(js=>js.map(j=>j.id===nj.id?{...j,backendJobId:backendId}:j));
+          status:"posted",
+          customer_preferences_snapshot:Array.isArray(nj.jobPreferences)?nj.jobPreferences:[],
+          payment_snapshot:{brand:nj.paymentBrand||"Card",last4:nj.paymentLast4||"----"},
+          materials_reimbursed_cents:0,
+          tip_amount_cents:0,
+        };
+        const backendId = await postCanonicalJob(payload);
+        if(backendId){
+          setJobs(js=>js.map(j=>j.id===nj.id?{...j,backendJobId:backendId}:j));
+        }
       }
     })();
     goTo("posted");
@@ -4834,7 +4935,7 @@ function App(){
                 <div style={{fontWeight:700,fontSize:15,color:TX}}>Signed in</div>
                 <div style={{fontSize:13,color:TS,marginTop:4}}>{havenAuth.email}</div>
                 <div style={{fontSize:12,color:TM,marginTop:2}}>Role · {havenAuth.role||"customer"}</div>
-                <div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:10}}>This session is stored for a later slice. Job writes stay on the demo customer and the anon key.</div>
+                <div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:10}}>Jobs you post while signed in use this account. With no session, posts still use the demo customer.</div>
                 <button type="button" onClick={()=>{void submitHavenSignOut();}} disabled={authBusy} style={{marginTop:14,width:"100%",padding:12,borderRadius:12,border:"none",background:authBusy?"#DDD9D2":"#B42318",color:W,fontWeight:700,fontSize:14,cursor:authBusy?"default":"pointer"}}>Sign out</button>
               </div>
             ):(
@@ -4895,7 +4996,7 @@ function App(){
           <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
             <div style={{flex:1}}>
               <div style={{fontWeight:700,fontSize:15,color:TX}}>Prototype anon mode</div>
-              <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>Default is on. Job writes stay on the demo customer in this slice.</div>
+              <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>Default is on. This switch does not change job writes. No session still uses the demo customer.</div>
             </div>
             <button type="button" onClick={()=>{
               const next=!havenPrototypeAnonModeEnabled();

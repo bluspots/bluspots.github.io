@@ -1,9 +1,10 @@
 // Slice 1 — Customer Supabase Auth session bootstrap.
-// Job REST stays on the anon key and DEMO_CUSTOMER_ID (see backend_adapter.js).
+// Slice 2 reads this mirror for Customer job writes (backend_adapter.js):
+// a signed-in access token is the Bearer, and that user's id is customer_id.
+// No session still uses the anon key and DEMO_CUSTOMER_ID.
 // This file does not change lifecycle, economics, materials, or jobs RLS.
-// haven_prototype_anon_mode defaults ON so the current demo keeps working.
-// Turning it off only records the founder's later intent. Slice 1 still
-// does not require Auth for job create or lifecycle writes.
+// haven_prototype_anon_mode defaults ON. It does not choose the job identity
+// and does not require Auth for job create or lifecycle writes.
 
 const HAVEN_PROTOTYPE_ANON_MODE_KEY = "haven_prototype_anon_mode";
 const HAVEN_AUTH_ACCESS_TOKEN_KEY = "haven_auth_access_token";

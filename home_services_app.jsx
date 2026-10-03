@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
  
-// CHUNK 2 demo customer. Slice 1 Auth does not replace this id.
-// Job writes keep using it until a later ownership slice.
+// CHUNK 2 demo customer. Kept on purpose. Signed-out job writes still use it.
+// A signed-in session uses that user's id and must not fall back to this one.
 const DEMO_CUSTOMER_ID = "11111111-1111-4111-8111-111111111111";
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
 const TIME_PREFS=[
@@ -523,7 +523,8 @@ export default function App(){
       };
     },
   });
-  // Slice 1 session mirror. Job writes do not read this.
+  // Session mirror for Profile/Settings. Job writes read the same storage keys
+  // at request time (havenJobCustomerId / havenJobRestBearer), not this state.
   const [havenAuth,setHavenAuth]=useState(()=>readHavenAuthMirror());
   const [authEmailInput,setAuthEmailInput]=useState("");
   const [authPasswordInput,setAuthPasswordInput]=useState("");
@@ -1467,32 +1468,37 @@ export default function App(){
       const cityLabel = selectedAddress?.city
         ? `${selectedAddress.city}${selectedAddress.state?`, ${selectedAddress.state}`:""}`
         : (nj.addressText?.split(",")[1]?.trim() || "Unknown");
-      const payload={
-        schema_version:1,
-        customer_id:DEMO_CUSTOMER_ID, // Slice 1: still the demo id, even when signed in
-        pro_id:null,
-        category:cat||"General",
-        title:title||"General service",
+      const customerId=havenJobCustomerId();
+      if(!customerId){
+        console.warn("Haven: signed-in session has no user id; canonical job create skipped instead of using the demo customer.");
+      }else{
+        const payload={
+          schema_version:1,
+          customer_id:customerId,
+          pro_id:null,
+          category:cat||"General",
+          title:title||"General service",
           requires_diagnosis:!!requiresDiagnosis,
-        city_label:cityLabel||"Unknown",
-        address_snapshot:null,
-        lat:null,
-        lng:null,
-        fixed_customer_labor_price_cents,
-        fixed_pro_labor_payout_cents,
-        margin_rate_bps:2000,
-        emergency:!!nj.emergency,
-        emergency_fee_cents:Math.max(0,Math.floor((nj.emergencyFee||0)*100)),
+          city_label:cityLabel||"Unknown",
+          address_snapshot:null,
+          lat:null,
+          lng:null,
+          fixed_customer_labor_price_cents,
+          fixed_pro_labor_payout_cents,
+          margin_rate_bps:2000,
+          emergency:!!nj.emergency,
+          emergency_fee_cents:Math.max(0,Math.floor((nj.emergencyFee||0)*100)),
           inspection_fee_cents:requiresDiagnosis?4500:0,
-        status:"posted",
-        customer_preferences_snapshot:Array.isArray(nj.jobPreferences)?nj.jobPreferences:[],
-        payment_snapshot:{brand:nj.paymentBrand||"Card",last4:nj.paymentLast4||"----"},
-        materials_reimbursed_cents:0,
-        tip_amount_cents:0,
-      };
-      const backendId = await postCanonicalJob(payload);
-      if(backendId){
-        setJobs(js=>js.map(j=>j.id===nj.id?{...j,backendJobId:backendId}:j));
+          status:"posted",
+          customer_preferences_snapshot:Array.isArray(nj.jobPreferences)?nj.jobPreferences:[],
+          payment_snapshot:{brand:nj.paymentBrand||"Card",last4:nj.paymentLast4||"----"},
+          materials_reimbursed_cents:0,
+          tip_amount_cents:0,
+        };
+        const backendId = await postCanonicalJob(payload);
+        if(backendId){
+          setJobs(js=>js.map(j=>j.id===nj.id?{...j,backendJobId:backendId}:j));
+        }
       }
     })();
     goTo("posted");
@@ -3423,7 +3429,7 @@ export default function App(){
                 <div style={{fontWeight:700,fontSize:15,color:TX}}>Signed in</div>
                 <div style={{fontSize:13,color:TS,marginTop:4}}>{havenAuth.email}</div>
                 <div style={{fontSize:12,color:TM,marginTop:2}}>Role · {havenAuth.role||"customer"}</div>
-                <div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:10}}>This session is stored for a later slice. Job writes stay on the demo customer and the anon key.</div>
+                <div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:10}}>Jobs you post while signed in use this account. With no session, posts still use the demo customer.</div>
                 <button type="button" onClick={()=>{void submitHavenSignOut();}} disabled={authBusy} style={{marginTop:14,width:"100%",padding:12,borderRadius:12,border:"none",background:authBusy?"#DDD9D2":"#B42318",color:W,fontWeight:700,fontSize:14,cursor:authBusy?"default":"pointer"}}>Sign out</button>
               </div>
             ):(
@@ -3484,7 +3490,7 @@ export default function App(){
           <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
             <div style={{flex:1}}>
               <div style={{fontWeight:700,fontSize:15,color:TX}}>Prototype anon mode</div>
-              <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>Default is on. Job writes stay on the demo customer in this slice.</div>
+              <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>Default is on. This switch does not change job writes. No session still uses the demo customer.</div>
             </div>
             <button type="button" onClick={()=>{
               const next=!havenPrototypeAnonModeEnabled();
