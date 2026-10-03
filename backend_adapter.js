@@ -13,8 +13,9 @@
   // Authorization is the access token. apikey stays the anon key — Supabase
   // rejects a user JWT in apikey. Slice 4: with no access token, job creates
   // and updates stop. They do not send DEMO_CUSTOMER_ID and do not send the
-  // anon key as Bearer. Reads may still use the anon key. The anon-mode flag
-  // does not choose the identity. This slice does not lock down anon grants.
+  // anon key as Bearer. Signed-out job polls no longer hit /rest/v1/jobs
+  // (anon SELECT on the base table is revoked; use posted_jobs_public for
+  // marketplace browse only). The anon-mode flag does not choose the identity.
   const havenSignedInAccessToken=()=>{
     try{
       if(typeof readHavenAuthMirror!=="function") return null;
@@ -195,28 +196,25 @@
 
   // Poll/rehydrate of locally linked jobs. Not the whole table.
   // Signed in: user access token and customer_id = that user. apikey stays the anon key.
-  // Signed out: anon bearer on those ids only. Never DEMO_CUSTOMER_ID.
-  // No Supabase config: caller does not reach a jobs request (returns []).
+  // Signed out: do not call /rest/v1/jobs. Anon SELECT on the base table is revoked;
+  // a crafted anon poll must not pull private lifecycle rows. Local UI state stays.
+  // Never DEMO_CUSTOMER_ID. No Supabase config: no jobs request (returns []).
   const fetchCanonicalJobsByIds=async(backendIds)=>{
     const cfg=getSupabaseConfig();
     if(!cfg) return [];
     if(!backendIds||backendIds.length===0) return [];
     const unique=[...new Set(backendIds.filter(Boolean))];
     if(unique.length===0) return [];
-    const inList=unique.map(id=>encodeURIComponent(id)).join(",");
     const token=havenSignedInAccessToken();
-    const customerId=token ? havenJobCustomerId() : "";
-    let headers;
-    let url;
-    if(token){
-      if(!customerId) return [];
-      headers={"Accept":"application/json", apikey:cfg.anonKey, Authorization:`Bearer ${token}`};
-      url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,materials_items,materials_estimate_cents`;
-    }else{
-      headers=havenJobRestHeaders();
-      if(!headers) return [];
-      url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&select=id,status,materials_items,materials_estimate_cents`;
+    if(!token){
+      // Signed-out: stop. Do not browse private lifecycle through the anon key.
+      return [];
     }
+    const customerId=havenJobCustomerId();
+    if(!customerId) return [];
+    const inList=unique.map(id=>encodeURIComponent(id)).join(",");
+    const headers={"Accept":"application/json", apikey:cfg.anonKey, Authorization:`Bearer ${token}`};
+    const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,materials_items,materials_estimate_cents`;
     if(String(url).includes("11111111-1111-4111-8111-111111111111")) return [];
     try{
       const res=await fetch(url,{
@@ -229,9 +227,7 @@
       }
       let rows=await res.json();
       if(!Array.isArray(rows)) return [];
-      if(token){
-        rows=rows.filter(r=>r && havenSameCustomerId(r.customer_id, customerId));
-      }
+      rows=rows.filter(r=>r && havenSameCustomerId(r.customer_id, customerId));
       return rows;
     }catch(err){
       console.warn("Haven CHUNK4 fetch error:", err);

@@ -1606,15 +1606,11 @@ async function runSlice2SessionWriteChecks(){
     assert(!calls.some(c => c.opts.method === 'POST' || c.opts.method === 'PATCH'), 'signed-out update does not PATCH and does not use the anon bearer');
 
     calls.length = 0;
-    await fetchCanonicalJobsByIds(['cccccccc-dddd-4eee-8fff-000000000001']);
+    const signedOutRows = await fetchCanonicalJobsByIds(['cccccccc-dddd-4eee-8fff-000000000001']);
+    assert(Array.isArray(signedOutRows) && signedOutRows.length === 0, 'signed-out poll returns no rows');
     const signedOutRead = calls.find(c => String(c.url).includes('/rest/v1/jobs'));
-    assert(!!signedOutRead, 'signed-out poll of a linked id still reads');
-    if (signedOutRead) {
-      assert(signedOutRead.opts.headers.Authorization === 'Bearer test-anon-key', 'signed-out poll uses the anon bearer');
-      assert(signedOutRead.opts.headers.apikey === 'test-anon-key', 'signed-out poll apikey stays the anon key');
-      assert(!signedOutRead.url.includes(DEMO_CUSTOMER_ID), 'signed-out poll does not send DEMO_CUSTOMER');
-      assert(!signedOutRead.url.includes('customer_id=eq.'), 'signed-out poll does not query as a customer id');
-    }
+    assert(!signedOutRead, 'signed-out poll does not call the jobs API (anon base-table SELECT revoked)');
+    assert(!calls.some(c => String(c.url).includes(DEMO_CUSTOMER_ID)), 'signed-out poll does not send DEMO_CUSTOMER');
 
     delete storedData['haven_draft'];
     cleanup();
@@ -1903,7 +1899,7 @@ async function runArrivedVisibilityChecks(){
     const u = String(url);
     if (u.includes('/rest/v1/jobs')) {
       fetches += 1;
-      return { ok: true, json: async () => [{ id: backendId, status: remoteStatus }], text: async () => '' };
+      return { ok: true, json: async () => [{ id: backendId, status: remoteStatus, customer_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' }], text: async () => '' };
     }
     return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
   };
@@ -1926,6 +1922,9 @@ async function runArrivedVisibilityChecks(){
     fetches = 0;
     storedData['haven_supabase_url'] = 'https://example.supabase.co';
     storedData['haven_supabase_anon_key'] = 'test-anon-key';
+    // Signed-in poll only — anon base-table SELECT is revoked.
+    storedData['haven_auth_access_token'] = 'signed-in-access-token';
+    storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
     const container = document.createElement('div');
