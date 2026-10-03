@@ -11,6 +11,8 @@ acceptance, pro replies, and completion details are simulated. See
 `HAVEN_JOB_CONTRACT.md` for the data contract shared with the companion
 Pro App.
 
+Signed-out job writes do not use the demo customer. See `docs/SLICE4_DEMO_RETIREMENT.md`.
+
 ## Quick start
 
 ```bash

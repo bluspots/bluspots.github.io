@@ -37,4 +37,5 @@ Applying migrations
 - Slice 1 (`0016_auth_profiles.sql`) adds `public.profiles` and an `auth.users` insert trigger. It does not change `public.jobs` RLS. See `docs/SLICE1_AUTH_PROFILES.md`.
 - Slice 2 does not add a migration. Job policies in `0002`–`0015` are already `to anon, authenticated`, with the same status rules. Signed-in Customer writes use the Auth user id and access token; no session still uses the demo customer id and the anon bearer. See `docs/SLICE2_SESSION_JOB_WRITES.md`.
 - Slice 3 (`0017_auth_job_ownership.sql`) adds restrictive `authenticated` ownership policies on `public.jobs`. Anon demo writes stay on the 0002–0015 permissive policies. See `docs/SLICE3_OWNERSHIP.md`.
+- Slice 4 (`0018_retire_demo_pro_claim.sql`) makes `pro_claim_job` fail when `auth.uid()` is null instead of assigning the demo pro. Signed-out Customer and Pro job writes stop in the clients. See `docs/SLICE4_DEMO_RETIREMENT.md`.
 

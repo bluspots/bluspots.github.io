@@ -9,11 +9,12 @@
       return {url, anonKey:key};
     }catch{ return null; }
   };
-  // Slice 2: a signed-in session binds Customer job REST to that user.
+  // Slice 2: a signed-in session binds Customer job writes to that user.
   // Authorization is the access token. apikey stays the anon key — Supabase
-  // rejects a user JWT in apikey. With no access token, Bearer stays the
-  // anon key so the demo path can still run. haven_prototype_anon_mode does
-  // not choose the identity. Ownership RLS and anon lockdown are not this slice.
+  // rejects a user JWT in apikey. Slice 4: with no access token, job creates
+  // and updates stop. They do not send DEMO_CUSTOMER_ID and do not send the
+  // anon key as Bearer. Reads may still use the anon key. The anon-mode flag
+  // does not choose the identity. This slice does not lock down anon grants.
   const havenSignedInAccessToken=()=>{
     try{
       if(typeof readHavenAuthMirror!=="function") return null;
@@ -54,12 +55,12 @@
     return left.toLowerCase()===right.toLowerCase();
   };
   // Signed-in: that user's id (mirror, else JWT sub). Never DEMO_CUSTOMER_ID.
-  // No session: explicit demo id. A session with no resolvable user id returns
-  // null so callers skip the write instead of stamping the demo customer.
+  // No session: null. Do not fall back to the demo customer. A session with
+  // no resolvable user id also returns null.
   const havenJobCustomerId=()=>{
     const token=havenSignedInAccessToken();
     const demoId=havenDemoCustomerId();
-    if(!token) return demoId || null;
+    if(!token) return null;
     let fromMirror="";
     try{
       const mirror=readHavenAuthMirror();
@@ -70,12 +71,15 @@
     if(fromJwt && !havenSameCustomerId(fromJwt, demoId)) return fromJwt;
     return null;
   };
+  // Reads only. Job writes must not call this without a session: a missing
+  // token stops the write instead of using the anon key as the user identity.
   const havenJobRestBearer=()=>{
     const token=havenSignedInAccessToken();
     if(token) return token;
     const cfg=getSupabaseConfig();
     return cfg ? cfg.anonKey : null;
   };
+  const havenJobWriteSessionMissing=()=> !havenSignedInAccessToken();
   const havenJobRestHeaders=(extra)=>{
     const cfg=getSupabaseConfig();
     if(!cfg) return null;
@@ -107,6 +111,10 @@
   const postCanonicalJob=async(payload)=>{
     const cfg=getSupabaseConfig();
     if(!cfg) return null; // no‑op until configured
+    if(havenJobWriteSessionMissing()){
+      console.warn("Haven: job create skipped. No signed-in session, so the demo customer and anon bearer are not sent.");
+      return null;
+    }
     if(havenSignedInCreateUsesDemoCustomer(payload)){
       console.warn("Haven: signed-in job create refused the demo customer id.");
       return null;
@@ -140,6 +148,10 @@
   const updateCanonicalJob=async(backendJobId,fields)=>{
     const cfg=getSupabaseConfig();
     if(!cfg||!backendJobId) return false;
+    if(havenJobWriteSessionMissing()){
+      console.warn("Haven: job update skipped. No signed-in session, so the demo customer and anon bearer are not sent.");
+      return false;
+    }
     if(havenSignedInUpdateStampsDemoCustomer(fields)){
       console.warn("Haven: signed-in job update refused the demo customer id.");
       return false;
