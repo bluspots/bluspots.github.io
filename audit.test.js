@@ -464,8 +464,8 @@ step('0. Slice 1 profile role, anon-mode default, and Slice 2 session job identi
   storedData['haven_supabase_anon_key'] = 'test-anon-key';
   clearHavenAuthTestKeys();
   storedData['haven_prototype_anon_mode'] = '0';
-  assert(havenJobRestBearer() === 'test-anon-key', 'no session uses the anon key even when anon mode is off');
-  assert(havenJobCustomerId() === DEMO_CUSTOMER_ID, 'no session uses DEMO_CUSTOMER_ID');
+  assert(havenJobRestBearer() === 'test-anon-key', 'no session read bearer stays the anon key; writes do not use it');
+  assert(havenJobCustomerId() === null, 'no session does not use DEMO_CUSTOMER_ID');
   const signedOutHeaders = havenJobRestHeaders();
   assert(signedOutHeaders && signedOutHeaders.apikey === 'test-anon-key', 'signed-out apikey is the anon key');
   assert(signedOutHeaders && signedOutHeaders.Authorization === 'Bearer test-anon-key', 'signed-out Authorization is the anon key');
@@ -498,7 +498,7 @@ step('0. Slice 1 profile role, anon-mode default, and Slice 2 session job identi
   clearHavenAuthTestKeys();
   delete storedData['haven_prototype_anon_mode'];
   assert(havenJobRestBearer() === null, 'job REST bearer is absent without a session or Supabase config');
-  assert(havenJobCustomerId() === DEMO_CUSTOMER_ID, 'no session still resolves the demo customer id without Supabase config');
+  assert(havenJobCustomerId() === null, 'no session does not resolve the demo customer id without Supabase config');
   assert(havenPrototypeAnonModeEnabled() === true, 'cleared flag defaults anon mode ON before the app mounts');
 });
 assert(typeof ErrorBoundary === 'function', 'ErrorBoundary class loaded from compiled source');
@@ -533,7 +533,7 @@ step('2. Settings consolidation', () => {
   assert(existsRegex('Appearance') && existsRegex('System') && existsRegex('Dark'), 'Appearance options present inside Settings');
   assert(existsRegex('Create customer account'), 'Settings includes Customer sign-up');
   assert(existsRegex('Prototype anon mode'), 'Settings shows the demo anon flag');
-  assert(existsRegex('No session still uses the demo customer'), 'Signed-out job writes still name the demo customer');
+  assert(existsRegex('the shared job write stops'), 'Signed-out job writes stop instead of using the demo customer');
   assert(existsRegex('This switch does not change job writes'), 'Prototype anon mode does not choose the job identity');
   assert(document.querySelector('[aria-label="Prototype anon mode"]')?.getAttribute('aria-checked') === 'true', 'Prototype anon mode defaults on');
   click('Dark');
@@ -1461,7 +1461,7 @@ function runHomeIntentArchitectureChecks(){
 }
 
 // Signed-in Customer create uses the auth user id and user bearer.
-// Signed-out create still uses DEMO_CUSTOMER_ID and the anon bearer.
+// Signed-out create does not send DEMO_CUSTOMER_ID or the anon bearer.
 // Lifecycle prices on that create stay on the locked 20/80 split.
 async function runSlice2SessionWriteChecks(){
   const origFetch = global.fetch;
@@ -1555,6 +1555,14 @@ async function runSlice2SessionWriteChecks(){
 
     clearHavenAuthTestKeys();
     delete storedData['haven_prototype_anon_mode'];
+    calls.length = 0;
+    const stoppedCreate = await postCanonicalJob({ customer_id: DEMO_CUSTOMER_ID, status: 'posted' });
+    assert(stoppedCreate === null, 'signed-out create does not send DEMO_CUSTOMER_ID');
+    assert(!findPost(), 'signed-out postCanonicalJob does not call the jobs API');
+    const stoppedUpdate = await updateCanonicalJob('cccccccc-dddd-4eee-8fff-000000000001', { status: 'cancelled' });
+    assert(stoppedUpdate === false, 'signed-out update does not send');
+    assert(!calls.some(c => c.opts.method === 'POST' || c.opts.method === 'PATCH'), 'signed-out update does not PATCH and does not use the anon bearer');
+
     delete storedData['haven_draft'];
     cleanup();
     calls.length = 0;
@@ -1566,23 +1574,21 @@ async function runSlice2SessionWriteChecks(){
     click('Mount TV');
     selectNonSurgeTimeWindow();
     const demoBtn = getPostJobButton();
-    assert(!!demoBtn, 'Post Job is available for the signed-out demo create');
+    assert(!!demoBtn, 'Post Job is available for the signed-out create');
     calls.length = 0;
     if (demoBtn) {
       await act(async () => { fireEvent.click(demoBtn); });
-      await waitForCondition(() => !!findPost(), { timeout: 3000, message: 'signed-out demo create did not POST' });
+      await new Promise((resolve) => setTimeout(resolve, 400));
     }
     const demoPost = findPost();
-    assert(!!demoPost, 'signed-out create still sends a jobs POST');
-    if (demoPost) {
-      const body = JSON.parse(demoPost.opts.body);
-      assert(body.customer_id === DEMO_CUSTOMER_ID, 'signed-out create uses DEMO_CUSTOMER_ID');
-      assert(demoPost.opts.headers.Authorization === 'Bearer test-anon-key', 'signed-out create uses the anon bearer');
-      assert(demoPost.opts.headers.apikey === 'test-anon-key', 'signed-out create apikey is the anon key');
-      assert(body.margin_rate_bps === 2000, 'signed-out create keeps margin_rate_bps 2000');
-      assert(body.fixed_pro_labor_payout_cents === Math.floor(body.fixed_customer_labor_price_cents * 80 / 100), 'signed-out create keeps the 20/80 labor split');
-      assert(body.status === 'posted', 'signed-out create still posts status posted');
-    }
+    assert(!demoPost, 'signed-out create does not POST a job');
+    const wroteDemo = calls.some(c => {
+      const headers = (c.opts && c.opts.headers) || {};
+      const blob = String(c.url) + ' ' + ((c.opts && c.opts.body) || '') + ' ' + (headers.Authorization || '');
+      const write = c.opts && (c.opts.method === 'POST' || c.opts.method === 'PATCH');
+      return blob.includes(DEMO_CUSTOMER_ID) || (write && headers.Authorization === 'Bearer test-anon-key');
+    });
+    assert(!wroteDemo, 'signed-out create does not send the demo customer id or an anon bearer write');
   } catch (e) {
     fail++;
     console.error('FAIL (slice 2 session writes):', (e && e.stack) || e);
@@ -1644,9 +1650,12 @@ async function runApproveAndDeclineChecks(){
     if (backend) {
       storedData['haven_supabase_url'] = 'https://example.supabase.co';
       storedData['haven_supabase_anon_key'] = 'test-anon-key';
+      storedData['haven_auth_access_token'] = 'signed-in-access-token';
+      storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     } else {
       delete storedData['haven_supabase_url'];
       delete storedData['haven_supabase_anon_key'];
+      clearHavenAuthTestKeys();
     }
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
@@ -1718,6 +1727,7 @@ async function runApproveAndDeclineChecks(){
     global.fetch = origFetch;
     delete storedData['haven_supabase_url'];
     delete storedData['haven_supabase_anon_key'];
+    clearHavenAuthTestKeys();
     cleanup();
   }
   console.log(`\n--- Approve/decline audit: ${pass} passing, ${fail} failing ---`);

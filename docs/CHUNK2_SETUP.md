@@ -1,6 +1,6 @@
 ## Haven CHUNK 2 — Customer → Canonical (Supabase) setup
 
-Purpose: allow the Customer app to dual-write a canonical `jobs` row to a shared Supabase/Postgres backend when a customer posts a job. This is a prototype: job RLS stays narrow on purpose. Slice 1 adds optional Customer Auth and `profiles` (`docs/SLICE1_AUTH_PROFILES.md`). Slice 2 (`docs/SLICE2_SESSION_JOB_WRITES.md`) uses the signed-in user id and access token for that write. With no session, the dual-write still uses the demo customer id and the anon key.
+Purpose: allow the Customer app to dual-write a canonical `jobs` row to a shared Supabase/Postgres backend when a customer posts a job. This is a prototype: job RLS stays narrow on purpose. Slice 1 adds optional Customer Auth and `profiles` (`docs/SLICE1_AUTH_PROFILES.md`). Slice 2 (`docs/SLICE2_SESSION_JOB_WRITES.md`) uses the signed-in user id and access token for that write. With no session, Slice 4 stops the dual-write. It does not send the demo customer id or the anon key as Bearer.
 
 What this adds in this repo:
 - SQL migration enabling RLS and prototype policies: `supabase/migrations/0002_chunk2_rls.sql`
@@ -50,9 +50,8 @@ localStorage.setItem('haven_supabase_anon_key', 'eyJhbGciOi...<anon-key>...');
    - The Customer app stores the returned UUID on the local job as `backendJobId` (visible only in dev tools).
 
 Demo customer
-- With no signed-in session, job inserts still use a fixed demo `customer_id`:
-  - `11111111-1111-4111-8111-111111111111`
-- A signed-in session uses that Auth user's id instead, and does not fall back to the demo id. See `docs/SLICE2_SESSION_JOB_WRITES.md`.
+- Chunk 2 inserted a fixed demo `customer_id` `11111111-1111-4111-8111-111111111111` when no one was signed in. Slice 4 stops that insert. A missing session does not send that id.
+- A signed-in session uses that Auth user's id and does not fall back to the demo id. See `docs/SLICE4_DEMO_RETIREMENT.md`.
 
 Notes and guardrails
 - No secrets are committed to this repo.

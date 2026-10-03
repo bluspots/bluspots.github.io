@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from "react";
  
-// CHUNK 2 demo customer. Kept on purpose. Signed-out job writes still use it.
+// Recognized so a job write can refuse it. Signed-out job writes do not send it.
 // A signed-in session uses that user's id and must not fall back to this one.
 const DEMO_CUSTOMER_ID = "11111111-1111-4111-8111-111111111111";
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
@@ -1410,7 +1410,7 @@ export default function App(){
     setTid(diagResult.task.id);setTpid(2);setDesc(diagInput);setEmergency(false);resetBookingSelections();goTo("task");
   };
 
-  const postJob=()=>{
+  const postJob=async()=>{
     if(!currentTask||!tpid)return;
     if(currentTask.propertyScoped&&effectiveTaskPrice==null)return; // missing property data — never post with a guessed price
     if(isPostingRef.current)return; // already posted this draft — a rapid second tap must not create a duplicate job
@@ -1439,27 +1439,23 @@ export default function App(){
       lockedPrice:tid?effectiveTaskPrice:null, // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
       requiresDiagnosis:requiresDiagnosisLocal,
     });
-    setJobs(p=>[...p,nj]);setVjid(nj.id);
-    setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
-    setShowCancelConfirm(false);setShowCancelRequest(false);
-    scrubDraftFromTabMemory();
-    // CHUNK 2: dual‑write to canonical jobs table (fail‑soft; no UX block)
-    (async()=>{
-      // Build canonical payload from local job shape
+    // Supabase configured: do not save the job or open Posted until the
+    // signed-in create lands. No session stops here. No config stays local.
+    const cfg=getSupabaseConfig();
+    let backendId=null;
+    if(cfg){
       const isCatalog = !!nj.taskId;
       const cat      = isCatalog ? (currentTask?.c||"") : (nj.custom?.cat||"");
       const title    = isCatalog ? (currentTask?.n||"") : (nj.custom?.title||"");
-        const taskId   = nj.taskId;
-        // CHUNK 3: compute diagnosis requirement once at creation and persist it
-        const DIAGNOSIS_CATEGORY_SET = new Set(["Plumbing","Electrical","Appliance","HVAC"]);
-        let requiresDiagnosis = DIAGNOSIS_CATEGORY_SET.has(cat);
-        if(!requiresDiagnosis && cat==="Repair"){
-          const tlc=(title||"").toLowerCase();
-          // Treat HVAC repair visit as diagnosis even though category label is "Repair" in this app
-          if(taskId===53 || tlc.includes("ac/heating") || tlc.includes("hvac")){
-            requiresDiagnosis = true;
-          }
+      const taskId   = nj.taskId;
+      const DIAGNOSIS_CATEGORY_SET = new Set(["Plumbing","Electrical","Appliance","HVAC"]);
+      let requiresDiagnosis = DIAGNOSIS_CATEGORY_SET.has(cat);
+      if(!requiresDiagnosis && cat==="Repair"){
+        const tlc=(title||"").toLowerCase();
+        if(taskId===53 || tlc.includes("ac/heating") || tlc.includes("hvac")){
+          requiresDiagnosis = true;
         }
+      }
       const customerPriceDollars = isCatalog
         ? (nj.lockedPrice??0)
         : (parseInt(nj.custom?.price)||0);
@@ -1470,37 +1466,47 @@ export default function App(){
         : (nj.addressText?.split(",")[1]?.trim() || "Unknown");
       const customerId=havenJobCustomerId();
       if(!customerId){
-        console.warn("Haven: signed-in session has no user id; canonical job create skipped instead of using the demo customer.");
-      }else{
-        const payload={
-          schema_version:1,
-          customer_id:customerId,
-          pro_id:null,
-          category:cat||"General",
-          title:title||"General service",
-          requires_diagnosis:!!requiresDiagnosis,
-          city_label:cityLabel||"Unknown",
-          address_snapshot:null,
-          lat:null,
-          lng:null,
-          fixed_customer_labor_price_cents,
-          fixed_pro_labor_payout_cents,
-          margin_rate_bps:2000,
-          emergency:!!nj.emergency,
-          emergency_fee_cents:Math.max(0,Math.floor((nj.emergencyFee||0)*100)),
-          inspection_fee_cents:requiresDiagnosis?4500:0,
-          status:"posted",
-          customer_preferences_snapshot:Array.isArray(nj.jobPreferences)?nj.jobPreferences:[],
-          payment_snapshot:{brand:nj.paymentBrand||"Card",last4:nj.paymentLast4||"----"},
-          materials_reimbursed_cents:0,
-          tip_amount_cents:0,
-        };
-        const backendId = await postCanonicalJob(payload);
-        if(backendId){
-          setJobs(js=>js.map(j=>j.id===nj.id?{...j,backendJobId:backendId}:j));
-        }
+        isPostingRef.current=false;
+        setWriteSyncNotice("Couldn't post the job — try again");
+        setTimeout(()=>setWriteSyncNotice(""),2500);
+        return;
       }
-    })();
+      const payload={
+        schema_version:1,
+        customer_id:customerId,
+        pro_id:null,
+        category:cat||"General",
+        title:title||"General service",
+        requires_diagnosis:!!requiresDiagnosis,
+        city_label:cityLabel||"Unknown",
+        address_snapshot:null,
+        lat:null,
+        lng:null,
+        fixed_customer_labor_price_cents,
+        fixed_pro_labor_payout_cents,
+        margin_rate_bps:2000,
+        emergency:!!nj.emergency,
+        emergency_fee_cents:Math.max(0,Math.floor((nj.emergencyFee||0)*100)),
+        inspection_fee_cents:requiresDiagnosis?4500:0,
+        status:"posted",
+        customer_preferences_snapshot:Array.isArray(nj.jobPreferences)?nj.jobPreferences:[],
+        payment_snapshot:{brand:nj.paymentBrand||"Card",last4:nj.paymentLast4||"----"},
+        materials_reimbursed_cents:0,
+        tip_amount_cents:0,
+      };
+      backendId = await postCanonicalJob(payload);
+      if(!backendId){
+        isPostingRef.current=false;
+        setWriteSyncNotice("Couldn't post the job — try again");
+        setTimeout(()=>setWriteSyncNotice(""),2500);
+        return;
+      }
+      nj.backendJobId=backendId;
+    }
+    setJobs(p=>[...p,nj]);setVjid(nj.id);
+    setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
+    setShowCancelConfirm(false);setShowCancelRequest(false);
+    scrubDraftFromTabMemory();
     goTo("posted");
   };
 
@@ -1537,23 +1543,32 @@ export default function App(){
       handleJobTransition(vjid,next,vj.pro?.n||"Your pro");
     }
   };
-  const cancelJobDirect=()=>{
-    // Local cancel first for responsiveness
+  const cancelJobDirect=async()=>{
+    const cfg=getSupabaseConfig();
+    // Configured backend: stay on this job unless the cancel write lands.
+    // No session does not send the demo customer and does not leave the screen.
+    if(cfg){
+      const when=new Date().toISOString();
+      const ok = vj?.backendJobId
+        ? await updateCanonicalJob(vj.backendJobId,{status:"cancelled",cancelled_at:when})
+        : false;
+      if(!ok){
+        console.warn("Haven: cancel sync failed; not advancing locally.");
+        setShowCancelConfirm(false);
+        setWriteSyncNotice("Couldn't cancel the job — try again");
+        setTimeout(()=>setWriteSyncNotice(""),2500);
+        return;
+      }
+    }
     updateJob(vjid,{status:"cancelled"});
     setShowCancelConfirm(false);
     goHome();
-    // Best-effort dual-write to canonical backend (do not block UX)
-    if(vj?.backendJobId){
-      const when=new Date().toISOString();
-      updateCanonicalJob(vj.backendJobId,{status:"cancelled",cancelled_at:when})
-        .then(ok=>{ if(!ok) console.warn("Haven: cancel dual-write failed; proceeding locally."); })
-        .catch(()=>{ /* swallow */ });
-    }
   };
   const requestCancellation=()=>{ updateJob(vjid,{cancelStatus:"requested",cancellationRequestedAt:Date.now()}); setShowCancelRequest(false); handleCancellationTransition(vjid,"requested"); };
 
   // Materials approval/decline — customer actions when vj.status === 'materials_requested'
   const [showApproveSyncFailed,setShowApproveSyncFailed]=useState(false);
+  const [writeSyncNotice,setWriteSyncNotice]=useState("");
   const approveMaterials=async()=>{
     if(!vj) return;
     const cfg=getSupabaseConfig();
@@ -1577,15 +1592,24 @@ export default function App(){
     if(!vj) return;
     const isDiag = !!vj.requiresDiagnosis;
     const nextStatus = isDiag ? "inspection_completed" : "materials_declined";
-    // Local update first for responsiveness
+    const extraFields = isDiag ? {} : {convenience_fee_cents:3000};
+    const cfg=getSupabaseConfig();
+    // Same bar as approve: a configured backend must accept the write first.
+    if(cfg){
+      const patched = vj.backendJobId
+        ? await updateCanonicalJob(vj.backendJobId,{status:nextStatus, ...extraFields})
+        : false;
+      if(!patched){
+        console.warn("Haven: materials decline sync failed; not advancing locally.");
+        setShowMaterialsDeclineConfirm(false);
+        setWriteSyncNotice("Couldn't decline materials — try again");
+        setTimeout(()=>setWriteSyncNotice(""),2500);
+        return;
+      }
+    }
     updateJob(vjid,{status:nextStatus});
     handleJobTransition(vjid,nextStatus,vj.pro?.n||"Your pro");
     setShowMaterialsDeclineConfirm(false);
-    // Prototype backend dual-write (best-effort; RLS may require assigned pro)
-    const extraFields = isDiag ? {} : {convenience_fee_cents:3000};
-    if(vj.backendJobId){
-      await updateCanonicalJob(vj.backendJobId,{status:nextStatus, ...extraFields});
-    }
   };
 
   const sendMsg=()=>{
@@ -3429,7 +3453,7 @@ export default function App(){
                 <div style={{fontWeight:700,fontSize:15,color:TX}}>Signed in</div>
                 <div style={{fontSize:13,color:TS,marginTop:4}}>{havenAuth.email}</div>
                 <div style={{fontSize:12,color:TM,marginTop:2}}>Role · {havenAuth.role||"customer"}</div>
-                <div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:10}}>Jobs you post while signed in use this account. With no session, posts still use the demo customer.</div>
+                <div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:10}}>Jobs you post while signed in use this account. With no session, the shared job write stops.</div>
                 <button type="button" onClick={()=>{void submitHavenSignOut();}} disabled={authBusy} style={{marginTop:14,width:"100%",padding:12,borderRadius:12,border:"none",background:authBusy?"#DDD9D2":"#B42318",color:W,fontWeight:700,fontSize:14,cursor:authBusy?"default":"pointer"}}>Sign out</button>
               </div>
             ):(
@@ -3490,7 +3514,7 @@ export default function App(){
           <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
             <div style={{flex:1}}>
               <div style={{fontWeight:700,fontSize:15,color:TX}}>Prototype anon mode</div>
-              <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>Default is on. This switch does not change job writes. No session still uses the demo customer.</div>
+              <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>Default is on. This switch does not change job writes. With no session, the shared job write stops.</div>
             </div>
             <button type="button" onClick={()=>{
               const next=!havenPrototypeAnonModeEnabled();
@@ -4480,6 +4504,11 @@ export default function App(){
               <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>Couldn't sync approval — try again</span>
             </div>
           )}
+          {writeSyncNotice?(
+            <div style={{position:"absolute",left:16,right:16,bottom:96,background:"#DC2626",borderRadius:14,padding:"12px 16px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)",zIndex:21}}>
+              <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>{writeSyncNotice}</span>
+            </div>
+          ):null}
         </div>
       </div>
     </>

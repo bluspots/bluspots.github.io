@@ -1,7 +1,7 @@
 // Slice 1 — Customer Supabase Auth session bootstrap.
 // Slice 2 reads this mirror for Customer job writes (backend_adapter.js):
 // a signed-in access token is the Bearer, and that user's id is customer_id.
-// No session still uses the anon key and DEMO_CUSTOMER_ID.
+// No session does not write a job and does not use DEMO_CUSTOMER_ID.
 // This file does not change lifecycle, economics, materials, or jobs RLS.
 // haven_prototype_anon_mode defaults ON. It does not choose the job identity
 // and does not require Auth for job create or lifecycle writes.

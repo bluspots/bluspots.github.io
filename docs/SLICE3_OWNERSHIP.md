@@ -2,7 +2,7 @@
 
 Founder note. This slice stops a signed-in session from writing someone else's job. It does **not** change job lifecycle statuses, pricing, materials, tips, inspection fees, or the 20/80 labor split. It does **not** retire the demo ids, lock down anonymous writes, scope reads, or fail-closed every mutation.
 
-Customer and Pro clients already send the session user id and the user access token when a session exists (Slice 2). They still use the anon key and the demo ids when no session exists. A session still never falls back to those demo ids. This slice does not change that client behavior.
+Customer and Pro clients already send the session user id and the user access token when a session exists (Slice 2). As shipped in Slice 3, no session still used the anon key and the demo ids. Slice 4 stops those signed-out writes. A session still never falls back to those demo ids.
 
 ## What to paste
 
@@ -21,7 +21,7 @@ What it adds, for role `authenticated` only:
 
 Status transitions stay on the existing permissive policies (`0006`–`0015`), including the `0015` restrictive predecessor check for `diagnosing` / `in_progress`. Those policies are `to anon, authenticated` and are OR'd with each other, so they cannot by themselves limit a signed-in user to their own rows. `0017` is restrictive and is AND-ed on top, for `authenticated` only.
 
-Anon is not covered by `0017`. Signed-out demo writes keep working through the old policies.
+Anon is not covered by `0017`. As of Slice 3, signed-out demo writes still passed the old policies. Slice 4 stops the clients from sending them. These policies are unchanged.
 
 ## How to tell a signed-in write from a signed-out demo write
 
@@ -34,11 +34,10 @@ Signed-in Customer, post a job:
 - The same user can cancel or approve/decline materials on that job.
 - A second signed-in user, using their own access token, cannot insert a row with the first user's `customer_id`, and cannot PATCH the first user's job. Postgres rejects that write (typically `42501`). It is not a silent empty update.
 
-Signed-out Customer, post a job:
+Signed-out Customer, post a job (Slice 3 behavior, retired by Slice 4):
 
-- `customer_id` is `11111111-1111-4111-8111-111111111111`.
-- `Authorization` bearer is the anon key.
-- That demo insert and the existing demo status patches still succeed. `0017` does not apply to `anon`.
+- Slice 3 sent `customer_id` `11111111-1111-4111-8111-111111111111` with the anon key as Bearer, and `0017` did not apply to `anon`.
+- Slice 4 does not send that write, and the screen does not advance.
 
 Signed-in Pro, claim a posted unassigned job:
 
@@ -48,10 +47,10 @@ Signed-in Pro, claim a posted unassigned job:
 - Later Pro updates (arrived, and the existing later statuses) succeed only when the stored `pro_id` is already that same user.
 - A signed-in Pro cannot update a job assigned to someone else.
 
-Signed-out Pro:
+Signed-out Pro (Slice 3 behavior, retired by Slice 4):
 
-- Claim still uses `pro_id` `22222222-2222-4222-8222-222222222222` and `Authorization: Bearer <anon key>`.
-- That path is unchanged.
+- Slice 3 claimed with `pro_id` `22222222-2222-4222-8222-222222222222` and `Authorization: Bearer <anon key>`.
+- Slice 4 does not send that claim, and the screen does not advance.
 
 Optional read-only check. The two new policies should be `restrictive`, command `INSERT` or `UPDATE`, roles `{authenticated}`:
 

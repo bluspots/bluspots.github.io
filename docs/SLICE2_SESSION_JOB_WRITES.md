@@ -1,5 +1,8 @@
 # Slice 2 — Signed-in Customer job writes
 
+Slice 4 is the current write rule. With no access token, Customer job creates and updates stop. They do not send `DEMO_CUSTOMER_ID` and do not send the anon key as Bearer. While Supabase is configured, create, cancel, and materials decline do not advance the screen. `DEMO_CUSTOMER_ID` remains only so a signed-in write can refuse it. The rest of this page is what Slice 2 shipped.
+
+
 Founder note. This slice binds Customer job writes to the Supabase Auth session from Slice 1. It does **not** change job lifecycle, pricing, materials, tips, inspection fees, or the 20/80 labor split. It does **not** add ownership RLS, retire `DEMO_CUSTOMER_ID`, lock down anonymous writes, or require Auth for every mutation.
 
 ## What changed
@@ -10,14 +13,16 @@ When `haven_auth_access_token` is present:
 - Every Customer job request this app already sends (`POST` create, `PATCH` cancel / materials approve / materials decline, and the existing job read) sends `Authorization: Bearer <access token>`.
 - `apikey` stays `haven_supabase_anon_key`. Supabase rejects a user JWT in `apikey`.
 
-When there is **no** access token, the demo path is unchanged:
+When there was **no** access token, Slice 2 left the demo path in place (no longer current):
 
-- `customer_id` is still `11111111-1111-4111-8111-111111111111` (`DEMO_CUSTOMER_ID`).
-- `Authorization` is still `Bearer <anon key>`.
+- `customer_id` was `11111111-1111-4111-8111-111111111111` (`DEMO_CUSTOMER_ID`).
+- `Authorization` was `Bearer <anon key>`.
+
+Slice 4 stops that path. A missing session does not send either of those.
 
 A real session never falls back to `DEMO_CUSTOMER_ID`. If a token is present but no user id can be resolved, the canonical create is skipped and the demo id is not written. Status updates that do not send `customer_id` still go out on the user bearer. `haven_prototype_anon_mode` does not choose this identity. The switch still only records later intent.
 
-`DEMO_CUSTOMER_ID` stays in the Customer app.
+`DEMO_CUSTOMER_ID` stays in the Customer app only so a signed-in write can refuse it. Signed-out job writes do not send it.
 
 ## SQL
 
@@ -51,9 +56,10 @@ If a live policy is anon-only, stop and say so. Do not invent a tighter policy i
    - The request `Authorization` bearer is the user access token.
    - `apikey` is still the anon key.
    - `status` is `posted`. Labor cents, `margin_rate_bps = 2000`, tips, materials, and inspection fee match the same booking as before.
-4. Sign out. Post another job.
-   - `customer_id` is `11111111-1111-4111-8111-111111111111`.
-   - `Authorization` bearer is the anon key.
+4. Sign out. Post another job. This is the Slice 4 check, not the Slice 2 demo write.
+   - No jobs row is created.
+   - The app does not send `DEMO_CUSTOMER_ID` and does not send the anon key as Bearer.
+   - The screen does not open Posted.
 5. Cancel, materials approve, and materials decline still send the same status values. While signed in, those PATCH calls use the user bearer.
 
 ## Explicitly not in this slice
