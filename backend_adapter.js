@@ -14,8 +14,8 @@
   // rejects a user JWT in apikey. Slice 4: with no access token, job creates
   // and updates stop. They do not send DEMO_CUSTOMER_ID and do not send the
   // anon key as Bearer. Signed-out job polls no longer hit /rest/v1/jobs
-  // (anon SELECT on the base table is revoked; use posted_jobs_public for
-  // marketplace browse only). The anon-mode flag does not choose the identity.
+  // (anon SELECT on the base table is revoked; no anonymous marketplace).
+  // The anon-mode flag does not choose the identity.
   const havenSignedInAccessToken=()=>{
     try{
       if(typeof readHavenAuthMirror!=="function") return null;

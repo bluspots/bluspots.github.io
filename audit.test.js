@@ -507,7 +507,31 @@ assert(typeof ErrorBoundary === 'function', 'ErrorBoundary class loaded from com
 
 console.log('--- Running audit ---');
 let mainContainer;
+// Account-required gate: marketplace tests run as a signed-in customer.
+function seedSignedInCustomer(){
+  storedData['haven_auth_access_token'] = 'signed-in-access-token';
+  storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  storedData['haven_auth_email'] = 'qa-customer@example.com';
+  storedData['haven_auth_role'] = 'customer';
+}
+seedSignedInCustomer();
 act(() => { mainContainer = render(React.createElement(App)).container; });
+
+step('0b. Signed-out auth gate — no marketplace without an account', () => {
+  cleanup();
+  clearHavenAuthTestKeys();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  act(() => { render(React.createElement(App), container); });
+  assert(existsRegex('Create customer account'), 'signed-out gate offers create account');
+  assert(existsRegex('Sign in'), 'signed-out gate offers sign in');
+  assert(existsRegex('Help'), 'signed-out gate offers help/support');
+  assert(!existsRegex('Mount TV'), 'signed-out gate does not show marketplace catalog');
+  assert(!existsRegex('need done'), 'signed-out gate does not show Home search');
+  cleanup();
+  seedSignedInCustomer();
+  act(() => { mainContainer = render(React.createElement(App)).container; });
+});
 
 step('1. Profile — 3 large featured cards on top, standard list below, exact row order, no My Bookings', () => {
   click('Profile');
@@ -533,9 +557,9 @@ step('2. Settings consolidation', () => {
   click('Settings');
   assert(existsRegex('Notifications') && existsRegex('Job updates'), 'Notification preferences present inside Settings');
   assert(existsRegex('Appearance') && existsRegex('System') && existsRegex('Dark'), 'Appearance options present inside Settings');
-  assert(existsRegex('Create customer account'), 'Settings includes Customer sign-up');
+  assert(existsRegex('Signed in') || existsRegex('qa-customer@example.com'), 'Settings shows signed-in account');
   assert(existsRegex('Prototype anon mode'), 'Settings shows the demo anon flag');
-  assert(existsRegex('the shared job write stops'), 'Signed-out job writes stop instead of using the demo customer');
+  assert(existsRegex('Jobs you post while signed in use this account') || existsRegex('Sign out'), 'Settings shows signed-in job identity copy');
   assert(existsRegex('This switch does not change job writes'), 'Prototype anon mode does not choose the job identity');
   assert(document.querySelector('[aria-label="Prototype anon mode"]')?.getAttribute('aria-checked') === 'true', 'Prototype anon mode defaults on');
   click('Dark');
@@ -1620,17 +1644,11 @@ async function runSlice2SessionWriteChecks(){
     let signedOutRender;
     await act(async () => { signedOutRender = render(React.createElement(App), signedOut); });
     mainContainer = (signedOutRender && signedOutRender.container) ? signedOutRender.container : signedOut;
-    click('Mount TV');
-    selectNonSurgeTimeWindow();
-    const demoBtn = getPostJobButton();
-    assert(!!demoBtn, 'Post Job is available for the signed-out create');
-    calls.length = 0;
-    if (demoBtn) {
-      await act(async () => { fireEvent.click(demoBtn); });
-      await new Promise((resolve) => setTimeout(resolve, 400));
-    }
-    const demoPost = findPost();
-    assert(!demoPost, 'signed-out create does not POST a job');
+    assert(existsRegex('Create customer account'), 'signed-out UI is the auth gate');
+    assert(existsRegex('Sign in'), 'signed-out UI offers sign in');
+    assert(!existsRegex('Mount TV'), 'signed-out UI does not open the marketplace');
+    assert(!getPostJobButton(), 'Post Job is not available when signed out');
+    assert(calls.length === 0, 'signed-out auth gate does not call the jobs API');
     const wroteDemo = calls.some(c => {
       const headers = (c.opts && c.opts.headers) || {};
       const blob = String(c.url) + ' ' + ((c.opts && c.opts.body) || '') + ' ' + (headers.Authorization || '');
@@ -1703,15 +1721,17 @@ async function runApproveAndDeclineChecks(){
   const mount = async (job, { backend = true } = {}) => {
     cleanup();
     remoteStatus = job.status;
+    // Account required — keep a signed-in mirror so Bookings UI is reachable.
+    storedData['haven_auth_access_token'] = 'signed-in-access-token';
+    storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    storedData['haven_auth_email'] = 'qa-customer@example.com';
+    storedData['haven_auth_role'] = 'customer';
     if (backend) {
       storedData['haven_supabase_url'] = 'https://example.supabase.co';
       storedData['haven_supabase_anon_key'] = 'test-anon-key';
-      storedData['haven_auth_access_token'] = 'signed-in-access-token';
-      storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     } else {
       delete storedData['haven_supabase_url'];
       delete storedData['haven_supabase_anon_key'];
-      clearHavenAuthTestKeys();
     }
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
@@ -1925,6 +1945,8 @@ async function runArrivedVisibilityChecks(){
     // Signed-in poll only — anon base-table SELECT is revoked.
     storedData['haven_auth_access_token'] = 'signed-in-access-token';
     storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+    storedData['haven_auth_email'] = 'qa-customer@example.com';
+    storedData['haven_auth_role'] = 'customer';
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
     const container = document.createElement('div');

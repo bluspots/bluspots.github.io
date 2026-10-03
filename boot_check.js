@@ -37,6 +37,7 @@ if (typeof App !== 'function') { console.error('BOOT CHECK FAILED: App not defin
 if (typeof ErrorBoundary !== 'function') { console.error('BOOT CHECK FAILED: ErrorBoundary not defined in shipped script block'); process.exit(1); }
 
 act(() => { render(React.createElement(ErrorBoundary, null, React.createElement(App))); });
-const booted = !!screen.queryByText(/need done/);
-console.log(booted ? 'BOOT CHECK OK: prototype.html\'s actual shipped script block renders the Home screen, wrapped in ErrorBoundary' : 'BOOT CHECK FAILED: Home screen did not render');
+// Account required: signed-out boot is the auth gate, not the marketplace Home.
+const booted = !!(screen.queryByText(/Create customer account/i) || screen.queryByText(/Sign in or create an account/i));
+console.log(booted ? "BOOT CHECK OK: prototype.html's actual shipped script block renders the signed-out auth gate, wrapped in ErrorBoundary" : 'BOOT CHECK FAILED: auth gate did not render');
 process.exit(booted ? 0 : 1);
