@@ -1472,6 +1472,16 @@ async function runSlice2SessionWriteChecks(){
     if (method === 'POST') {
       return { ok: true, status: 201, json: async () => [{ id: 'cccccccc-dddd-4eee-8fff-000000000001' }], text: async () => '' };
     }
+    if (method === 'PATCH') {
+      let body = {};
+      try { body = JSON.parse((opts && opts.body) || '{}'); } catch { body = {}; }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => [{ id: 'cccccccc-dddd-4eee-8fff-000000000001', status: body.status || 'materials_approved' }],
+        text: async () => '',
+      };
+    }
     return { ok: true, status: 200, json: async () => [], text: async () => '' };
   };
 
@@ -1620,7 +1630,7 @@ async function runApproveAndDeclineChecks(){
       patches.push(body);
       if (!patchOk) return { ok: false, status: 403, json: async () => ({}), text: async () => 'denied' };
       if (body.status) remoteStatus = body.status;
-      return { ok: true, json: async () => ({}), text: async () => '' };
+      return { ok: true, json: async () => [{ id: backendId, status: remoteStatus, ...body }], text: async () => '' };
     }
     if (u.includes('/rest/v1/jobs')) {
       return { ok: true, json: async () => [{ id: backendId, status: remoteStatus }], text: async () => '' };
@@ -1681,6 +1691,30 @@ async function runApproveAndDeclineChecks(){
     assert(!existsRegex('pro is buying'), 'Failed approve does not local-advance to materials approved');
     const failedJobs = JSON.parse(storedData['haven_jobs']);
     assert(failedJobs.data[0].status === 'materials_requested', 'Failed approve does not persist a local advance');
+
+    // Slice 5: 2xx with an empty representation is not a landed write.
+    const origFetchEmpty = global.fetch;
+    global.fetch = async (url, opts) => {
+      const method = (opts && opts.method) || 'GET';
+      const u = String(url);
+      if (u.includes('/rest/v1/jobs') && method === 'PATCH') {
+        patches.push({});
+        return { ok: true, status: 200, json: async () => [], text: async () => '' };
+      }
+      if (u.includes('/rest/v1/jobs')) {
+        return { ok: true, json: async () => [{ id: backendId, status: remoteStatus }], text: async () => '' };
+      }
+      return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+    };
+    patches.length = 0;
+    await mount(makeJob(9106));
+    const approveEmpty = byText('Approve materials');
+    await act(async () => { fireEvent.click(approveEmpty); });
+    await act(async () => { await delay(40); });
+    assert(existsRegex("Couldn't sync approval"), 'Empty representation approve shows an error toast');
+    assert(existsRegex('Materials needed'), 'Empty representation approve stays on the materials request');
+    assert(JSON.parse(storedData['haven_jobs']).data[0].status === 'materials_requested', 'Empty representation approve does not persist a local advance');
+    global.fetch = origFetchEmpty;
 
     patchOk = true;
     patches.length = 0;

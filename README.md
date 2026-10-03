@@ -12,6 +12,7 @@ acceptance, pro replies, and completion details are simulated. See
 Pro App.
 
 Signed-out job writes do not use the demo customer. See `docs/SLICE4_DEMO_RETIREMENT.md`.
+Job mutations fail closed when Supabase is configured. See `docs/SLICE5_FAIL_CLOSED.md`.
 
 ## Quick start
 

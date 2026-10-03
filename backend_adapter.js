@@ -144,7 +144,7 @@
     }
   };
   // Prototype PATCH helper — updates fields on jobs by backend UUID.
-  // RLS currently allows terminals (inspection_completed/materials_declined) on assigned rows.
+  // Slice 5: a 2xx with no returned row is a failed write. Do not treat it as landed.
   const updateCanonicalJob=async(backendJobId,fields)=>{
     const cfg=getSupabaseConfig();
     if(!cfg||!backendJobId) return false;
@@ -158,7 +158,7 @@
     }
     const headers=havenJobRestHeaders({
       "Content-Type":"application/json",
-      "Prefer":"return=minimal",
+      "Prefer":"return=representation",
     });
     if(!headers) return false;
     try{
@@ -171,6 +171,20 @@
         const text=await res.text().catch(()=>"(no body)");
         console.warn("Haven CHUNK3 update failed:", res.status, text);
         return false;
+      }
+      let rows=[];
+      try{ rows=await res.json(); }catch{ rows=[]; }
+      if(!Array.isArray(rows) || rows.length===0){
+        console.warn("Haven CHUNK3 update returned no row; not treating as landed.");
+        return false;
+      }
+      const wantStatus=fields && Object.prototype.hasOwnProperty.call(fields,"status") ? String(fields.status) : "";
+      if(wantStatus){
+        const landed=rows.some(r=>r && String(r.id).toLowerCase()===String(backendJobId).toLowerCase() && String(r.status)===wantStatus);
+        if(!landed){
+          console.warn("Haven CHUNK3 update returned no matching status row; not treating as landed.");
+          return false;
+        }
       }
       return true;
     }catch(err){
