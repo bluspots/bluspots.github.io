@@ -399,6 +399,7 @@ const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports11 = typeof havenJobRestHeaders !== 'undefined' ? havenJobRestHeaders : undefined;
   module.exports12 = typeof postCanonicalJob !== 'undefined' ? postCanonicalJob : undefined;
   module.exports13 = typeof updateCanonicalJob !== 'undefined' ? updateCanonicalJob : undefined;
+  module.exports14 = typeof fetchCanonicalJobsByIds !== 'undefined' ? fetchCanonicalJobsByIds : undefined;
 })`;
 const moduleObj = { exports: {} };
 eval(wrapped)(React, React.useState, React.useRef, React.useEffect, moduleObj);
@@ -416,6 +417,7 @@ const havenJobCustomerId = moduleObj.exports10;
 const havenJobRestHeaders = moduleObj.exports11;
 const postCanonicalJob = moduleObj.exports12;
 const updateCanonicalJob = moduleObj.exports13;
+const fetchCanonicalJobsByIds = moduleObj.exports14;
 
 function havenTestJwt(sub){
   const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
@@ -1482,7 +1484,15 @@ async function runSlice2SessionWriteChecks(){
         text: async () => '',
       };
     }
-    return { ok: true, status: 200, json: async () => [], text: async () => '' };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => [
+        { id: 'cccccccc-dddd-4eee-8fff-000000000001', status: 'arrived', customer_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' },
+        { id: 'cccccccc-dddd-4eee-8fff-000000000001', status: 'posted', customer_id: 'dddddddd-eeee-4fff-8aaa-bbbbbbbbbbbb' },
+      ],
+      text: async () => '',
+    };
   };
 
   const authUserId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -1530,6 +1540,28 @@ async function runSlice2SessionWriteChecks(){
     assert(stamped === false, 'signed-in update that stamps DEMO_CUSTOMER_ID is refused');
     assert(!calls.some(c => c.opts.method === 'PATCH'), 'refused demo stamp does not PATCH');
 
+    calls.length = 0;
+    const scoped = await fetchCanonicalJobsByIds(['cccccccc-dddd-4eee-8fff-000000000001']);
+    const scopedRead = calls.find(c => String(c.url).includes('/rest/v1/jobs'));
+    assert(!!scopedRead, 'signed-in poll calls the jobs API');
+    if (scopedRead) {
+      assert((!scopedRead.opts.method || scopedRead.opts.method === 'GET'), 'signed-in poll is a read');
+      assert(scopedRead.opts.headers.Authorization === 'Bearer signed-in-access-token', 'signed-in poll uses the user bearer');
+      assert(scopedRead.opts.headers.apikey === 'test-anon-key', 'signed-in poll keeps the anon apikey');
+      assert(scopedRead.url.includes('id=in.(cccccccc-dddd-4eee-8fff-000000000001)'), 'signed-in poll asks only for the linked ids');
+      assert(scopedRead.url.includes('customer_id=eq.' + authUserId), 'signed-in poll filters customer_id to that user');
+      assert(!scopedRead.url.includes(DEMO_CUSTOMER_ID), 'signed-in poll does not send DEMO_CUSTOMER');
+      assert(!scopedRead.url.endsWith('select=id,status,materials_items,materials_estimate_cents'), 'signed-in poll is not an unscoped jobs read');
+    }
+    assert(scoped.length === 1 && scoped[0].customer_id === authUserId, 'signed-in poll drops rows for another customer');
+
+    storedData['haven_auth_user_id'] = DEMO_CUSTOMER_ID;
+    calls.length = 0;
+    const demoScoped = await fetchCanonicalJobsByIds(['cccccccc-dddd-4eee-8fff-000000000001']);
+    assert(demoScoped.length === 0, 'a session stored as the demo id does not poll');
+    assert(calls.length === 0, 'a session stored as the demo id does not send DEMO_CUSTOMER');
+    storedData['haven_auth_user_id'] = authUserId;
+
     cleanup();
     calls.length = 0;
     const container = document.createElement('div');
@@ -1573,6 +1605,17 @@ async function runSlice2SessionWriteChecks(){
     assert(stoppedUpdate === false, 'signed-out update does not send');
     assert(!calls.some(c => c.opts.method === 'POST' || c.opts.method === 'PATCH'), 'signed-out update does not PATCH and does not use the anon bearer');
 
+    calls.length = 0;
+    await fetchCanonicalJobsByIds(['cccccccc-dddd-4eee-8fff-000000000001']);
+    const signedOutRead = calls.find(c => String(c.url).includes('/rest/v1/jobs'));
+    assert(!!signedOutRead, 'signed-out poll of a linked id still reads');
+    if (signedOutRead) {
+      assert(signedOutRead.opts.headers.Authorization === 'Bearer test-anon-key', 'signed-out poll uses the anon bearer');
+      assert(signedOutRead.opts.headers.apikey === 'test-anon-key', 'signed-out poll apikey stays the anon key');
+      assert(!signedOutRead.url.includes(DEMO_CUSTOMER_ID), 'signed-out poll does not send DEMO_CUSTOMER');
+      assert(!signedOutRead.url.includes('customer_id=eq.'), 'signed-out poll does not query as a customer id');
+    }
+
     delete storedData['haven_draft'];
     cleanup();
     calls.length = 0;
@@ -1599,6 +1642,13 @@ async function runSlice2SessionWriteChecks(){
       return blob.includes(DEMO_CUSTOMER_ID) || (write && headers.Authorization === 'Bearer test-anon-key');
     });
     assert(!wroteDemo, 'signed-out create does not send the demo customer id or an anon bearer write');
+
+    delete storedData['haven_supabase_url'];
+    delete storedData['haven_supabase_anon_key'];
+    calls.length = 0;
+    const unconfigured = await fetchCanonicalJobsByIds(['cccccccc-dddd-4eee-8fff-000000000001']);
+    assert(unconfigured.length === 0, 'unconfigured preview poll returns no rows');
+    assert(calls.length === 0, 'unconfigured preview does not call the jobs API');
   } catch (e) {
     fail++;
     console.error('FAIL (slice 2 session writes):', (e && e.stack) || e);

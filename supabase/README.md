@@ -39,4 +39,5 @@ Applying migrations
 - Slice 3 (`0017_auth_job_ownership.sql`) adds restrictive `authenticated` ownership policies on `public.jobs`. Anon demo writes stay on the 0002–0015 permissive policies. See `docs/SLICE3_OWNERSHIP.md`.
 - Slice 4 (`0018_retire_demo_pro_claim.sql`) makes `pro_claim_job` fail when `auth.uid()` is null instead of assigning the demo pro. Signed-out Customer and Pro job writes stop in the clients. See `docs/SLICE4_DEMO_RETIREMENT.md`.
 - Slice 5 does not add a migration. Configured job mutations wait for a landed server write before the local screen advances. See `docs/SLICE5_FAIL_CLOSED.md`.
+- Slice 6 does not add a migration. Signed-in job reads use the user access token and a client filter (`customer_id` for Customer; posted and unclaimed for the Pro board). See `docs/SLICE6_SCOPED_READS.md`.
 
