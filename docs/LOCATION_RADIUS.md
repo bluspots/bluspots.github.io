@@ -20,4 +20,4 @@ What it does:
 
 This file was not applied.
 
-The Mapbox public token is not in git. GitHub push protection rejects the pk value. On each device set localStorage `haven_mapbox_public_token` to that pk token, next to the Supabase anon key. If it is missing, or does not start with `pk.`, geocoding fails closed and the job is not created.
+The Mapbox public pk token ships in `geocode.js`, so GitHub Pages geocodes without a browser setting. No secret sk token is used. A failed lookup still fails closed.

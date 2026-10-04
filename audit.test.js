@@ -1539,7 +1539,6 @@ async function runSlice2SessionWriteChecks(){
     storedData['haven_auth_email'] = 'customer@example.com';
     storedData['haven_auth_role'] = 'customer';
     storedData['haven_prototype_anon_mode'] = '1';
-    storedData['haven_mapbox_public_token'] = 'pk.audit-only';
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [] });
     delete storedData['haven_draft'];
     storedData['haven_addresses'] = JSON.stringify({__v:1, data:[
