@@ -1017,8 +1017,9 @@ function matchDiagnosis(text){
   // Authorization is the access token. apikey stays the anon key — Supabase
   // rejects a user JWT in apikey. Slice 4: with no access token, job creates
   // and updates stop. They do not send DEMO_CUSTOMER_ID and do not send the
-  // anon key as Bearer. Reads may still use the anon key. The anon-mode flag
-  // does not choose the identity. This slice does not lock down anon grants.
+  // anon key as Bearer. Signed-out job polls no longer hit /rest/v1/jobs
+  // (anon SELECT on the base table is revoked; no anonymous marketplace).
+  // The anon-mode flag does not choose the identity.
   const havenSignedInAccessToken=()=>{
     try{
       if(typeof readHavenAuthMirror!=="function") return null;
@@ -1199,28 +1200,25 @@ function matchDiagnosis(text){
 
   // Poll/rehydrate of locally linked jobs. Not the whole table.
   // Signed in: user access token and customer_id = that user. apikey stays the anon key.
-  // Signed out: anon bearer on those ids only. Never DEMO_CUSTOMER_ID.
-  // No Supabase config: caller does not reach a jobs request (returns []).
+  // Signed out: do not call /rest/v1/jobs. Anon SELECT on the base table is revoked;
+  // a crafted anon poll must not pull private lifecycle rows. Local UI state stays.
+  // Never DEMO_CUSTOMER_ID. No Supabase config: no jobs request (returns []).
   const fetchCanonicalJobsByIds=async(backendIds)=>{
     const cfg=getSupabaseConfig();
     if(!cfg) return [];
     if(!backendIds||backendIds.length===0) return [];
     const unique=[...new Set(backendIds.filter(Boolean))];
     if(unique.length===0) return [];
-    const inList=unique.map(id=>encodeURIComponent(id)).join(",");
     const token=havenSignedInAccessToken();
-    const customerId=token ? havenJobCustomerId() : "";
-    let headers;
-    let url;
-    if(token){
-      if(!customerId) return [];
-      headers={"Accept":"application/json", apikey:cfg.anonKey, Authorization:`Bearer ${token}`};
-      url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,materials_items,materials_estimate_cents`;
-    }else{
-      headers=havenJobRestHeaders();
-      if(!headers) return [];
-      url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&select=id,status,materials_items,materials_estimate_cents`;
+    if(!token){
+      // Signed-out: stop. Do not browse private lifecycle through the anon key.
+      return [];
     }
+    const customerId=havenJobCustomerId();
+    if(!customerId) return [];
+    const inList=unique.map(id=>encodeURIComponent(id)).join(",");
+    const headers={"Accept":"application/json", apikey:cfg.anonKey, Authorization:`Bearer ${token}`};
+    const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,materials_items,materials_estimate_cents`;
     if(String(url).includes("11111111-1111-4111-8111-111111111111")) return [];
     try{
       const res=await fetch(url,{
@@ -1233,9 +1231,7 @@ function matchDiagnosis(text){
       }
       let rows=await res.json();
       if(!Array.isArray(rows)) return [];
-      if(token){
-        rows=rows.filter(r=>r && havenSameCustomerId(r.customer_id, customerId));
-      }
+      rows=rows.filter(r=>r && havenSameCustomerId(r.customer_id, customerId));
       return rows;
     }catch(err){
       console.warn("Haven CHUNK4 fetch error:", err);
@@ -5951,6 +5947,34 @@ function App(){
   // a light header — used only to color the safe-area spacer so it blends
   // seamlessly with whichever screen is showing (no visible seam at the top).
   const topIsDark=["task","custom","diagnose","emergency"].includes(scr)||(scr==="home"&&tab==="home");
+  // Account required. Signed-out callers never reach marketplace / jobs screens.
+  const havenSignedIn=!!(havenAuth && (havenAuth.accessToken || havenAuth.userId) && havenAuth.email);
+  const authGateScreen=()=>(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      <div style={{padding:"48px 24px 20px",background:`linear-gradient(180deg, ${N} 0%, ${BG} 100%)`}}>
+        <div style={{fontSize:13,fontWeight:800,color:"rgba(255,255,255,.72)",letterSpacing:1.2,textTransform:"uppercase",marginBottom:8}}>Haven</div>
+        <div style={{fontSize:28,fontWeight:900,color:W,lineHeight:1.15,marginBottom:10}}>Home help,<br/>on your terms.</div>
+        <div style={{fontSize:13,fontWeight:500,color:"rgba(255,255,255,.78)",lineHeight:1.5}}>Create an account or sign in to book and track jobs. There is no signed-out marketplace.</div>
+      </div>
+      <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16}}>
+          <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:10}}>Sign in or create an account</div>
+          <div style={{background:BG,borderRadius:12,padding:"12px 14px",marginBottom:10}}>
+            <input value={authEmailInput} onChange={e=>setAuthEmailInput(e.target.value)} type="email" autoComplete="email" placeholder="you@email.com" aria-label="Email" style={{width:"100%",border:"none",fontSize:14,fontWeight:500,color:TX,background:"transparent",outline:"none",padding:0}}/>
+          </div>
+          <div style={{background:BG,borderRadius:12,padding:"12px 14px",marginBottom:12}}>
+            <input value={authPasswordInput} onChange={e=>setAuthPasswordInput(e.target.value)} type="password" autoComplete="current-password" placeholder="Password" aria-label="Password" style={{width:"100%",border:"none",fontSize:14,fontWeight:500,color:TX,background:"transparent",outline:"none",padding:0}}/>
+          </div>
+          <button type="button" onClick={()=>{void submitHavenAuth("signin");}} disabled={authBusy} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:authBusy?"#DDD9D2":N,color:W,fontWeight:800,fontSize:15,cursor:authBusy?"default":"pointer",marginBottom:8}}>Sign in</button>
+          <button type="button" onClick={()=>{void submitHavenAuth("signup");}} disabled={authBusy} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:15,cursor:authBusy?"default":"pointer"}}>Create customer account</button>
+          {authNotice?(<div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:12}}>{authNotice}</div>):null}
+        </div>
+        <button type="button" onClick={()=>openHelp()} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:W,color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>Help &amp; Support</button>
+        <div style={{fontSize:11,color:TM,lineHeight:1.5,textAlign:"center",padding:"4px 8px"}}>By continuing you agree to Haven&apos;s Terms of Service and Privacy Policy.</div>
+      </div>
+    </div>
+  );
+
 
   // Parameterized render switch — identical to the old inline conditional
   // block, just taking (targetScr, targetTab) instead of always reading the
@@ -6016,12 +6040,14 @@ function App(){
                   </div>
                 )}
                 <div style={{position:gestureActive?"absolute":"relative",inset:0,display:"flex",flexDirection:"column",height:"100%",transform:gestureActive?`translateX(${renderedDragX}px)`:"none",transition:settleTransition,zIndex:1,background:BG,boxShadow:gestureActive&&renderedDragX>0?"-8px 0 24px rgba(0,0,0,.15)":"none"}}>
-                  {renderScreenFor(scr,tab)}
+                  {!havenSignedIn
+                    ? (scr==="help" ? renderScreenFor("help", tab) : authGateScreen())
+                    : renderScreenFor(scr,tab)}
                 </div>
               </div>
             );
           })()}
-          {bottomNav()}
+          {havenSignedIn && bottomNav()}
           {showDiscardConfirm&&(
             <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:10}}>
               <div style={{background:W,borderRadius:"20px 20px 0 0",padding:24,width:"100%"}}>

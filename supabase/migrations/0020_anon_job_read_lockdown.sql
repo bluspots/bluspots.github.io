@@ -1,0 +1,23 @@
+-- Haven shared backend — anonymous job-read lockdown
+-- Purpose: both Haven Customer and Haven Pro require an account. There is no
+--   signed-out marketplace. A signed-out / anonymous caller must not SELECT
+--   public.jobs at all (no browse, no private lifecycle rows, no payouts).
+--
+-- Signed-in Customer and Pro reads keep using public.jobs with the user
+--   access token (authenticated SELECT grant and policies unchanged).
+--
+-- Does NOT create a public view or RPC.
+-- Does NOT revoke authenticated SELECT on public.jobs.
+-- Does NOT re-revoke Slice 7 write grants and does not undo them.
+-- Does NOT add a SELECT policy that widens access.
+-- Does NOT change lifecycle, pricing, the 20/80 split, materials, tips,
+--   inspection fees, categories, or role profiles.
+--
+-- Apply in the Supabase SQL editor as the database owner, AFTER 0019.
+-- Do not apply from the app. Safe to re-run.
+
+-- Original grant: 0002_chunk2_rls.sql / 0003_chunk2_grants.sql
+--   grant select, insert on public.jobs to anon, authenticated;
+-- Slice 7 already revoked anon INSERT. This revokes anon SELECT only.
+-- authenticated SELECT on public.jobs is unchanged.
+revoke select on public.jobs from anon;
