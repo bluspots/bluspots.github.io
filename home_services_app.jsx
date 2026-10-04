@@ -1560,6 +1560,21 @@ export default function App(){
         setTimeout(()=>setWriteSyncNotice(""),2500);
         return;
       }
+      // Geocode only when this job is created. There is no later edit of the
+      // stored service address. A failed lookup does not insert a job with
+      // null coordinates (those would be invisible and unclaimable).
+      const serviceAddress = selectedAddress ? formatAddress(selectedAddress) : "";
+      let servicePoint = null;
+      if (typeof havenGeocodeAddress === "function") {
+        try { servicePoint = await havenGeocodeAddress(serviceAddress); }
+        catch (e) { servicePoint = null; }
+      }
+      if (!servicePoint || servicePoint.lat == null || servicePoint.lng == null) {
+        isPostingRef.current=false;
+        setWriteSyncNotice("Couldn't locate that address — try again");
+        setTimeout(()=>setWriteSyncNotice(""),2500);
+        return;
+      }
       const payload={
         schema_version:1,
         customer_id:customerId,
@@ -1569,8 +1584,8 @@ export default function App(){
         requires_diagnosis:!!requiresDiagnosis,
         city_label:cityLabel||"Unknown",
         address_snapshot:null,
-        lat:null,
-        lng:null,
+        lat:servicePoint.lat,
+        lng:servicePoint.lng,
         fixed_customer_labor_price_cents,
         fixed_pro_labor_payout_cents,
         margin_rate_bps:2000,
