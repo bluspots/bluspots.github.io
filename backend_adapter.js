@@ -1,3 +1,7 @@
+  // Real jobs must not display this pro. Catalog Marcus is not a backend identity.
+  const DEMO_PRO_ID = "22222222-2222-4222-8222-222222222222";
+  let havenProLabelRpcUnavailable = false;
+
   // ── Supabase REST dual‑write helper (CHUNK 2 prototype) ─────────────────────
   // Reads config from localStorage; if missing, dual‑write is a no‑op.
   const getSupabaseConfig=()=>{
@@ -214,7 +218,7 @@
     if(!customerId) return [];
     const inList=unique.map(id=>encodeURIComponent(id)).join(",");
     const headers={"Accept":"application/json", apikey:cfg.anonKey, Authorization:`Bearer ${token}`};
-    const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,materials_items,materials_estimate_cents`;
+    const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,pro_id,materials_items,materials_estimate_cents`;
     if(String(url).includes("11111111-1111-4111-8111-111111111111")) return [];
     try{
       const res=await fetch(url,{
@@ -234,3 +238,46 @@
       return [];
     }
   };
+
+  // Display name for the pro on jobs this customer owns. Not a profile directory.
+  // Returns {} when 0022 is not pasted yet. Never falls back to DEMO_PRO_ID.
+  const fetchAssignedProLabels=async(backendIds)=>{
+    if(havenProLabelRpcUnavailable) return {};
+    const cfg=getSupabaseConfig();
+    if(!cfg) return {};
+    if(!backendIds||backendIds.length===0) return {};
+    const unique=[...new Set(backendIds.filter(Boolean))];
+    if(unique.length===0) return {};
+    const token=havenSignedInAccessToken();
+    if(!token) return {};
+    const headers={
+      "Accept":"application/json",
+      "Content-Type":"application/json",
+      apikey:cfg.anonKey,
+      Authorization:`Bearer ${token}`,
+    };
+    try{
+      const res=await fetch(`${cfg.url}/rest/v1/rpc/job_assigned_pro_labels`,{
+        method:"POST",
+        headers,
+        body:JSON.stringify({p_job_ids:unique}),
+      });
+      if(res.status===404){
+        havenProLabelRpcUnavailable=true;
+        return {};
+      }
+      if(!res.ok) return {};
+      const rows=await res.json();
+      if(!Array.isArray(rows)) return {};
+      const out={};
+      rows.forEach(r=>{
+        if(!r||!r.job_id) return;
+        const name=r.display_name!=null?String(r.display_name).trim():"";
+        if(name) out[String(r.job_id)]=name;
+      });
+      return out;
+    }catch(err){
+      return {};
+    }
+  };
+
