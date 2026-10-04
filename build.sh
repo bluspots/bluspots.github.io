@@ -34,6 +34,7 @@ SOURCE_FILES=(
   "backend_adapter.js"
   "auth_session.js"
   "job_factories.js"
+  "geocode.js"
   "home_services_app.jsx"
 )
 

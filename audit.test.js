@@ -378,6 +378,7 @@ const SOURCE_FILES = [
   'backend_adapter.js',
   'auth_session.js',
   'job_factories.js',
+  'geocode.js',
   'home_services_app.jsx',
 ];
 const concatenated = SOURCE_FILES.map(f => fs.readFileSync(f, 'utf8')).join('\n');
@@ -1495,6 +1496,14 @@ async function runSlice2SessionWriteChecks(){
   global.fetch = async (url, opts) => {
     calls.push({ url: String(url), opts: opts || {} });
     const method = (opts && opts.method) || 'GET';
+    if (String(url).includes("api.mapbox.com/search/geocode")) {
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({ features: [{ geometry: { type: "Point", coordinates: [-122.401, 37.789] } }] }),
+        text: async () => "",
+      };
+    }
     if (method === 'POST') {
       return { ok: true, status: 201, json: async () => [{ id: 'cccccccc-dddd-4eee-8fff-000000000001' }], text: async () => '' };
     }
@@ -1617,6 +1626,9 @@ async function runSlice2SessionWriteChecks(){
       assert(body.tip_amount_cents === 0, 'create tip stays 0');
       assert(body.materials_reimbursed_cents === 0, 'create materials reimbursement stays 0');
       assert(body.emergency_fee_cents === 0, 'non-emergency fee stays 0');
+      assert(body.lat === 37.789 && body.lng === -122.401, 'signed-in create stores the geocoded service point');
+      const geocodes = calls.filter(c => String(c.url).includes("api.mapbox.com/search/geocode"));
+      assert(geocodes.length === 1, 'Mapbox runs once when the job is created');
     }
 
     clearHavenAuthTestKeys();
