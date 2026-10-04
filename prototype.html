@@ -1002,6 +1002,10 @@ function matchDiagnosis(text){
   return {...best,conf};
 }
 
+  // Real jobs must not display this pro. Catalog Marcus is not a backend identity.
+  const DEMO_PRO_ID = "22222222-2222-4222-8222-222222222222";
+  let havenProLabelRpcUnavailable = false;
+
   // ── Supabase REST dual‑write helper (CHUNK 2 prototype) ─────────────────────
   // Reads config from localStorage; if missing, dual‑write is a no‑op.
   const getSupabaseConfig=()=>{
@@ -1218,7 +1222,7 @@ function matchDiagnosis(text){
     if(!customerId) return [];
     const inList=unique.map(id=>encodeURIComponent(id)).join(",");
     const headers={"Accept":"application/json", apikey:cfg.anonKey, Authorization:`Bearer ${token}`};
-    const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,materials_items,materials_estimate_cents`;
+    const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,pro_id,materials_items,materials_estimate_cents`;
     if(String(url).includes("11111111-1111-4111-8111-111111111111")) return [];
     try{
       const res=await fetch(url,{
@@ -1238,6 +1242,49 @@ function matchDiagnosis(text){
       return [];
     }
   };
+
+  // Display name for the pro on jobs this customer owns. Not a profile directory.
+  // Returns {} when 0022 is not pasted yet. Never falls back to DEMO_PRO_ID.
+  const fetchAssignedProLabels=async(backendIds)=>{
+    if(havenProLabelRpcUnavailable) return {};
+    const cfg=getSupabaseConfig();
+    if(!cfg) return {};
+    if(!backendIds||backendIds.length===0) return {};
+    const unique=[...new Set(backendIds.filter(Boolean))];
+    if(unique.length===0) return {};
+    const token=havenSignedInAccessToken();
+    if(!token) return {};
+    const headers={
+      "Accept":"application/json",
+      "Content-Type":"application/json",
+      apikey:cfg.anonKey,
+      Authorization:`Bearer ${token}`,
+    };
+    try{
+      const res=await fetch(`${cfg.url}/rest/v1/rpc/job_assigned_pro_labels`,{
+        method:"POST",
+        headers,
+        body:JSON.stringify({p_job_ids:unique}),
+      });
+      if(res.status===404){
+        havenProLabelRpcUnavailable=true;
+        return {};
+      }
+      if(!res.ok) return {};
+      const rows=await res.json();
+      if(!Array.isArray(rows)) return {};
+      const out={};
+      rows.forEach(r=>{
+        if(!r||!r.job_id) return;
+        const name=r.display_name!=null?String(r.display_name).trim():"";
+        if(name) out[String(r.job_id)]=name;
+      });
+      return out;
+    }catch(err){
+      return {};
+    }
+  };
+
 // Slice 1 — Customer Supabase Auth session bootstrap.
 // Slice 2 reads this mirror for Customer job writes (backend_adapter.js):
 // a signed-in access token is the Bearer, and that user's id is customer_id.
@@ -1548,6 +1595,52 @@ function makeNotification({
 // Recognized so a job write can refuse it. Signed-out job writes do not send it.
 // A signed-in session uses that user's id and must not fall back to this one.
 const DEMO_CUSTOMER_ID = "11111111-1111-4111-8111-111111111111";
+// Card for the pro stored on a backend job. Never the catalog demo pro.
+function havenRealProCard(proId, displayName) {
+  const name = (displayName && String(displayName).trim()) || "Haven Pro";
+  const parts = name.split(/\s+/).filter(Boolean);
+  const initials = parts.length >= 2
+    ? (parts[0][0] + parts[parts.length - 1][0]).toUpperCase()
+    : (name.slice(0, 2).toUpperCase() || "HP");
+  return {
+    i: initials,
+    n: name,
+    s: "Haven Pro",
+    col: "#134E4A",
+    r: null,
+    j: null,
+    memberSince: null,
+    trustScore: null,
+    proId: proId || null,
+    real: true,
+  };
+}
+function attachBackendPro(job, row, label) {
+  if (!job || !row || row.pro_id == null || row.pro_id === "") return job;
+  const proId = String(row.pro_id);
+  if (typeof DEMO_PRO_ID === "string" && proId.toLowerCase() === DEMO_PRO_ID.toLowerCase()) return job;
+  const fromLabel = label && String(label).trim();
+  const same = job.backendProId && String(job.backendProId).toLowerCase() === proId.toLowerCase();
+  const kept = same && job.backendProName ? String(job.backendProName).trim() : "";
+  const name = fromLabel || kept;
+  return {
+    ...job,
+    backendProId: proId,
+    backendProName: name,
+    pro: havenRealProCard(proId, name),
+  };
+}
+function proShownForJob(job) {
+  if (!job) return PROS[0];
+  const backendProId = job.backendProId ? String(job.backendProId) : "";
+  if (backendProId && (typeof DEMO_PRO_ID !== "string" || backendProId.toLowerCase() !== DEMO_PRO_ID.toLowerCase())) {
+    if (job.pro && job.pro.proId && String(job.pro.proId).toLowerCase() === backendProId.toLowerCase()) return job.pro;
+    return havenRealProCard(backendProId, job.backendProName || "");
+  }
+  if (job.pro) return job.pro;
+  if (job.backendJobId) return havenRealProCard(null, "");
+  return PROS[0];
+}
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
 const TIME_PREFS=[
   {id:1,label:"ASAP",          sub:"Within 2 hours",              surge:10},
@@ -2294,7 +2387,7 @@ function App(){
   const vj    = jobs.find(j=>j.id===vjid);
   const vjTask= vj?(vj.taskId?TASKS.find(t=>t.id===vj.taskId):vj.custom?{e:"🔧",n:vj.custom.title,p:vj.custom.price,t:"Varies"}:null):null;
   const vjTp  = vj?ALL_TIME_PREFS.find(t=>t.id===vj.tpId):null;
-  const vjPro = vj?.pro||PROS[0];
+  const vjPro = proShownForJob(vj);
   const vjPname=vjPro.n.split(" ")[0];
   const vjTotal=vjTask?(vj?.lockedPrice??vjTask.p)+(vj?.surge||0)+(vj?.emergencyFee||0):0;
   // Map extended statuses to the nearest progress step for the tracker UI
@@ -2330,7 +2423,7 @@ function App(){
   };
   const vjArrivalSim=vj?.status==="en_route"?getArrivalSim(vj):null;
   const vjMsgs= vj?.msgs||[];
-  const proProfilePro = PROS.find(p=>p.i===proProfileId) || PROS[0];
+  const proProfilePro = PROS.find(p=>p.i===proProfileId) || (vjPro&&vjPro.real&&vjPro.i===proProfileId?vjPro:PROS[0]);
   const formatAddress=a=>a?`${a.street}${a.unit?", "+a.unit:""}, ${a.city}, ${a.state} ${a.zip}`:"";
   // Expected-duration model — replaces vague "Varies" text and giant
   // best-/worst-case ranges with a single most-likely estimate, only
@@ -2416,12 +2509,20 @@ function App(){
       if(cancelled) return;
       if(rows.length===0) return;
       const byId=new Map(rows.map(r=>[r.id,r]));
+      let proLabels={};
+      try{
+        const labelIds=rows.filter(r=>r&&r.pro_id&&String(r.pro_id).toLowerCase()!==String(DEMO_PRO_ID).toLowerCase()).map(r=>r.id);
+        if(labelIds.length&&typeof fetchAssignedProLabels==="function"){
+          proLabels=await fetchAssignedProLabels(labelIds)||{};
+        }
+      }catch(e){ proLabels={}; }
       // Map outside setJobs. A deferred updater would run after this tick
       // continues, so accept/arrive navigation would miss the id.
       const mapRemoteJob=(j)=>{
         if(!j.backendJobId) return {job:j,accepted:null,arrived:null};
         const row=byId.get(j.backendJobId);
         if(!row) return {job:j,accepted:null,arrived:null};
+        j=attachBackendPro(j, row, proLabels[row.id]||proLabels[String(row.id)]||"");
         const remoteStatus=row.status;
         // Remote accept mapping: when backend transitions posted -> en_route,
         // reflect it locally and trigger navigation to tracking outside this map.
@@ -2531,6 +2632,41 @@ function App(){
     if (id && typeof id === "object" && typeof id.unref === "function") { try { id.unref(); } catch(_) {} }
     return ()=>{ cancelled=true; clearInterval(id); };
   },[scr,tab]);
+
+  // Completed jobs are not in the active poll. Load pro_id for any backend
+  // job that still has no real pro, including receipts and history.
+  const proLabelTriedRef = useRef({});
+  const missingProKey = jobs
+    .filter(j=>j.backendJobId && !proLabelTriedRef.current[j.backendJobId] && (!j.backendProId || !j.backendProName))
+    .map(j=>j.backendJobId)
+    .join(",");
+  useEffect(()=>{
+    if(!missingProKey) return;
+    const ids=missingProKey.split(",").filter(Boolean);
+    if(!ids.length) return;
+    let cancelled=false;
+    (async()=>{
+      const rows=await fetchCanonicalJobsByIds(ids);
+      if(cancelled) return;
+      let labels={};
+      try{
+        const labelIds=(rows||[]).filter(r=>r&&r.pro_id&&String(r.pro_id).toLowerCase()!==String(DEMO_PRO_ID).toLowerCase()).map(r=>r.id);
+        if(labelIds.length&&typeof fetchAssignedProLabels==="function"){
+          labels=await fetchAssignedProLabels(labelIds)||{};
+        }
+      }catch(e){ labels={}; }
+      if(cancelled) return;
+      ids.forEach(id=>{ proLabelTriedRef.current[id]=true; });
+      const byId=new Map((rows||[]).filter(Boolean).map(r=>[String(r.id), r]));
+      setJobs(list=>list.map(j=>{
+        if(!j.backendJobId) return j;
+        const row=byId.get(String(j.backendJobId));
+        if(!row) return j;
+        return attachBackendPro(j, row, labels[row.id]||labels[String(row.id)]||"");
+      }));
+    })();
+    return ()=>{ cancelled=true; };
+  },[missingProKey]);
 
   useEffect(()=>{
     if(scr==="messages") setTimeout(()=>msgEnd.current?.scrollIntoView({behavior:"smooth"}),60);
@@ -4106,7 +4242,7 @@ function App(){
                     <div style={{width:42,height:42,borderRadius:21,background:SL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{jt?.e||"🔧"}</div>
                     <div style={{flex:1}}>
                       <div style={{fontWeight:700,fontSize:14,color:TX}}>{jt?.n||"Custom job"}</div>
-                      <div style={{fontSize:12,color:TS,marginTop:1}}>{dateStr} · {j.pro?.n||"Pro"}</div>
+                      <div style={{fontSize:12,color:TS,marginTop:1}}>{dateStr} · {proShownForJob(j).n}</div>
                     </div>
                     <div style={{textAlign:"right"}}>
                       <div style={{fontWeight:800,fontSize:15,color:AM}}>${jTotal}</div>
@@ -4191,7 +4327,7 @@ function App(){
                 <div style={{width:36,height:36,borderRadius:18,background:SL,display:"flex",alignItems:"center",justifyContent:"center",fontSize:17,flexShrink:0}}>{jt?.e||"🔧"}</div>
                 <div style={{flex:1,minWidth:0}}>
                   <div style={{fontWeight:700,fontSize:13,color:TX}}>{jt?.n||"Custom job"}</div>
-                  <div style={{fontSize:11,color:TS,marginTop:1}}>{dateStr} · {j.pro?.n||"Pro"}</div>
+                  <div style={{fontSize:11,color:TS,marginTop:1}}>{dateStr} · {proShownForJob(j).n}</div>
                 </div>
                 <div style={{textAlign:"right",flexShrink:0}}>
                   <div style={{fontWeight:800,fontSize:14,color:AM}}>${jTotal}</div>
@@ -4260,7 +4396,7 @@ function App(){
                 <div style={{width:42,height:42,borderRadius:21,background:SL,display:"flex",alignItems:"center",justifyContent:"center"}}><span style={{fontSize:20}}>{jt?.e||"🔧"}</span></div>
                 <div style={{flex:1}}>
                   <div style={{fontWeight:700,fontSize:14,color:TX}}>{jt?.n||"Custom job"}</div>
-                  <div style={{fontSize:12,color:TS,marginTop:1}}>{dateStr} · {j.pro?.n||"Pro"}</div>
+                  <div style={{fontSize:12,color:TS,marginTop:1}}>{dateStr} · {proShownForJob(j).n}</div>
                 </div>
                 <div style={{fontWeight:800,fontSize:15,color:AM}}>${jTotal}</div>
               </div>
@@ -4341,7 +4477,7 @@ function App(){
     const { jsPDF }=window.jspdf;
     const jt=job.taskId?TASKS.find(t=>t.id===job.taskId):job.custom?{n:job.custom.title,p:job.custom.price,c:job.custom.cat}:null;
     const category=job.taskId?(TASKS.find(t=>t.id===job.taskId)?.c):job.custom?.cat;
-    const jPro=job.pro||PROS[0];
+    const jPro=proShownForJob(job);
     const laborTotal=job.taskId?(job.lockedPrice??(jt?jt.p:0)):(job.custom?.price||0);
     const materials=Array.isArray(job.materials)?job.materials:[];
     const materialsCost=materials.reduce((s,m)=>s+m.amount*(m.qty||1),0);
@@ -4414,7 +4550,9 @@ function App(){
     // height — a long address can never misalign the professional column.
     doc.text("Verified Haven Professional",rightX,y);
     doc.text("Background Checked",rightX,y+11.5);
-    doc.text(`${jPro.r.toFixed(2)} rating (${jPro.j} jobs)`,rightX,y+11.5*2);
+    if(typeof jPro.r==="number"&&typeof jPro.j==="number"){
+      doc.text(`${jPro.r.toFixed(2)} rating (${jPro.j} jobs)`,rightX,y+11.5*2);
+    }
     doc.text(`Member since ${jPro.memberSince||"—"}`,rightX,y+11.5*3);
     const rightColBottom=y+11.5*4;
     y=Math.max(leftColBottom,rightColBottom)+16;
@@ -4527,7 +4665,7 @@ function App(){
 
   const buildReceiptShareText=(job)=>{
     const jt=job.taskId?TASKS.find(t=>t.id===job.taskId):job.custom?{n:job.custom.title,p:job.custom.price}:null;
-    const jPro=job.pro||PROS[0];
+    const jPro=proShownForJob(job);
     const basePrice=job.taskId?(job.lockedPrice??(jt?jt.p:0)):(job.custom?.price||0);
     const jTotal=basePrice+(job.surge||0)+(job.emergencyFee||0);
     const grandTotal=jTotal+(job.tipAmount>0?job.tipAmount:0);
@@ -5615,13 +5753,13 @@ function App(){
             </div>
           )}
           <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <div onClick={()=>openProProfile(vjPro,"tracking")} style={{display:"flex",gap:14,alignItems:"center",marginBottom:14,cursor:"pointer"}}>
+            <div onClick={()=>{ if(!vjPro.real) openProProfile(vjPro,"tracking"); }} style={{display:"flex",gap:14,alignItems:"center",marginBottom:14,cursor:vjPro.real?"default":"pointer"}}>
               <div style={{width:50,height:50,borderRadius:25,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:800,fontSize:16,flexShrink:0}}>{vjPro.i}</div>
               <div style={{flex:1}}>
                 <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjPro.n}</div>
                 <div style={{color:AM,fontSize:12,fontWeight:600,marginBottom:6}}>{vjPro.s}</div>
-                {trustLine(vjPro)}
-                <div style={{fontSize:11,color:TM,marginTop:4}}>⭐ {vjPro.r} · {vjPro.j} jobs</div>
+                {typeof vjPro.trustScore==="number"&&trustLine(vjPro)}
+                {typeof vjPro.r==="number"&&<div style={{fontSize:11,color:TM,marginTop:4}}>⭐ {vjPro.r} · {vjPro.j} jobs</div>}
               </div>
               <span style={{color:TM,fontSize:18,alignSelf:"flex-start"}}>›</span>
             </div>
