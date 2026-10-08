@@ -4639,7 +4639,7 @@ function App(){
   // holds the stored backend job values; null means "Total not available yet"
   // and no amounts. PAID and card brand/last4: havenReceiptPaymentState only,
   // which needs a backend payment record (none exists yet), so receipts read
-  // "Payment pending" and show no card.
+  // "Not charged yet" and show no card.
   const receiptMoney=(cents)=>`$${(cents/100).toFixed(2)}`;
   const receiptPaymentForJob=(job)=>{
     const receipt=receiptForJob(job);
@@ -4712,8 +4712,8 @@ function App(){
     doc.text(`Receipt # ${receiptId}`,PAGE_W-MARGIN,y+25,{align:"right"});
     doc.text(`Date: ${dateStr}`,PAGE_W-MARGIN,y+37,{align:"right"});
     // PAID only with a backend payment record; otherwise a neutral
-    // PAYMENT PENDING pill, sized to its text.
-    const pillText=payment.paid?"PAID":"PAYMENT PENDING";
+    // NOT CHARGED YET pill, sized to its text.
+    const pillText=payment.paid?"PAID":"NOT CHARGED YET";
     const PENDING_BG=[240,237,232];
     doc.setFont("helvetica","bold"); doc.setFontSize(7.5);
     const pillTextW=doc.getTextWidth(pillText)+(pillText.length-1)*0.5; // with charSpace
@@ -4904,7 +4904,7 @@ function App(){
       receiptId,
       text:[
         "HAVEN — RECEIPT",
-        `Receipt #${receiptId}   ${payment.paid?"PAID":"Payment pending"}`,
+        `Receipt #${receiptId}   ${payment.paid?"PAID":"Not charged yet"}`,
         `Completed ${dateStr} at ${timeStr}`,
         "",
         ...(billedTo.name?[`Billed to: ${billedTo.name}`]:[]),
@@ -5038,7 +5038,7 @@ function App(){
                 <div style={{fontSize:11,color:TS,marginTop:3}}>#{receiptId}</div>
                 {payment.paid
                   ?<div style={{display:"inline-block",marginTop:5,padding:"2px 10px",borderRadius:8,background:SL,color:SC,fontSize:10,fontWeight:800,letterSpacing:.5}}>PAID</div>
-                  :<div style={{display:"inline-block",marginTop:5,padding:"2px 10px",borderRadius:8,background:BG,color:TS,fontSize:10,fontWeight:800,letterSpacing:.5}}>PAYMENT PENDING</div>}
+                  :<div style={{display:"inline-block",marginTop:5,padding:"2px 10px",borderRadius:8,background:BG,color:TS,fontSize:10,fontWeight:800,letterSpacing:.5}}>NOT CHARGED YET</div>}
                 <div style={{fontSize:11,color:TS,marginTop:5}}>{dateStr} · {timeStr}</div>
               </div>
             </div>

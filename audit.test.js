@@ -1271,7 +1271,7 @@ function runReceiptPdfChecks(){
     // totals audit. This local job has demo completion materials only.
     assert(existsRegex('Total not available yet'), 'Local-only job: receipt says the total is not available yet');
     assert(!/TOTAL PAID|Total paid/.test(document.body.textContent), 'Local-only job: receipt does not claim a paid total');
-    assert(existsRegex('PAYMENT PENDING') && !existsRegex(/^PAID$/), 'Local-only job: Payment pending, no PAID stamp');
+    assert(existsRegex('NOT CHARGED YET') && !existsRegex(/^PAID$/), 'Local-only job: Not charged yet, no PAID stamp');
   });
 
   step('40. Receipt screen reachable with real completed-job data, Share flow completes without throwing', () => {
@@ -2364,11 +2364,11 @@ async function runReceiptTotalsChecks(){
       assert(!/Total paid|TOTAL PAID/.test(txt), `${name}: no "Total paid" without a payment record`);
       assert(!/4242|Visa/.test(txt), `${name}: no card brand or last4 without a payment record`);
     });
-    assert(existsRegex('PAYMENT PENDING') && !existsRegex(/^PAID$/), 'in-app: Payment pending, no PAID stamp');
+    assert(existsRegex('NOT CHARGED YET') && !existsRegex(/^PAID$/) && !existsRegex('PAYMENT PENDING'), 'in-app: NOT CHARGED YET pill, no PAID stamp');
     assert(!existsRegex('PAYMENT METHOD'), 'in-app: no payment method block');
     assert(!existsRegex('This receipt confirms a completed payment'), 'in-app: no paid confirmation line');
-    assert(out.share.includes('Payment pending') && !/\bPAID\b|— Paid/.test(out.share), 'share text: Payment pending, no PAID');
-    assert(out.pdf.split('\n').includes('PAYMENT PENDING') && !out.pdf.split('\n').includes('PAID') && !/· Paid/.test(out.pdf), 'PDF: PAYMENT PENDING pill, no PAID, no paid card line');
+    assert(/^Receipt #HVN-\S+ {3}Not charged yet$/m.test(out.share) && !/\bPAID\b|— Paid|Payment pending/.test(out.share), 'share text line 2: Not charged yet, no PAID');
+    assert(out.pdf.split('\n').includes('NOT CHARGED YET') && !out.pdf.split('\n').includes('PAID') && !/PAYMENT PENDING|· Paid/.test(out.pdf), 'PDF: NOT CHARGED YET pill, no PAID, no paid card line');
 
     // Tip and priority fee are included when the backend has them.
     remoteRow = row({ materials_estimate_cents: 1800, emergency_fee_cents: 2500, tip_amount_cents: 1000 });
