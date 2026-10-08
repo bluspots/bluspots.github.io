@@ -23,7 +23,7 @@ cd "$(dirname "$0")"
 
 # Phase 3 Step 0 — concat source list (Option A). See docs/PHASE3_MODULARIZATION_ORDER.md.
 
-# Ordered list of source files to concatenate (Step 1 adds locked constants first; Step 4 adds ui_atoms.js; Step 5 adds persistence.js; Step 6 adds intent_matching.js; Step 7 adds backend_adapter.js; Step 8 adds job_factories.js; Slice 1 adds auth_session.js after the Supabase REST helper)
+# Ordered list of source files to concatenate (Step 1 adds locked constants first; Step 4 adds ui_atoms.js; Step 5 adds persistence.js; Step 6 adds intent_matching.js; Step 7 adds backend_adapter.js; Step 8 adds job_factories.js; Slice 1 adds auth_session.js after the Supabase REST helper; Phase 1B A1 adds supabase_public_config.js before the adapter)
 SOURCE_FILES=(
   "locked_constants.js"
   "pure_helpers.js"
@@ -31,6 +31,7 @@ SOURCE_FILES=(
   "ui_atoms.js"
   "persistence.js"
   "intent_matching.js"
+  "supabase_public_config.js"
   "backend_adapter.js"
   "auth_session.js"
   "job_factories.js"

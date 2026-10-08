@@ -3,29 +3,24 @@
 // a signed-in access token is the Bearer, and that user's id is customer_id.
 // No session does not write a job and does not use DEMO_CUSTOMER_ID.
 // This file does not change lifecycle, economics, materials, or jobs RLS.
-// haven_prototype_anon_mode defaults ON. It does not choose the job identity
-// and does not require Auth for job create or lifecycle writes.
+// Phase 1B A1: the app always connects to the shipped Supabase project
+// (supabase_public_config.js). There is no demo / anon mode and no local
+// fallback. If the backend or Auth cannot be reached, the app shows a
+// connection error with Retry (havenConnectBackend below).
 
-const HAVEN_PROTOTYPE_ANON_MODE_KEY = "haven_prototype_anon_mode";
 const HAVEN_AUTH_ACCESS_TOKEN_KEY = "haven_auth_access_token";
 const HAVEN_AUTH_EMAIL_KEY = "haven_auth_email";
 const HAVEN_AUTH_ROLE_KEY = "haven_auth_role";
 const HAVEN_AUTH_USER_ID_KEY = "haven_auth_user_id";
 const HAVEN_AUTH_STORAGE_KEY = "haven-auth-session";
 
-// Missing or unrecognized values stay ON. Only an explicit off turns it off.
-function havenPrototypeAnonModeEnabled(){
-  try{
-    const raw = localStorage.getItem(HAVEN_PROTOTYPE_ANON_MODE_KEY);
-    if(raw==null) return true;
-    const v = String(raw).trim().toLowerCase();
-    if(v==="" ) return true;
-    if(v==="0" || v==="false" || v==="off" || v==="no") return false;
-    return true;
-  }catch{
-    return true;
-  }
-}
+// Plain-language copy for any failure to reach Haven's backend or Auth.
+const HAVEN_CONNECTION_ERROR_TITLE = "Can't connect to Haven";
+// Same copy as the Pro app (Phase 1B A1).
+const HAVEN_CONNECTION_ERROR_MESSAGE = "We couldn't reach Haven. Check your internet connection, then tap Retry.";
+const HAVEN_CONNECTING_MESSAGE = "Connecting to Haven…";
+// Sign-in / create-account forms have no Retry button; the form button retries.
+const HAVEN_AUTH_NETWORK_ERROR_MESSAGE = "We couldn't reach Haven. Check your internet connection, then try again.";
 
 // Mirrors the 0016 trigger: metadata role customer|pro, else customer.
 function resolveProfileRole(meta){
@@ -98,10 +93,78 @@ function getHavenAuthClient(){
   }
 }
 
+// No dev-facing setup text. A missing client is a connection problem.
 function havenAuthUnavailableReason(){
+  return HAVEN_AUTH_NETWORK_ERROR_MESSAGE;
+}
+
+// supabase-js reports an unreachable server as AuthRetryableFetchError
+// (status 0) or a fetch TypeError. Show the plain connection copy for those.
+function havenAuthErrorIsNetwork(err){
+  if(!err) return false;
+  const name = String(err.name||"");
+  const msg = String(err.message||"").toLowerCase();
+  if(name==="AuthRetryableFetchError") return true;
+  if(err.status===0) return true;
+  if(name==="TypeError" && (msg.includes("fetch") || msg.includes("network"))) return true;
+  return msg.includes("failed to fetch") || msg.includes("network request failed") || msg.includes("load failed");
+}
+
+function havenAuthErrorMessage(err, fallback){
+  if(havenAuthErrorIsNetwork(err)) return HAVEN_AUTH_NETWORK_ERROR_MESSAGE;
+  return (err && err.message) || fallback;
+}
+
+// The stored session is not valid on the server (revoked, expired refresh,
+// deleted user). That is a signed-out state, not a connection failure.
+function havenAuthErrorIsInvalidSession(err){
+  if(!err || havenAuthErrorIsNetwork(err)) return false;
+  const name = String(err.name||"");
+  if(name==="AuthSessionMissingError" || name==="AuthInvalidJwtError") return true;
+  return err.status===401 || err.status===403;
+}
+
+// Boot connection. Runs on every load and on Retry.
+// 1. The shipped public config and the Supabase Auth client must exist.
+// 2. Haven's Auth server must answer (GET /auth/v1/health with the anon key).
+// 3. Auth restores the session. A stored session is checked with the server
+//    (getUser) so a stale or forged local session never opens the app.
+// Returns {ok:true, client, session|null} or {ok:false, reason}. It never
+// invents a local account, never uses DEMO_CUSTOMER_ID, never writes a job.
+async function havenConnectBackend(){
   const cfg = typeof getSupabaseConfig==="function" ? getSupabaseConfig() : null;
-  if(!cfg) return "Add haven_supabase_url and haven_supabase_anon_key on this device first.";
-  return "Supabase Auth did not load. Refresh the page and try again.";
+  if(!cfg) return {ok:false, reason:"config"};
+  const client = getHavenAuthClient();
+  if(!client || !client.auth) return {ok:false, reason:"auth_client"};
+  try{
+    const res = await fetch(`${cfg.url}/auth/v1/health`, {headers:{apikey:cfg.anonKey}});
+    if(!res || !res.ok) return {ok:false, reason:"health_"+(res && res.status ? res.status : 0)};
+  }catch(err){
+    return {ok:false, reason:"network"};
+  }
+  let session = null;
+  try{
+    const {data, error} = await client.auth.getSession();
+    if(error) return {ok:false, reason:"session"};
+    session = data && data.session ? data.session : null;
+  }catch(err){
+    return {ok:false, reason:"session"};
+  }
+  if(!session) return {ok:true, client, session:null};
+  try{
+    const {data, error} = typeof client.auth.getUser==="function"
+      ? await client.auth.getUser()
+      : {data:{user:session.user||null}, error:null};
+    const user = data && data.user ? data.user : null;
+    if(error || !user){
+      if(error && !havenAuthErrorIsInvalidSession(error)) return {ok:false, reason:"user"};
+      try{ await client.auth.signOut({scope:"local"}); }catch{}
+      return {ok:true, client, session:null};
+    }
+    return {ok:true, client, session:Object.assign({}, session, {user})};
+  }catch(err){
+    return {ok:false, reason:"user"};
+  }
 }
 
 function clearHavenAuthMirror(){
@@ -198,7 +261,7 @@ async function havenSignUpCustomer(email, password){
         emailRedirectTo:havenAuthRedirectUrl(),
       },
     });
-    if(error) return {ok:false, error:error.message||"Sign up failed."};
+    if(error) return {ok:false, error:havenAuthErrorMessage(error, "Sign up failed.")};
     const session = data && data.session;
     const user = (data && data.user) || (session && session.user) || null;
     if(session){
@@ -207,7 +270,7 @@ async function havenSignUpCustomer(email, password){
     }
     return {ok:true, signedIn:false, needsEmailConfirm:true, userId:user && user.id};
   }catch(err){
-    return {ok:false, error:(err && err.message) || "Sign up failed."};
+    return {ok:false, error:havenAuthErrorMessage(err, "Sign up failed.")};
   }
 }
 
@@ -221,14 +284,14 @@ async function havenSignInCustomer(email, password){
       email:String(email).trim(),
       password:String(password),
     });
-    if(error) return {ok:false, error:error.message||"Sign in failed."};
+    if(error) return {ok:false, error:havenAuthErrorMessage(error, "Sign in failed.")};
     const session = data && data.session;
     const user = (data && data.user) || (session && session.user) || null;
     if(!session) return {ok:false, error:"Sign in did not return a session."};
     applyHavenAuthSession(session, user);
     return {ok:true, signedIn:true, userId:user && user.id};
   }catch(err){
-    return {ok:false, error:(err && err.message) || "Sign in failed."};
+    return {ok:false, error:havenAuthErrorMessage(err, "Sign in failed.")};
   }
 }
 

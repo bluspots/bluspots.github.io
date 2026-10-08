@@ -2,13 +2,35 @@
   const DEMO_PRO_ID = "22222222-2222-4222-8222-222222222222";
   let havenProLabelRpcUnavailable = false;
 
-  // ── Supabase REST dual‑write helper (CHUNK 2 prototype) ─────────────────────
-  // Reads config from localStorage; if missing, dual‑write is a no‑op.
+  // ── Supabase public client config ───────────────────────────────────────────
+  // Phase 1B A1: the config ships in the build (supabase_public_config.js).
+  // There is no localStorage override and no user-facing connection setting.
+  // A key that is not a public anon / publishable key is refused, so a
+  // service_role or secret key can never be used from the client.
+  const havenSupabaseKeyIsPublic=(key)=>{
+    const k=String(key||"").trim();
+    if(!k) return false;
+    if(k.startsWith("sb_publishable_")) return true;
+    if(k.startsWith("sb_secret_")) return false;
+    try{
+      const parts=k.split(".");
+      if(parts.length!==3 || !parts[1]) return false;
+      let b64=parts[1].replace(/-/g,"+").replace(/_/g,"/");
+      while(b64.length%4) b64+="=";
+      const raw=typeof atob==="function" ? atob(b64) : (typeof Buffer!=="undefined" ? Buffer.from(b64,"base64").toString("utf8") : "");
+      const claims=JSON.parse(raw||"{}");
+      return !!claims && claims.role==="anon";
+    }catch{
+      return false;
+    }
+  };
   const getSupabaseConfig=()=>{
     try{
-      let url=(localStorage.getItem("haven_supabase_url")||"").trim();
-      const key=(localStorage.getItem("haven_supabase_anon_key")||"").trim();
+      let url=typeof HAVEN_PUBLIC_SUPABASE_URL==="string" ? HAVEN_PUBLIC_SUPABASE_URL.trim() : "";
+      const key=typeof HAVEN_PUBLIC_SUPABASE_ANON_KEY==="string" ? HAVEN_PUBLIC_SUPABASE_ANON_KEY.trim() : "";
       if(!url||!key) return null;
+      if(!/^https:\/\//.test(url)) return null;
+      if(!havenSupabaseKeyIsPublic(key)) return null;
       while (url.endsWith('/')) url = url.slice(0, -1);
       return {url, anonKey:key};
     }catch{ return null; }
