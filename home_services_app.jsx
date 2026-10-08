@@ -59,6 +59,24 @@ function proShownForJob(job) {
   if (job.backendJobId) return havenRealProCard(null, "");
   return PROS[0];
 }
+// Pro profile facts that have a real value. Only the demo pros carry these
+// metrics; a real backend pro has none, so a missing value hides its row
+// instead of rendering null / undefined / NaN.
+function proProfileFacts(p){
+  const pro=p||{};
+  const num=v=>typeof v==="number"&&Number.isFinite(v);
+  const str=v=>typeof v==="string"&&v.trim()!=="";
+  return {
+    trustScore: num(pro.trustScore)?pro.trustScore:null,
+    ratingLine: num(pro.r)&&num(pro.j)?`⭐ ${pro.r} · ${pro.j} completed jobs`:null,
+    metrics:[
+      ["On-time rate",num(pro.onTimeRate)?`${pro.onTimeRate}%`:null],
+      ["Would hire again",num(pro.hireAgainRate)?`${pro.hireAgainRate}%`:null],
+      ["Completion rate",num(pro.completionRate)?`${pro.completionRate}%`:null],
+      ["Avg. response",str(pro.responseTime)?pro.responseTime:null],
+    ].filter(([,v])=>v!=null),
+  };
+}
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
 const TIME_PREFS=[
   {id:1,label:"ASAP",          sub:"Within 2 hours",              surge:10},
@@ -113,7 +131,7 @@ const TOPICS=[
   {t:"Cancel or reschedule a job",a:"You can cancel a job any time before a pro accepts it for free from the Bookings tab. Once a pro is en route, cancellations may include a small fee to compensate their travel time."},
   {t:"Report an issue with a pro",a:"If you experience a problem with a pro or a completed job, contact Haven Support. Our support team can review the booking details, messages, photos, and receipt and help determine the next steps."},
   {t:"Refunds & billing",a:"If a job wasn't completed to your satisfaction, contact support within 48 hours of completion and we'll review it for a partial or full refund."},
-  {t:"Trust & safety",a:"Haven verifies each pro's identity and background-check status before they can accept jobs. Additional credentials, such as professional licenses, are shown on the pro's profile when verified. If you're ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},
+  {t:"Trust & safety",a:"If you're ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},
 ];
 
 // Maintenance suggestion rules — keyed by TASKS id, used to generate simple
@@ -1927,7 +1945,7 @@ export default function App(){
           </button>
         </div>
         <div style={{display:"flex",gap:16,marginBottom:16}}>
-          {["✓ Fixed pricing","✓ Background checked","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
+          {["✓ Fixed pricing","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
         </div>
         <div onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
           <span style={{fontSize:16,color:TM}}>🔍</span>
@@ -2466,12 +2484,8 @@ export default function App(){
   // ── PRO PROFILE ────────────────────────────────────────────────────────────
   const proProfileScreen=()=>{
     const p=proProfilePro;
-    const metrics=[
-      ["On-time rate",`${p.onTimeRate}%`],
-      ["Would hire again",`${p.hireAgainRate}%`],
-      ["Completion rate",`${p.completionRate}%`],
-      ["Avg. response",p.responseTime],
-    ];
+    const facts=proProfileFacts(p);
+    const metrics=facts.metrics;
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         {subHeader("Pro profile",()=>backFrom("proProfile",{scr:"tracking",tab:"home"}))}
@@ -2480,17 +2494,20 @@ export default function App(){
             <div style={{width:76,height:76,borderRadius:38,background:p.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:800,fontSize:26,marginBottom:12}}>{p.i}</div>
             <div style={{fontWeight:800,fontSize:19,color:TX,marginBottom:3}}>{p.n}</div>
             <div style={{color:AM,fontSize:13,fontWeight:600,marginBottom:10}}>{p.s}</div>
-            <div style={{fontSize:12,color:TS}}>⭐ {p.r} · {p.j} completed jobs</div>
+            {facts.ratingLine&&<div style={{fontSize:12,color:TS}}>{facts.ratingLine}</div>}
           </div>
 
           {/* Trust Score — primary card */}
+          {facts.trustScore!=null&&(
           <div style={{background:"linear-gradient(135deg,#1C2B3A,#2E4359)",borderRadius:20,padding:20,marginBottom:14,textAlign:"center"}}>
             <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.55)",letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Trust Score</div>
-            <div style={{fontSize:44,fontWeight:900,color:W,lineHeight:1}}>{p.trustScore}<span style={{fontSize:18,color:"rgba(255,255,255,.5)"}}>/100</span></div>
+            <div style={{fontSize:44,fontWeight:900,color:W,lineHeight:1}}>{facts.trustScore}<span style={{fontSize:18,color:"rgba(255,255,255,.5)"}}>/100</span></div>
           </div>
+          )}
 
           {/* Metric chips */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+          {metrics.length>0&&(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
             {metrics.map(([l,v])=>(
               <div key={l} style={{background:W,borderRadius:16,padding:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                 <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:4}}>{l}</div>
@@ -2498,16 +2515,7 @@ export default function App(){
               </div>
             ))}
           </div>
-
-          {/* Badges */}
-          <div style={{background:W,borderRadius:18,padding:16,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:12}}>Verification</div>
-            <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-              {p.badges.map(b=>(
-                <span key={b} style={{fontSize:11,background:SL,color:SC,padding:"5px 11px",borderRadius:20,fontWeight:700}}>✓ {b}</span>
-              ))}
-            </div>
-          </div>
+          )}
 
           {proProfileCtx==="tracking"&&vj&&(
             <button onClick={()=>goTo("messages")} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:N,color:W,fontWeight:800,fontSize:15,cursor:"pointer"}}>💬 Message {p.n.split(" ")[0]}</button>
@@ -3090,8 +3098,6 @@ export default function App(){
     // Rating and Member since print only with a real value (real backend
     // pros have neither), and a skipped row leaves no blank line.
     let rightY=y;
-    doc.text("Verified Haven Professional",rightX,rightY); rightY+=11.5;
-    doc.text("Background Checked",rightX,rightY); rightY+=11.5;
     if(typeof jPro.r==="number"&&typeof jPro.j==="number"){
       doc.text(`${jPro.r.toFixed(2)} rating (${jPro.j} jobs)`,rightX,rightY); rightY+=11.5;
     }
@@ -4126,7 +4132,7 @@ export default function App(){
             <div style={{width:72,height:72,borderRadius:36,background:vj.emergency?"#FFF1EE":"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 16px",animation:"pulse 1.8s ease-in-out infinite"}}>{vj.emergency?"🚨":"📋"}</div>
             {vj.emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:5,background:"#FFF1EE",color:"#C2410C",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,marginBottom:10}}>Emergency priority</span>}
             <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{postedArrived?SI.arrived.label:(vj.emergency?"Prioritizing nearby available pros…":"Looking for a pro…")}</div>
-            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Verified pros near you can see your job and are deciding whether to accept.")}</div>
+            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Pros near you can see your job. This screen updates as soon as one accepts.")}</div>
           </div>
           <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{display:"flex",gap:14,alignItems:"center",paddingBottom:14,marginBottom:14,borderBottom:`1px solid ${BD}`}}>
@@ -4138,19 +4144,6 @@ export default function App(){
             ))}
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5,fontStyle:"italic"}}>"{vj.desc}"</div></div>}
           </div>
-          {postedWaiting&&(<div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:14}}>Pros near you viewing this job</div>
-            {PROS.map((p,i)=>(
-              <div key={p.i} onClick={()=>openProProfile(p,"posted")} style={{display:"flex",gap:12,alignItems:"center",marginBottom:i<PROS.length-1?12:0,cursor:"pointer"}}>
-                <div style={{width:40,height:40,borderRadius:20,background:p.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:13,flexShrink:0}}>{p.i}</div>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600,fontSize:14,color:TX,marginBottom:2}}>{p.n}</div>
-                  {trustBadge(p.trustScore,11)}
-                </div>
-                <div style={{display:"flex",gap:3,alignItems:"center"}}>{[0,1,2].map(d=><div key={d} style={{width:5,height:5,borderRadius:2.5,background:AM,animation:`bounce 0.5s ${d*0.18}s infinite alternate`}}/>)}</div>
-              </div>
-            ))}
-          </div>)}
           {postedWaiting&&(!showCancelConfirm?(
             <div style={{textAlign:"center"}}>
               <button onClick={()=>setShowCancelConfirm(true)} style={{background:"none",border:`1.5px solid #FCA5A5`,color:"#DC2626",fontSize:13,fontWeight:700,cursor:"pointer",padding:"10px 20px",borderRadius:12}}>Cancel Job</button>
