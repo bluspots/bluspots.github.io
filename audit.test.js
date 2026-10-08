@@ -2975,6 +2975,103 @@ async function runReceiptTotalsChecks(){
     out = await readSurfaces();
     assert(/Total\$89\.00/.test(out.inApp) && out.share.includes('Total: $89.00') && out.pdf.includes('$89.00'), 'B2: null locked amount shows $89.00 on every surface');
 
+    // ── Phase 1B B3: Booking Summary total on tracking / job details ─────
+    // Same backend total as the receipt. Read the Booking Summary card only.
+    const bookingSummaryText = () => {
+      const label = screen.queryAllByText((c, el) => el && el.textContent === 'Booking Summary')[0];
+      const card = label && label.parentElement && label.parentElement.parentElement;
+      return card ? card.textContent : '';
+    };
+    const openBookingDetails = async (statusLabel) => {
+      clickTab('Bookings');
+      click(statusLabel);
+      await act(async () => { await delay(80); });
+    };
+    remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: 1800 });
+    await mountCompleted(localJob({ id: 9721, lockedPrice: 89, surge: 0, emergency: false, emergencyFee: 0, tipAmount: 0, tipStatus: 'notAdded' }));
+    await openBookingDetails('Completed');
+    let bs = bookingSummaryText();
+    assert(/Total\$107\.00/.test(bs), 'B3: Booking Summary total is $89 labor + $18 approved materials = $107.00');
+    assert(!/Total\$89\b/.test(bs), 'B3: Booking Summary no longer shows the labor-only $89');
+
+    remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: 0 });
+    await mountCompleted(localJob({ id: 9722, lockedPrice: 89, surge: 0, emergency: false, emergencyFee: 0, tipAmount: 0, tipStatus: 'notAdded' }));
+    await openBookingDetails('Completed');
+    bs = bookingSummaryText();
+    assert(/Total\$89\.00/.test(bs) && !/\$107/.test(bs), 'B3: declined materials: Booking Summary total $89.00');
+
+    remoteRow = row({ status: 'in_progress', materials_estimate_cents: 1800, materials_approved_cents: 0 });
+    await mountCompleted(localJob({ id: 9723, status: 'in_progress', lockedPrice: 89, surge: 0, emergency: false, emergencyFee: 0, tipAmount: 0, tipStatus: 'notAdded' }));
+    await openBookingDetails('Job in progress');
+    bs = bookingSummaryText();
+    assert(/Total\$89\.00/.test(bs) && !/\$107/.test(bs), 'B3: declined then in_progress: Booking Summary total $89.00');
+
+    // Column absent (0025 not pasted): the #45 status rule, so complete counts the estimate.
+    remoteRow = row({ materials_estimate_cents: 1800 });
+    await mountCompleted(localJob({ id: 9724, lockedPrice: 89, surge: 0, emergency: false, emergencyFee: 0, tipAmount: 0, tipStatus: 'notAdded' }));
+    await openBookingDetails('Completed');
+    assert(/Total\$107\.00/.test(bookingSummaryText()), 'B3: column-absent fallback: Booking Summary total $107.00');
+
+    // No backend row: "Total not available yet", no amount, never the local
+    // figure (local price 250 + surge 10 + emergency 50 = $310).
+    remoteRow = null;
+    await mountCompleted(localJob({ id: 9725 }));
+    await openBookingDetails('Completed');
+    bs = bookingSummaryText();
+    assert(bs.includes('Total not available yet'), 'B3: no backend row: Booking Summary says Total not available yet');
+    assert(!/\$/.test(bs), 'B3: no backend row: Booking Summary shows no amount at all (no local $310, no local emergency fee)');
+    assert(!/Emergency fee/.test(bs), 'B3: no backend row: no Emergency fee line from the local job');
+
+    // Loading: the backend read is still in flight. Same as no row, and no
+    // flash of the local figure; then the backend total replaces it.
+    {
+      let releaseJobs;
+      const jobsGate = new Promise(r => { releaseJobs = r; });
+      const loadingFetch = global.fetch;
+      // #43 harness: only the jobs read is gated; Auth health and the
+      // is_qa_tester RPC go to the shared mocked backend so the app connects.
+      global.fetch = async (url, opts) => {
+        const u = String(url);
+        if (u.includes('/rest/v1/jobs')) {
+          await jobsGate;
+          return { ok: true, json: async () => [row({ materials_estimate_cents: 1800, materials_approved_cents: 1800, emergency_fee_cents: 2500 })], text: async () => '' };
+        }
+        return defaultBackendFetch(url, opts);
+      };
+      await mountCompleted(localJob({ id: 9727 }));
+      await openBookingDetails('Completed');
+      bs = bookingSummaryText();
+      assert(bs.includes('Total not available yet') && !/\$/.test(bs), 'B3 loading: Total not available yet and no amount while the backend read is pending');
+      assert(!/\$310|\$250|\+\$50/.test(document.body.textContent.replace(/[\s\S]*Booking Summary/, '').split('DESCRIPTION')[0]), 'B3 loading: the local figure never flashes in the Booking Summary');
+      releaseJobs();
+      await act(async () => { await delay(80); });
+      bs = bookingSummaryText();
+      assert(/Total\$132\.00/.test(bs) && !bs.includes('Total not available yet'), 'B3 loading: after the read lands, Booking Summary total is $132.00 (89 + 18 + 25)');
+      assert(/Emergency fee\+\$25\.00/.test(bs), 'B3 loading: Emergency fee line from the backend ($25.00)');
+      global.fetch = loadingFetch;
+    }
+
+    // Emergency fee line follows the backend fee, not the local job.
+    remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: 1800, emergency_fee_cents: 2500 });
+    await mountCompleted(localJob({ id: 9728, lockedPrice: 89, surge: 0, emergency: false, emergencyFee: 0, tipAmount: 0, tipStatus: 'notAdded' }));
+    await openBookingDetails('Completed');
+    bs = bookingSummaryText();
+    assert(/Emergency fee\+\$25\.00/.test(bs) && /Total\$132\.00/.test(bs), 'B3: backend priority fee shows as Emergency fee +$25.00 even when the local job has none; total $132.00');
+    remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: 1800, emergency_fee_cents: 0 });
+    await mountCompleted(localJob({ id: 9729 }));
+    await openBookingDetails('Completed');
+    bs = bookingSummaryText();
+    assert(!/Emergency fee/.test(bs) && !/\+\$50/.test(bs) && /Total\$107\.00/.test(bs), 'B3: no backend priority fee: no Emergency fee line, even with a local $50 emergency fee; total $107.00');
+
+    // PDF priority-fee label matches the in-app receipt and share text.
+    remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: 1800, emergency_fee_cents: 2500 });
+    await mountCompleted(localJob({ id: 9726 }));
+    await openReceiptsList();
+    await openReceipt();
+    out = await readSurfaces();
+    assert(out.pdf.includes('Emergency priority fee') && !out.pdf.includes('Emergency response fee'), 'B3: PDF says Emergency priority fee, like in-app and share text');
+    assert(/Emergency priority fee\$25\.00/.test(out.inApp) && out.share.includes('Emergency priority fee: $25.00'), 'B3: in-app and share label unchanged');
+
     // Deploy order. The read names the 0025 column. A 400 for another reason
     // is not retried. A 400 about the missing column retries once without it,
     // the receipt falls back to the #45 rule, and later reads skip it.
