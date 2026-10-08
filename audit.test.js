@@ -2254,6 +2254,10 @@ async function runApproveAndDeclineChecks(){
       { timeout: 3000, message: 'Successful approve did not advance to materials approved' }
     );
     assert(patches.some(p => p.status === 'materials_approved'), 'Successful approve PATCHes materials_approved');
+    // 0026: the server counts the approval from the customer's own session.
+    // The client sends the status only, never an amount or request marker.
+    const approveBody = patches.find(p => p.status === 'materials_approved');
+    assert(!!approveBody && Object.keys(approveBody).join(',') === 'status', 'P1: approve PATCH body is exactly {status} (no materials_approved_*, no request seq)');
 
     // Phase 1B A1: no demo path. A local-only job (no backend id) does not
     // advance on approve; it fails closed like any other unsynced write.
@@ -2286,6 +2290,9 @@ async function runApproveAndDeclineChecks(){
       () => existsRegex('materials declined') && patches.some(p => p.status === 'materials_declined' && p.convenience_fee_cents === 3000),
       { timeout: 3000, message: 'Standard decline did not land materials_declined with the $30 convenience fee' }
     );
+    const declineBody = patches.find(p => p.status === 'materials_declined');
+    assert(!!declineBody && Object.keys(declineBody).sort().join(',') === 'convenience_fee_cents,status', 'P1: decline PATCH body carries only status and the existing convenience fee');
+    assert(!patches.some(p => ['materials_approved_cents', 'materials_approved_at', 'materials_request_seq', 'materials_decided_seq'].some(k => k in p)), 'P1: no Customer PATCH writes the server-owned materials columns');
   } catch (e) {
     fail++;
     console.error('FAIL (approve/decline):', (e && e.stack) || e);
@@ -3187,6 +3194,36 @@ async function runReceiptTotalsChecks(){
       assert(/-- update public\.jobs/.test(sql) && /evidence/.test(sql) && /-- select id, status, materials_estimate_cents/.test(sql), '0025 has a commented preview SELECT and backfill');
       assert(/-- drop trigger if exists jobs_lock_materials_approved/.test(sql) && /-- alter table public\.jobs drop column if exists materials_approved_cents/.test(sql), '0025 has a commented rollback');
       assert(!/in_progress before complete/i.test(live), '0025 adds no in_progress-before-complete rule');
+    });
+
+    step('P1. 0026 customer-only materials approval (static)', () => {
+      const sql = fs.readFileSync(require('path').join(__dirname, 'supabase/migrations/0026_customer_only_materials_approval.sql'), 'utf8');
+      const live = sql.split('\n').filter(l => !/^\s*--/.test(l)).join('\n');
+      assert(/AFTER 0025/.test(sql) && /Safe to re-run/i.test(sql), '0026 header: paste after 0025, safe to re-run');
+      assert(/0026 needs 0025_materials_approved_lock\.sql first/.test(live), '0026 stops with a clear error when 0025 is missing');
+      assert(/create or replace function public\.jobs_lock_materials_approved\(\)/.test(live) && /create trigger jobs_lock_materials_approved\s+before insert or update on public\.jobs/i.test(live), '0026 replaces the 0025 trigger function on the same BEFORE INSERT OR UPDATE trigger');
+      assert(/old\.status = 'materials_requested'[\s\S]{0,200}new\.status in \('materials_approved', 'materials_declined', 'inspection_completed'\)[\s\S]{0,120}not privileged[\s\S]{0,120}auth\.uid\(\) is distinct from old\.customer_id/.test(live), '0026 guards approve and both decline states: privileged or the job customer only');
+      assert(/raise exception 'Only the customer can approve or decline materials on this job'\s+using errcode = '42501'/.test(live), '0026 refuses with 42501 and a clear message');
+      assert(/current_user not in \('anon', 'authenticated'\)/.test(live), '0026 uses the same privileged-caller check as 0024/0025');
+      assert(/add column materials_request_seq integer not null default 0/.test(live) && /add column if not exists materials_decided_seq integer not null default 0/.test(live), '0026 adds the request number and decided marker');
+      assert(/old\.status in \('en_route', 'arrived', 'diagnosing', 'in_progress'\)[\s\S]{0,80}materials_request_seq := old\.materials_request_seq \+ 1/.test(live), '0026 stamps a new request only from the 0009 source statuses');
+      assert(/undecided := old\.materials_request_seq > old\.materials_decided_seq/.test(live) && (live.match(/new\.materials_decided_seq := old\.materials_request_seq/g) || []).length === 2, '0026 counts each request once (approve or decline marks it decided)');
+      assert(/new\.materials_request_seq := old\.materials_request_seq;/.test(live) && /new\.materials_decided_seq := 0;/.test(live), '0026 ignores client values for the new columns (OLD on update, 0 on insert)');
+      ['public', 'anon', 'authenticated'].forEach(r => {
+        assert(new RegExp(`revoke insert \\(materials_request_seq, materials_decided_seq\\),\\s+update \\(materials_request_seq, materials_decided_seq\\)\\s+on table public\\.jobs from ${r};`).test(live), `0026 revokes column INSERT/UPDATE from ${r}`);
+      });
+      assert(!/\b(create|alter|drop) policy\b/i.test(live) && !/row level security/i.test(live) && !/\bgrant (select|insert|update|delete|all)\b/i.test(live), '0026 adds no policy and no table grant');
+      assert(!/alter type|jobs_posted_within_radius|jobs_enforce_claim_radius|pro_claim_job|haven_caller_within_radius/i.test(live), '0026 does not touch the status enum or radius/claim objects');
+      assert(!/fixed_customer_labor_price_cents|emergency_fee_cents|convenience_fee_cents|tip_amount_cents|inspection_fee_cents|materials_reimbursed_cents|payment_snapshot/.test(live), '0026 does not touch pricing, fee, tip, reimbursement or payment columns');
+      const updates = live.match(/^\s*update public\.jobs[\s\S]*?;/gim) || [];
+      assert(updates.length === 1 && /set materials_request_seq = 1\s+where status = 'materials_requested'/.test(updates[0]), '0026 runs one data UPDATE only: the one-time request #1 init on pending rows');
+      assert(/SUPERSEDED/.test(sql) && /option C/i.test(sql), '0026 marks 0025 option C backfill superseded');
+      assert(/Backfill: NO-OP/.test(sql) && /review list/i.test(sql) && /-- select j\.id, j\.status/.test(sql), '0026 founder steps: no-op backfill plus a review list');
+      assert(/job_status_events/.test(sql) && /materials_requests/.test(sql) && /materials_receipts/.test(sql) && /information_schema\.columns/.test(sql), '0026 evidence query covers every candidate source');
+      const founder = sql.split('-- ── Founder steps')[1].split('-- ── Verify')[0];
+      const founderUpdates = founder.match(/-- update public\.jobs[\s\S]*?;/g) || [];
+      assert(founderUpdates.length === 1 && /where id = '<job uuid>'/.test(founderUpdates[0]) && /materials_approved_cents is null/.test(founderUpdates[0]) && !/fee|tip|reimbursed|labor/.test(founderUpdates[0]), '0026 founder fill is single-job, null-only, and touches no other financial column');
+      assert(/-- alter table public\.jobs drop column if exists materials_request_seq/.test(sql) && /Paste 0025_materials_approved_lock\.sql again/.test(sql), '0026 rollback restores 0025 first, then drops the columns');
     });
   } catch (e) {
     fail++;
