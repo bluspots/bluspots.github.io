@@ -3028,13 +3028,15 @@ async function runReceiptTotalsChecks(){
       let releaseJobs;
       const jobsGate = new Promise(r => { releaseJobs = r; });
       const loadingFetch = global.fetch;
-      global.fetch = async (url) => {
+      // #43 harness: only the jobs read is gated; Auth health and the
+      // is_qa_tester RPC go to the shared mocked backend so the app connects.
+      global.fetch = async (url, opts) => {
         const u = String(url);
         if (u.includes('/rest/v1/jobs')) {
           await jobsGate;
           return { ok: true, json: async () => [row({ materials_estimate_cents: 1800, materials_approved_cents: 1800, emergency_fee_cents: 2500 })], text: async () => '' };
         }
-        return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+        return defaultBackendFetch(url, opts);
       };
       await mountCompleted(localJob({ id: 9727 }));
       await openBookingDetails('Completed');
