@@ -122,6 +122,12 @@ global.fetch = async (url, init) => {
   if (u.includes('/rest/v1/profiles')) {
     return ok([{ id: PRO_UUID, role: 'pro', display_name: 'Grace Hopper', pro_workspace: SIMULATED_PRO_WORKSPACE }]);
   }
+  if (u.includes('/rest/v1/jobs') && u.includes('order=posted_at')) {
+    // Phase 1B B4: the account read is unavailable here, so the seeded cache
+    // (legacy local jobs included) stays as it is and these claim checks
+    // still render it. Cross-device loading is covered in audit.test.js.
+    return { ok: false, status: 503, json: async () => ({}), text: async () => 'unavailable' };
+  }
   if (u.includes('/rest/v1/jobs')) {
     return ok([{ id: BACKEND_JOB, status: 'complete', customer_id: CUSTOMER_ID, pro_id: PRO_UUID, verified_pro: true }]);
   }
@@ -156,6 +162,8 @@ function seed(jobs) {
   storedData['haven_auth_email'] = 'qa-customer@example.com';
   storedData['haven_auth_role'] = 'customer';
   storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: jobs });
+  // Phase 1B B4: the jobs cache belongs to the signed-in customer.
+  storedData['haven_jobs_owner'] = CUSTOMER_ID;
   storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
 }
 async function delay(ms) { await new Promise(r => setTimeout(r, ms)); }

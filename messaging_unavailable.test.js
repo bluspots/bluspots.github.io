@@ -84,6 +84,9 @@ global.fetch = async (url) => {
   fetchLog.push(u);
   const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
   if (u.endsWith('/auth/v1/health')) return ok({});
+  // Phase 1B B4: the account read is unavailable here, so the seeded jobs
+  // cache stays as it is. Cross-device loading is covered in audit.test.js.
+  if (u.includes('/rest/v1/jobs') && u.includes('order=posted_at')) return { ok: false, status: 503, json: async () => ({}), text: async () => 'unavailable' };
   if (u.includes('/rest/v1/rpc/is_qa_tester')) return ok(false);
   if (u.includes('/rest/v1/jobs?id=in.') && remoteRows.length) return ok(remoteRows);
   if (u.includes('/rest/v1/')) return ok([]);
@@ -120,6 +123,8 @@ function seedBase() {
   Object.keys(storedData).forEach(k => delete storedData[k]);
   storedData['haven_auth_access_token'] = 'signed-in-access-token';
   storedData['haven_auth_user_id'] = CUSTOMER_ID;
+  // Phase 1B B4: the jobs cache belongs to the signed-in customer.
+  storedData['haven_jobs_owner'] = CUSTOMER_ID;
   storedData['haven_auth_email'] = 'qa-customer@example.com';
   storedData['haven_auth_role'] = 'customer';
   storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
