@@ -1203,9 +1203,9 @@ function matchDiagnosis(text){
   };
 
   // Phase 1B item B: receipt amounts. The in-app receipt, the PDF and the
-  // share text read only these stored public.jobs columns (0001 / 0008):
+  // share text read only these stored public.jobs columns (0001 / 0008 / 0025):
   //   fixed_customer_labor_price_cents  labor
-  //   materials_estimate_cents          materials the customer approved
+  //   materials_approved_cents          materials the customer approved (0025)
   //   emergency_fee_cents               priority fee
   //   tip_amount_cents                  tip
   // There is no stored total column, so the total is the sum of these four.
@@ -1213,21 +1213,44 @@ function matchDiagnosis(text){
   // tipAmount, demo completion materials). The poll below also asks for
   // these columns. That is a read-only select change.
   const HAVEN_RECEIPT_JOB_COLUMNS="fixed_customer_labor_price_cents,emergency_fee_cents,tip_amount_cents";
-  // The materials amount counts only once the customer approved it. A pending
+  // Phase 1B B2: 0025 adds jobs.materials_approved_cents, locked by a trigger
+  // when the customer approves (a decline adds nothing). The app can ship
+  // before the founder pastes 0025, and PostgREST rejects a select that names
+  // a missing column (400), which would stop job loading. So the jobs read
+  // asks for it, and on that specific 400 retries once without it and stops
+  // asking until the next app load.
+  const HAVEN_MATERIALS_APPROVED_COLUMN="materials_approved_cents";
+  let havenMaterialsApprovedColumnUnavailable=false;
+  // Fallback only, for rows read without the 0025 column (PR #45 rule): the
+  // estimate counts at materials_approved, in_progress or complete. A pending
   // request (materials_requested) or a declined one (materials_declined,
   // inspection_completed) adds nothing.
   const HAVEN_RECEIPT_MATERIALS_STATUSES=new Set(["materials_approved","in_progress","complete"]);
   const havenReceiptCents=(v)=> (typeof v==="number" && Number.isFinite(v) && v>=0) ? Math.round(v) : null;
+  // Materials on the receipt, in cents, or null when the row cannot say.
+  //   materials_approved_cents present: that amount; null means $0 (no
+  //     approval recorded). The status is not consulted, so a declined job
+  //     that later reached in_progress or complete adds nothing.
+  //   materials_approved_cents absent (0025 not pasted yet): the #45 status
+  //     rule on materials_estimate_cents above.
+  const havenReceiptMaterialsCents=(row)=>{
+    if(row[HAVEN_MATERIALS_APPROVED_COLUMN]!==undefined){
+      if(row[HAVEN_MATERIALS_APPROVED_COLUMN]===null) return 0;
+      return havenReceiptCents(row[HAVEN_MATERIALS_APPROVED_COLUMN]);
+    }
+    const estimate=havenReceiptCents(row.materials_estimate_cents);
+    if(estimate==null) return null;
+    return HAVEN_RECEIPT_MATERIALS_STATUSES.has(String(row.status||"")) ? estimate : 0;
+  };
   // Returns null unless the row carries every stored amount. null means the
   // receipt shows no amounts. It never falls back to local numbers.
   const havenReceiptFromBackendRow=(row)=>{
     if(!row || typeof row!=="object") return null;
     const labor=havenReceiptCents(row.fixed_customer_labor_price_cents);
-    const estimate=havenReceiptCents(row.materials_estimate_cents);
+    const materials=havenReceiptMaterialsCents(row);
     const priority=havenReceiptCents(row.emergency_fee_cents);
     const tip=havenReceiptCents(row.tip_amount_cents);
-    if(labor==null || estimate==null || priority==null || tip==null) return null;
-    const materials=HAVEN_RECEIPT_MATERIALS_STATUSES.has(String(row.status||"")) ? estimate : 0;
+    if(labor==null || materials==null || priority==null || tip==null) return null;
     return {
       laborCents:labor,
       materialsCents:materials,
@@ -1270,12 +1293,26 @@ function matchDiagnosis(text){
     if(!customerId) return [];
     const inList=unique.map(id=>encodeURIComponent(id)).join(",");
     const headers={"Accept":"application/json", apikey:cfg.anonKey, Authorization:`Bearer ${token}`};
-    const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,pro_id,materials_items,materials_estimate_cents,${HAVEN_RECEIPT_JOB_COLUMNS}`;
+    const jobsUrl=(withApproved)=>`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,pro_id,materials_items,materials_estimate_cents,${HAVEN_RECEIPT_JOB_COLUMNS}${withApproved?`,${HAVEN_MATERIALS_APPROVED_COLUMN}`:""}`;
+    const url=jobsUrl(!havenMaterialsApprovedColumnUnavailable);
     if(String(url).includes("11111111-1111-4111-8111-111111111111")) return [];
     try{
-      const res=await fetch(url,{
+      let res=await fetch(url,{
         headers,
       });
+      if(!res.ok && res.status===400 && !havenMaterialsApprovedColumnUnavailable){
+        // 0025 not pasted yet: the column does not exist. Retry once without it.
+        const text=await res.text().catch(()=>"");
+        if(String(text).includes(HAVEN_MATERIALS_APPROVED_COLUMN)){
+          havenMaterialsApprovedColumnUnavailable=true;
+          res=await fetch(jobsUrl(false),{
+            headers,
+          });
+        }else{
+          console.warn("Haven CHUNK4 fetch failed:", res.status, text);
+          return [];
+        }
+      }
       if(!res.ok){
         const text=await res.text().catch(()=>"(no body)");
         console.warn("Haven CHUNK4 fetch failed:", res.status, text);
