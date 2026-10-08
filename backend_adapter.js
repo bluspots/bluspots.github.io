@@ -234,6 +234,54 @@
     }
   };
 
+  // Phase 1B item B: receipt amounts. The in-app receipt, the PDF and the
+  // share text read only these stored public.jobs columns (0001 / 0008):
+  //   fixed_customer_labor_price_cents  labor
+  //   materials_estimate_cents          materials the customer approved
+  //   emergency_fee_cents               priority fee
+  //   tip_amount_cents                  tip
+  // There is no stored total column, so the total is the sum of these four.
+  // Nothing comes from local job fields (lockedPrice, surge, emergencyFee,
+  // tipAmount, demo completion materials). The poll below also asks for
+  // these columns. That is a read-only select change.
+  const HAVEN_RECEIPT_JOB_COLUMNS="fixed_customer_labor_price_cents,emergency_fee_cents,tip_amount_cents";
+  // The materials amount counts only once the customer approved it. A pending
+  // request (materials_requested) or a declined one (materials_declined,
+  // inspection_completed) adds nothing.
+  const HAVEN_RECEIPT_MATERIALS_STATUSES=new Set(["materials_approved","in_progress","complete"]);
+  const havenReceiptCents=(v)=> (typeof v==="number" && Number.isFinite(v) && v>=0) ? Math.round(v) : null;
+  // Returns null unless the row carries every stored amount. null means the
+  // receipt shows no amounts. It never falls back to local numbers.
+  const havenReceiptFromBackendRow=(row)=>{
+    if(!row || typeof row!=="object") return null;
+    const labor=havenReceiptCents(row.fixed_customer_labor_price_cents);
+    const estimate=havenReceiptCents(row.materials_estimate_cents);
+    const priority=havenReceiptCents(row.emergency_fee_cents);
+    const tip=havenReceiptCents(row.tip_amount_cents);
+    if(labor==null || estimate==null || priority==null || tip==null) return null;
+    const materials=HAVEN_RECEIPT_MATERIALS_STATUSES.has(String(row.status||"")) ? estimate : 0;
+    return {
+      laborCents:labor,
+      materialsCents:materials,
+      priorityFeeCents:priority,
+      tipCents:tip,
+      totalCents:labor+materials+priority+tip,
+      // No backend payment record exists yet: no payments table, and jobs has
+      // no payment status. payment_snapshot is the Customer app's own copy of
+      // the local card picked at booking, not proof of payment.
+      payment:null,
+    };
+  };
+  // PAID, and the card brand and last4, only from a backend payment record
+  // whose status is "paid". Anything else (no record, a {brand,last4}
+  // snapshot, processing, failed) is not paid and shows no card.
+  const havenReceiptPaymentState=(record)=>{
+    const paid=!!(record && typeof record==="object" && String(record.status||"").trim().toLowerCase()==="paid");
+    const brand=paid && typeof record.brand==="string" ? record.brand.trim() : "";
+    const last4=paid && typeof record.last4==="string" && /^\d{4}$/.test(record.last4.trim()) ? record.last4.trim() : "";
+    return {paid, brand, last4, showCard:!!(paid && brand && last4)};
+  };
+
   // Poll/rehydrate of locally linked jobs. Not the whole table.
   // Signed in: user access token and customer_id = that user. apikey stays the anon key.
   // Signed out: do not call /rest/v1/jobs. Anon SELECT on the base table is revoked;
@@ -254,7 +302,7 @@
     if(!customerId) return [];
     const inList=unique.map(id=>encodeURIComponent(id)).join(",");
     const headers={"Accept":"application/json", apikey:cfg.anonKey, Authorization:`Bearer ${token}`};
-    const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,pro_id,materials_items,materials_estimate_cents`;
+    const url=`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,pro_id,materials_items,materials_estimate_cents,${HAVEN_RECEIPT_JOB_COLUMNS}`;
     if(String(url).includes("11111111-1111-4111-8111-111111111111")) return [];
     try{
       const res=await fetch(url,{
