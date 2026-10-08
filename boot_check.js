@@ -8,7 +8,28 @@ global.HTMLElement = dom.window.HTMLElement; global.HTMLInputElement = dom.windo
 global.HTMLTextAreaElement = dom.window.HTMLTextAreaElement; global.Node = dom.window.Node;
 global.getComputedStyle = dom.window.getComputedStyle;
 
-const { render, screen } = require('@testing-library/react');
+// Phase 1B A1: the shipped build connects to Supabase on load. No real
+// network here: a stub Supabase Auth client (no stored session) and a stub
+// fetch that answers the Auth health check. Any other request is refused.
+const bootFetchCalls = [];
+global.fetch = async (url) => {
+  bootFetchCalls.push(String(url));
+  if (String(url).endsWith('/auth/v1/health')) return { ok: true, status: 200, json: async () => ({}), text: async () => '' };
+  return { ok: false, status: 599, json: async () => ({}), text: async () => 'boot check: no network' };
+};
+global.supabase = {
+  createClient: () => ({
+    auth: {
+      getSession: async () => ({ data: { session: null }, error: null }),
+      getUser: async () => ({ data: { user: null }, error: null }),
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe(){} } } }),
+      signOut: async () => ({ error: null }),
+    },
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+  }),
+};
+
+const { render, screen, waitFor } = require('@testing-library/react');
 const { act } = require('react-dom/test-utils');
 const babel = require('@babel/core');
 const fs = require('fs');
@@ -38,6 +59,17 @@ if (typeof ErrorBoundary !== 'function') { console.error('BOOT CHECK FAILED: Err
 
 act(() => { render(React.createElement(ErrorBoundary, null, React.createElement(App))); });
 // Account required: signed-out boot is the auth gate, not the marketplace Home.
-const booted = !!(screen.queryByText(/Create customer account/i) || screen.queryByText(/Sign in or create an account/i));
-console.log(booted ? "BOOT CHECK OK: prototype.html's actual shipped script block renders the signed-out auth gate, wrapped in ErrorBoundary" : 'BOOT CHECK FAILED: auth gate did not render');
-process.exit(booted ? 0 : 1);
+// The gate appears once the (stubbed) Supabase connection is up.
+(async () => {
+  let booted = false;
+  try {
+    await waitFor(() => {
+      if (!(screen.queryByText(/Create customer account/i) || screen.queryByText(/Sign in or create an account/i))) throw new Error('gate not yet rendered');
+    }, { timeout: 3000 });
+    booted = true;
+  } catch (e) { booted = false; }
+  const connected = bootFetchCalls.some(u => u.endsWith('/auth/v1/health'));
+  const ok = booted && connected;
+  console.log(ok ? "BOOT CHECK OK: prototype.html's actual shipped script block connects to Supabase on load and renders the signed-out auth gate, wrapped in ErrorBoundary" : `BOOT CHECK FAILED: auth gate did not render after connecting (gate=${booted}, health=${connected})`);
+  process.exit(ok ? 0 : 1);
+})();

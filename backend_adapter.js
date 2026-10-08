@@ -2,13 +2,49 @@
   const DEMO_PRO_ID = "22222222-2222-4222-8222-222222222222";
   let havenProLabelRpcUnavailable = false;
 
-  // ── Supabase REST dual‑write helper (CHUNK 2 prototype) ─────────────────────
-  // Reads config from localStorage; if missing, dual‑write is a no‑op.
+  // ── Supabase public client config ───────────────────────────────────────────
+  // Phase 1B A1: the config ships in the build (supabase_public_config.js).
+  // There is no localStorage override and no user-facing connection setting.
+  // A key that is not a public anon / publishable key is refused, so a
+  // service_role or secret key can never be used from the client.
+  const havenProjectRefFromSupabaseUrl=(url)=>{
+    try{
+      const host=new URL(String(url||"")).hostname||"";
+      const parts=host.split(".");
+      if(parts.length>=3 && parts[parts.length-2]==="supabase" && parts[parts.length-1]==="co"){
+        return parts[0]||"";
+      }
+      return "";
+    }catch{ return ""; }
+  };
+  const havenSupabaseKeyIsPublic=(key, url)=>{
+    const k=String(key||"").trim();
+    if(!k) return false;
+    if(k.startsWith("sb_publishable_")) return true;
+    if(k.startsWith("sb_secret_")) return false;
+    try{
+      const parts=k.split(".");
+      if(parts.length!==3 || !parts[1]) return false;
+      let b64=parts[1].replace(/-/g,"+").replace(/_/g,"/");
+      while(b64.length%4) b64+="=";
+      const raw=typeof atob==="function" ? atob(b64) : (typeof Buffer!=="undefined" ? Buffer.from(b64,"base64").toString("utf8") : "");
+      const claims=JSON.parse(raw||"{}");
+      if(!claims || claims.role!=="anon") return false;
+      const expectedRef=havenProjectRefFromSupabaseUrl(url);
+      if(!expectedRef) return false;
+      if(String(claims.ref||"")!==expectedRef) return false;
+      return true;
+    }catch{
+      return false;
+    }
+  };
   const getSupabaseConfig=()=>{
     try{
-      let url=(localStorage.getItem("haven_supabase_url")||"").trim();
-      const key=(localStorage.getItem("haven_supabase_anon_key")||"").trim();
+      let url=typeof HAVEN_PUBLIC_SUPABASE_URL==="string" ? HAVEN_PUBLIC_SUPABASE_URL.trim() : "";
+      const key=typeof HAVEN_PUBLIC_SUPABASE_ANON_KEY==="string" ? HAVEN_PUBLIC_SUPABASE_ANON_KEY.trim() : "";
       if(!url||!key) return null;
+      if(!/^https:\/\//.test(url)) return null;
+      if(!havenSupabaseKeyIsPublic(key, url)) return null;
       while (url.endsWith('/')) url = url.slice(0, -1);
       return {url, anonKey:key};
     }catch{ return null; }
@@ -289,6 +325,34 @@
 
   // Display name for the pro on jobs this customer owns. Not a profile directory.
   // Returns {} when 0022 is not pasted yet. Never falls back to DEMO_PRO_ID.
+  // Phase 1B A2: founder-set QA tester flag. True only when the RPC
+  // returns the JSON boolean true. Pending, error, missing migration,
+  // signed-out, and any other shape all fail closed (false). Never reads
+  // localStorage or the email.
+  const havenFetchIsQaTester=async()=>{
+    const cfg=getSupabaseConfig();
+    if(!cfg) return false;
+    const token=havenSignedInAccessToken();
+    if(!token) return false;
+    try{
+      const res=await fetch(`${cfg.url}/rest/v1/rpc/is_qa_tester`,{
+        method:"POST",
+        headers:{
+          "Accept":"application/json",
+          "Content-Type":"application/json",
+          apikey:cfg.anonKey,
+          Authorization:`Bearer ${token}`,
+        },
+        body:"{}",
+      });
+      if(!res.ok) return false;
+      const body=await res.json().catch(()=>null);
+      return body===true;
+    }catch(err){
+      return false;
+    }
+  };
+
   const fetchAssignedProLabels=async(backendIds)=>{
     if(havenProLabelRpcUnavailable) return {};
     const cfg=getSupabaseConfig();
