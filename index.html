@@ -1296,6 +1296,34 @@ const HAVEN_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
 
   // Display name for the pro on jobs this customer owns. Not a profile directory.
   // Returns {} when 0022 is not pasted yet. Never falls back to DEMO_PRO_ID.
+  // Phase 1B A2: founder-set QA tester flag. True only when the RPC
+  // returns the JSON boolean true. Pending, error, missing migration,
+  // signed-out, and any other shape all fail closed (false). Never reads
+  // localStorage or the email.
+  const havenFetchIsQaTester=async()=>{
+    const cfg=getSupabaseConfig();
+    if(!cfg) return false;
+    const token=havenSignedInAccessToken();
+    if(!token) return false;
+    try{
+      const res=await fetch(`${cfg.url}/rest/v1/rpc/is_qa_tester`,{
+        method:"POST",
+        headers:{
+          "Accept":"application/json",
+          "Content-Type":"application/json",
+          apikey:cfg.anonKey,
+          Authorization:`Bearer ${token}`,
+        },
+        body:"{}",
+      });
+      if(!res.ok) return false;
+      const body=await res.json().catch(()=>null);
+      return body===true;
+    }catch(err){
+      return false;
+    }
+  };
+
   const fetchAssignedProLabels=async(backendIds)=>{
     if(havenProLabelRpcUnavailable) return {};
     const cfg=getSupabaseConfig();
@@ -1903,7 +1931,6 @@ const BATHROOM_OPTIONS=["1","1.5","2","2.5","3","3.5","4","4.5","5+"];
 const formatLayout=h=>`${h.beds==="Studio"?"Studio":h.beds+" bed"} / ${h.baths} bath`;
  
 const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
-const PRO_REPLIES=["Got it! 👍","On it!","Thanks for the heads up!","Almost there!","Sounds good!","Will do!"];
 // Seed/default data — reused both for the initial useState value and by
 // "Reset Prototype Data". Cards only ever hold safe prototype display
 // fields (brand, last four digits, expiration, default flag) — never a
@@ -2154,6 +2181,7 @@ function App(){
   // returns all in-memory state to its clean defaults. Not a real
   // customer-facing "sign out" or data-deletion feature.
   const resetPrototypeData=()=>{
+    if(!qaTester) return;
     PERSISTED_KEYS.forEach(k=>{ try{ localStorage.removeItem(k); }catch{} });
     setJobs([]); setVjid(null);
     setAddresses(DEFAULT_ADDRESSES.map(a=>({...a})));
@@ -2191,10 +2219,9 @@ function App(){
     in_progress:proName=>({title:"Work has started",body:`${proName} has started the job.`}),
     complete:()=>({title:"Job completed",body:"Your job is complete — rate your experience or view the receipt."}),
   };
-  // Centralized job-transition notification hook — called from proAccepts()
-  // and advance() (the same two functions Demo Pro Controls already route
-  // through), so a future real Pro app triggers identical notifications
-  // without any change here.
+  // Centralized job-transition notification hook. The job poll (and real
+  // customer actions like materials approve) call this so every status
+  // change produces the same notification, regardless of who wrote it.
   const handleJobTransition=(jobId,newStatus,proName)=>{
     const gen=JOB_TRANSITION_NOTIFS[newStatus];
     if(!gen)return;
@@ -2354,6 +2381,20 @@ function App(){
   // local fallback: a failure shows the connection error with Retry.
   const [backendStatus,setBackendStatus]=useState("connecting");
   const [backendAttempt,setBackendAttempt]=useState(0);
+  // Phase 1B A2: server-confirmed QA tester. False by default, while the
+  // check is pending, and on any error. Never localStorage / email.
+  const [qaTester,setQaTester]=useState(false);
+  const qaSeqRef=useRef(0);
+  const clearQaTester=()=>{ qaSeqRef.current+=1; setQaTester(false); };
+  // Hidden while the check runs. A late answer for an older session is dropped.
+  const refreshQaTester=async()=>{
+    const seq=++qaSeqRef.current;
+    setQaTester(false);
+    let flag=false;
+    try{ flag=typeof havenFetchIsQaTester==="function" ? (await havenFetchIsQaTester())===true : false; }
+    catch{ flag=false; }
+    if(seq===qaSeqRef.current) setQaTester(flag);
+  };
   const retryBackendConnection=()=>{
     if(backendStatus==="retrying"||backendStatus==="connecting") return;
     // supabase-js CDN missing: Retry must reload so the browser re-fetches the script.
@@ -2377,6 +2418,7 @@ function App(){
       if(!result || !result.ok){
         console.warn("Haven: could not connect to the backend:", result&&result.reason);
         setHavenAuth(null);
+        clearQaTester();
         setBackendStatus("error");
         return;
       }
@@ -2390,6 +2432,8 @@ function App(){
           if(next) applyHavenAuthSession(next, next.user);
           else clearHavenAuthMirror();
           applyView();
+          if(!next) clearQaTester();
+          else if(!cancelled) void refreshQaTester();
         });
         subscription=data&&data.subscription?data.subscription:null;
         if(cancelled&&subscription){ try{ subscription.unsubscribe(); }catch{} }
@@ -2399,10 +2443,15 @@ function App(){
       setBackendStatus("ready");
       if(session&&session.user){
         const row=await havenFetchOwnProfile(client, session.user.id);
-        if(cancelled||!row) return;
-        havenApplyProfileRow(row);
-        setHavenProfileDisplayName(displayNameFromProfileRow(row));
-        applyView();
+        if(cancelled) return;
+        if(row){
+          havenApplyProfileRow(row);
+          setHavenProfileDisplayName(displayNameFromProfileRow(row));
+          applyView();
+        }
+        if(!cancelled) await refreshQaTester();
+      }else if(!cancelled){
+        clearQaTester();
       }
     })();
     return ()=>{
@@ -2422,6 +2471,9 @@ function App(){
       const row=await havenFetchOwnProfile(client, result.userId);
       if(row) havenApplyProfileRow(row);
       setHavenProfileDisplayName(displayNameFromProfileRow(row));
+      await refreshQaTester();
+    }else if(!(result.ok && result.signedIn)){
+      clearQaTester();
     }
     setHavenAuth(readHavenAuthMirror());
     setAuthBusy(false);
@@ -2435,6 +2487,7 @@ function App(){
     await havenSignOut();
     setHavenAuth(null);
     setHavenProfileDisplayName("");
+    clearQaTester();
     setAuthNotice("Signed out.");
     setAuthBusy(false);
   };
@@ -3426,30 +3479,9 @@ function App(){
     }
   };
 
-  const proAccepts=()=>{
-    const p=PROS[Math.floor(Math.random()*PROS.length)];
-    updateJob(vjid,{pro:p,status:"en_route",msgs:[],justAccepted:true,acceptedAt:Date.now()});
-    handleJobTransition(vjid,"en_route",p.n);
-    goTo("tracking");
-    setTimeout(()=>updateJob(vjid,{justAccepted:false}),3500);
-  };
-
-  const advance=()=>{
-    if(!vj)return;
-    const i=SF.indexOf(vj.status);
-    if(i<SF.length-1){
-      const next=SF[i+1];
-      if(next==="complete"){
-        const cat=vj.taskId?(TASKS.find(t=>t.id===vj.taskId)?.c):vj.custom?.cat;
-          const price=vj.taskId?(vj.lockedPrice??(vjTask?vjTask.p:0)):(vj.custom?.price||0);
-        const {workPerformed,materials,proNotes}=getCompletionDetails(cat,price);
-        updateJob(vjid,{status:next,completedAt:Date.now(),workPerformed,materials,proNotes});
-      }else{
-        updateJob(vjid, {status:next});
-      }
-      handleJobTransition(vjid,next,vj.pro?.n||"Your pro");
-    }
-  };
+  // Phase 1B A2: the DEMO PRO CONTROLS (proAccepts / advance) are removed.
+  // They advanced job status locally, which a QA control must never do.
+  // Job status now changes only from the backend (Pro app writes -> poll).
   const cancelJobDirect=async()=>{
     const cfg=getSupabaseConfig();
     // Stay on this job unless the cancel write lands. No session, no config,
@@ -3522,14 +3554,10 @@ function App(){
   const sendMsg=()=>{
     if(!minput.trim()||vj?.status==="complete")return;
     const txt=minput.trim();
-    const forJobId=vjid, proName=vj?.pro?.n||"your pro";
     addMsg(vjid,{id:Date.now(),f:"cu",m:txt,t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});
-    setMinput("");setTyping(true);
-    setTimeout(()=>{
-      setTyping(false);
-      addMsg(forJobId,{id:Date.now()+1,f:"pro",m:PRO_REPLIES[Math.floor(Math.random()*PRO_REPLIES.length)],t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});
-      handleIncomingMessage(forJobId,proName);
-    },2000);
+    setMinput("");
+    // Phase 1B A2: no simulated pro reply. A fabricated incoming message is a
+    // local-only QA effect; real pro messages are not wired yet.
   };
 
   const openRating=()=>{setStars(0);setReviewTxt("");setHireAgain(null);goTo("rating");};
@@ -4056,23 +4084,6 @@ function App(){
     </div>
   );
 
-  // Demo Pro Controls — a customer never sees this in a real deployment.
-  // Clearly separated (dashed border, distinct background, explicit label)
-  // from normal customer UI so it can never be mistaken for a real control.
-  // Every button here routes through the same centralized helpers (proAccepts,
-  // advance) a future real Pro app would call — no separate transition logic.
-  const demoProControlsPanel=(buttons)=>(
-    <div style={{margin:"0 20px 20px",background:"repeating-linear-gradient(135deg,#FFF7ED,#FFF7ED 10px,#FEF3C7 10px,#FEF3C7 20px)",border:"1.5px dashed #F59E0B",borderRadius:16,padding:14}}>
-      <div style={{fontSize:11,fontWeight:800,color:"#92400E",letterSpacing:.6,marginBottom:2}}>🛠️ DEMO — PRO CONTROLS</div>
-      <div style={{fontSize:11,color:"#92400E",opacity:.85,marginBottom:10}}>Stands in for the future Pro app. Not visible in a real customer build.</div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-        {buttons.map(([label,fn])=>(
-          <button key={label} onClick={fn} style={{padding:"9px 14px",borderRadius:10,border:"1.5px solid #F59E0B",background:"#FFFFFF",color:"#92400E",fontWeight:700,fontSize:12,cursor:"pointer"}}>{label}</button>
-        ))}
-      </div>
-    </div>
-  );
-
   // ── TRUST SCORE (shared small components) ───────────────────────────────────
   const trustBadge=(score,sz=13)=>(
     <span style={{background:trustBg(score),color:trustColor(score),fontWeight:800,fontSize:sz,padding:"3px 9px",borderRadius:10,display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>🛡️ {score}</span>
@@ -4135,7 +4146,7 @@ function App(){
       {detectedCity!==null&&selectedAddress&&detectedCity===selectedAddress.city&&(
         <div style={{marginTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontSize:11,color:SC}}>📡 Location matches this property</span>
-          <span onClick={simulateDifferentLocation} style={{fontSize:10,color:TM,textDecoration:"underline",cursor:"pointer"}}>Simulate different location (demo)</span>
+          {qaTester&&<span onClick={simulateDifferentLocation} style={{fontSize:10,color:TM,textDecoration:"underline",cursor:"pointer"}}>Simulate different location (demo)</span>}
         </div>
       )}
       {showAddressPicker&&(
@@ -5467,11 +5478,13 @@ function App(){
             <span style={{color:TM,fontSize:18,flexShrink:0}}>›</span>
           </button>
 
+          {qaTester&&(<>
           <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Testing</div>
           <button onClick={()=>setShowResetConfirm(true)} style={{width:"100%",padding:16,borderRadius:18,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:700,fontSize:14,cursor:"pointer",textAlign:"left"}}>Reset Prototype Data</button>
           <div style={{fontSize:11,color:TM,lineHeight:1.5,padding:"8px 4px 0"}}>Prototype/testing utility — not a real customer-facing feature. Clears all locally saved Haven data on this device.</div>
+          </>)}
 
-          {showResetConfirm&&(
+          {qaTester&&showResetConfirm&&(
             <div className="no-print" onClick={()=>setShowResetConfirm(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:30}}>
               <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:"20px 20px 0 0",padding:24,width:"100%",paddingBottom:"max(24px, env(safe-area-inset-bottom))"}}>
                 <div style={{fontWeight:800,fontSize:16,color:"#1C2B3A",marginBottom:8,textAlign:"center"}}>Reset Prototype Data?</div>
@@ -5852,7 +5865,6 @@ function App(){
               </div>
             ))}
           </div>)}
-          {postedWaiting&&demoProControlsPanel([["Accept job (start travel)",proAccepts]])}
           {postedWaiting&&(!showCancelConfirm?(
             <div style={{textAlign:"center"}}>
               <button onClick={()=>setShowCancelConfirm(true)} style={{background:"none",border:`1.5px solid #FCA5A5`,color:"#DC2626",fontSize:13,fontWeight:700,cursor:"pointer",padding:"10px 20px",borderRadius:12}}>Cancel Job</button>
@@ -6045,7 +6057,6 @@ function App(){
             if(!isTerminal){
               return(
                 <>
-                  {demoProControlsPanel([[{en_route:"Arrive",arrived:"Start work",in_progress:"Complete job"}[vj.status]||"Advance",advance]])}
                   {vj.cancelStatus==="requested"?(
                     <div style={{margin:"0 20px 24px",background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:16,padding:16,textAlign:"center"}}>
                       <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:4}}>Pending Cancellation</div>

@@ -44,8 +44,14 @@ const backendMock = {
   getUserError: null,    // error object returned by auth.getUser()
   createClientCalls: [],
   signOutCalls: 0,
+  // Phase 1B A2: is_qa_tester RPC. true | false | 'error' | 'hang'
+  qaTester: true,
+  qaHangResolvers: [],
 };
 let mockJobSeq = 0;
+const mockJobsById = new Map();
+const AUDIT_CUSTOMER_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const AUDIT_PRO_ID = '971c6625-afa7-455b-9b8b-672c8dc562d9';
 function mockResponse(status, body){
   return { ok: status >= 200 && status < 300, status, json: async () => body, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) };
 }
@@ -76,15 +82,46 @@ async function defaultBackendFetch(url, opts){
   }
   if (u.includes('/rest/v1/jobs') && method === 'POST') {
     mockJobSeq += 1;
-    return mockResponse(201, [{ id: `eeeeeeee-0000-4000-8000-${String(mockJobSeq).padStart(12, '0')}` }]);
+    const id = `eeeeeeee-0000-4000-8000-${String(mockJobSeq).padStart(12, '0')}`;
+    mockJobsById.set(id, { id, status: 'posted', customer_id: AUDIT_CUSTOMER_ID, pro_id: null });
+    return mockResponse(201, [{ id }]);
   }
   if (u.includes('/rest/v1/jobs') && method === 'PATCH') {
     let body = {};
     try { body = JSON.parse((opts && opts.body) || '{}'); } catch { body = {}; }
     const m = u.match(/id=eq\.([^&]+)/);
-    return mockResponse(200, [{ id: m ? decodeURIComponent(m[1]) : '', ...body }]);
+    const id = m ? decodeURIComponent(m[1]) : '';
+    if (id && mockJobsById.has(id)) {
+      const row = Object.assign({}, mockJobsById.get(id), body);
+      mockJobsById.set(id, row);
+      return mockResponse(200, [row]);
+    }
+    return mockResponse(200, [{ id, ...body }]);
   }
-  if (u.includes('/rest/v1/jobs')) return mockResponse(200, []);
+  if (u.includes('/rest/v1/jobs')) {
+    // Poll: id=in.(...)&customer_id=eq.... Return stored remote rows.
+    const ids = [];
+    const inMatch = u.match(/id=in\.\(([^)]*)\)/);
+    if (inMatch) {
+      inMatch[1].split(',').forEach(raw => {
+        const id = decodeURIComponent(raw.trim());
+        if (id) ids.push(id);
+      });
+    }
+    const eqMatch = u.match(/id=eq\.([^&]+)/);
+    if (eqMatch) ids.push(decodeURIComponent(eqMatch[1]));
+    const rows = ids.length
+      ? ids.map(id => mockJobsById.get(id)).filter(Boolean)
+      : Array.from(mockJobsById.values());
+    return mockResponse(200, rows);
+  }
+  if (u.includes('/rest/v1/rpc/is_qa_tester')) {
+    if (backendMock.qaTester === 'hang') {
+      return new Promise((resolve, reject) => { backendMock.qaHangResolvers.push({ resolve, reject }); });
+    }
+    if (backendMock.qaTester === 'error') return mockResponse(500, { message: 'rpc failed' });
+    return mockResponse(200, backendMock.qaTester === true);
+  }
   if (u.includes('/rest/v1/rpc/')) return mockResponse(200, []);
   unexpectedRequests.push(u.replace(/^https?:\/\/[^/]+/, '<host>'));
   return mockResponse(599, 'audit: unexpected request (no network in tests)');
@@ -135,6 +172,9 @@ function resetBackendMock(){
   backendMock.hangResolvers.length = 0;
   backendMock.sessionError = null;
   backendMock.getUserError = null;
+  backendMock.qaTester = true;
+  backendMock.qaHangResolvers.length = 0;
+  mockJobsById.clear();
 }
 
 function storedNotifPrefsRaw(){ return storedData['haven_notif_prefs'] ?? null; }
@@ -149,7 +189,7 @@ global.navigator.setAppBadge = (n) => { appBadgeValue = n; return Promise.resolv
 global.navigator.clearAppBadge = () => { appBadgeValue = 0; return Promise.resolve(); };
 global.navigator.clipboard = { writeText: () => Promise.resolve() };
 
-const { render, screen, fireEvent, cleanup } = require('@testing-library/react');
+const { render, screen, fireEvent, cleanup, within } = require('@testing-library/react');
 const { act } = require('react-dom/test-utils');
 const babel = require('@babel/core');
 const fs = require('fs');
@@ -663,6 +703,46 @@ async function clickPostJobAndWait(){
   clickRegex(/Post Job/);
   await waitForPostedJob(before);
 }
+function latestStoredJob(){
+  try {
+    const parsed = JSON.parse(storedData['haven_jobs'] || '{}');
+    const list = Array.isArray(parsed.data) ? parsed.data : [];
+    return list.length ? list[list.length - 1] : null;
+  } catch { return null; }
+}
+function setMockJobRemote(backendId, patch){
+  const prev = mockJobsById.get(backendId) || { id: backendId, customer_id: AUDIT_CUSTOMER_ID, pro_id: null, status: 'posted' };
+  mockJobsById.set(backendId, Object.assign({}, prev, patch, { id: backendId, customer_id: AUDIT_CUSTOMER_ID }));
+}
+// Phase 1B A2: DEMO PRO CONTROLS never advance a backend-linked job. Drive
+// it the way a real Pro write does: change the remote row, then open the
+// job from Bookings so the poll (deps scr/tab) runs and maps the status.
+async function advanceBackendJobViaPoll(status, title){
+  const job = latestStoredJob();
+  if (!job || !job.backendJobId) throw new Error('advanceBackendJobViaPoll needs a posted backend job');
+  clickTab('Home');
+  await act(async () => { await delay(20); });
+  clickTab('Bookings');
+  await act(async () => { await delay(40); });
+  setMockJobRemote(job.backendJobId, { status, pro_id: AUDIT_PRO_ID });
+  // Earlier phases leave their mounts in the DOM; use the newest app root
+  // (the same one click()/clickTab() target) and its newest card.
+  const roots = Array.from(document.body.children).filter(el => el.tagName === 'DIV' && (el.textContent || '').trim());
+  const root = roots[roots.length - 1] || document.body;
+  const cards = within(root).queryAllByText(new RegExp(title));
+  if (!cards.length) throw new Error('no Bookings card for ' + title);
+  act(() => { fireEvent.click(cards[0]); });
+  await waitForCondition(() => {
+    const j = latestStoredJob();
+    return !!j && j.status === status;
+  }, { timeout: 4000, message: `Poll never mapped remote status ${status} for ${title}` });
+  await act(async () => { await delay(20); });
+}
+// Accept (en_route) then complete, both from the backend.
+async function completeBackendJobViaPoll(title){
+  await advanceBackendJobViaPoll('en_route', title);
+  await advanceBackendJobViaPoll('complete', title);
+}
 function emptyStoredData(){
   const saved = { ...storedData };
   Object.keys(storedData).forEach(k => { delete storedData[k]; });
@@ -998,8 +1078,8 @@ await stepAsync('5. Receipt Share — feature detection, fallback menu, copy, pr
   clickTab('Home');
   click('Mount TV');
   await clickPostJobAndWait();
-  click('Accept job (start travel)');
-  clickRegex(/Arrive/); clickRegex(/Start work/); clickRegex(/Complete job/);
+  assert(!existsRegex('DEMO — PRO CONTROLS') && !existsRegex('Accept job (start travel)'), 'A2: DEMO PRO CONTROLS removed (no local job advancement)');
+  await completeBackendJobViaPoll('Mount TV');
   clickRegex(/⭐ Rate/);
   const ratingHeading = byText('How was your experience?');
   const container = ratingHeading.nextElementSibling; // the rating widget itself (unchanged structurally — only the visual glyph became SVG)
@@ -1019,102 +1099,78 @@ await stepAsync('5. Receipt Share — feature detection, fallback menu, copy, pr
 await stepAsync('6. Context-aware suppression — E: status change while viewing the exact posted/tracking screen is suppressed', async () => {
   clickTab('Home'); click('Assemble bed');
   await clickPostJobAndWait();
-  click('Accept job (start travel)'); // acceptance triggered WHILE watching this exact posted job — the bug this slice fixed
+  // A2: backend accept (poll) observed WHILE opening this exact posted job.
+  await advanceBackendJobViaPoll('en_route', 'Assemble bed');
   forceProfileRoot();
   click('Notifications');
   assert(!existsRegex('Pro accepted your job'), 'Acceptance notification correctly suppressed — customer was already watching this exact job on the posted screen (previously a real bug: only "tracking" was checked, not "posted")');
   click('‹');
-  clickTab('Bookings');
-  act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
-  clickRegex(/Arrive/); // triggered WHILE already viewing this exact tracking screen
+  // Backend arrive (poll) observed WHILE viewing this exact tracking screen.
+  await advanceBackendJobViaPoll('arrived', 'Assemble bed');
   forceProfileRoot();
   click('Notifications');
   assert(!existsRegex('Pro arrived'), 'Status change while actively viewing the exact tracking screen does not create a redundant notification');
   click('‹');
 });
 
-let replyCountBeforeStep7;
-step('7. Context-aware suppression — A: message live in the exact open conversation is suppressed', () => {
+// Phase 1B A2: simulated pro replies are removed (they were a local-only
+// advancement). Steps 7–9 used to drive notification suppression off those
+// fabricated replies. Keep the customer-send path, assert no auto-reply, and
+// seed a real notification for the Notification Center regression.
+await stepAsync('7. Messaging — customer can send; no simulated pro reply', async () => {
   clickTab('Bookings');
   act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
   click('💬 Message');
-  replyCountBeforeStep7 = screen.queryAllByText(REPLY_REGEX).length;
   const msgInput = screen.getByPlaceholderText(/Message .*/);
   act(()=>{fireEvent.change(msgInput,{target:{value:'hi'}});});
   act(()=>{fireEvent.keyDown(msgInput,{key:'Enter'});});
+  assert(existsRegex(/^hi$/ ) || existsRegex('hi'), 'Customer message appears in the conversation');
+  await delay(2100);
+  assert(!existsRegex(REPLY_REGEX), 'A2: no simulated pro reply is fabricated');
+  forceProfileRoot();
+  click('Notifications');
+  assert(!existsRegex('New message from'), 'A2: no fabricated reply means no message notification');
+  click('‹');
 });
 
-  await waitForNewReply(replyCountBeforeStep7, { message: 'Step 7: pro reply never arrived in the open conversation.' });
-
-  step('7b. (continued) message appears live, no notification while conversation is open', () => {
-    assert(existsRegex(/Got it|On it|Thanks|Almost there|Sounds good|Will do/i), 'Reply appears live in the open conversation');
-    forceProfileRoot();
-    click('Notifications');
-    assert(!existsRegex('New message from'), 'No notification created while that exact conversation was open');
-    click('‹');
+await stepAsync('8–10. Notification Center still works with a seeded message notification', async () => {
+  const job = latestStoredJob();
+  const jobId = job ? job.id : 1;
+  storedData['haven_notifications'] = JSON.stringify({
+    __v: 1,
+    data: [{
+      id: 'a2-seed-msg-1',
+      type: 'MESSAGE',
+      title: '2 new messages from Marcus T.',
+      body: 'Tap to view the conversation.',
+      jobId,
+      destination: { screen: 'messages', jobId },
+      isRead: false,
+      createdAt: Date.now(),
+      priority: 'normal',
+      conversationId: null,
+      propertyId: null,
+      receiptId: null,
+      count: 2,
+    }],
   });
+  cleanup();
+  seedSignedInCustomer();
+  mainContainer = await mountApp();
+  forceProfileRoot();
+  click('Notifications');
+  assert(existsRegex(/2 new messages/), 'Seeded message notification is visible');
+  assert(existsRegex('Mark all as read'), 'Mark all as read present while an unread notification exists');
+  const row = byRegex(/2 new messages/);
+  const rowEl = row.parentElement.parentElement;
+  act(()=>{fireEvent.pointerDown(rowEl,{clientX:0,clientY:0});});
+  act(()=>{fireEvent.pointerMove(rowEl,{clientX:130,clientY:2});});
+  act(()=>{fireEvent.pointerUp(rowEl,{clientX:130,clientY:2});});
+  assert(existsRegex(/Mark Unread/), 'Swipe-right mark-as-read still works, reciprocal Mark Unread available');
+  assert(!existsRegex('Mark all as read'), 'Mark all as read correctly disappears once that swipe marked the only unread notification as read (zero unread remaining)');
+});
 
-  step('8. Context-aware suppression — C: message on a different screen creates a notification', () => {
-    clickTab('Bookings');
-    act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
-    click('💬 Message');
-    const msgInput2 = screen.getByPlaceholderText(/Message .*/);
-    act(()=>{fireEvent.change(msgInput2,{target:{value:'hello again'}});});
-    act(()=>{fireEvent.keyDown(msgInput2,{key:'Enter'});});
-    click('‹');
-    clickTab('Home'); // different screen before the reply lands
-  });
-
-  // Unlike step 7, this navigates away from the messages screen before the
-  // reply lands — the reply's only observable effect at that point is a
-  // notification, not any visible message-bubble text, so there's no DOM
-  // condition to poll. An honest, tight, elapsed-time wait (matching the
-  // app's real 2000ms reply delay) is the correct approach here, not a
-  // workaround — just precise instead of the original's generous 2300ms.
-  await delay(2100);
-
-  step('8b. (continued) notification created for the different-screen case', () => {
-    forceProfileRoot();
-    click('Notifications');
-    assert(existsRegex('New message from'), 'Reply arriving while on a different screen creates a notification');
-    click('‹');
-  });
-
-  step('9. Context-aware suppression — D: backgrounded app never suppresses', () => {
-    clickTab('Bookings');
-    act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
-    click('💬 Message');
-    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-    act(()=>{ document.dispatchEvent(new dom.window.Event('visibilitychange')); });
-    const msgInput3 = screen.getByPlaceholderText(/Message .*/);
-    act(()=>{fireEvent.change(msgInput3,{target:{value:'one more'}});});
-    act(()=>{fireEvent.keyDown(msgInput3,{key:'Enter'});});
-  });
-
-  // Same reasoning as step 8 above — backgrounded, no visible signal to poll.
-  await delay(2100);
-
-  step('9b. (continued) backgrounded-app notification confirmed', () => {
-    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-    act(()=>{ document.dispatchEvent(new dom.window.Event('visibilitychange')); });
-    click('‹');
-    forceProfileRoot();
-    click('Notifications');
-    assert(existsRegex(/2 new messages/), 'Backgrounded app still created/grouped the notification even while "viewing" the exact conversation');
-  });
-
-  step('10. Regression — Notification Center core features still work', () => {
-    assert(existsRegex('Mark all as read'), 'Mark all as read present while an unread notification exists');
-    const row = byRegex(/2 new messages/);
-    const rowEl = row.parentElement.parentElement;
-    act(()=>{fireEvent.pointerDown(rowEl,{clientX:0,clientY:0});});
-    act(()=>{fireEvent.pointerMove(rowEl,{clientX:130,clientY:2});});
-    act(()=>{fireEvent.pointerUp(rowEl,{clientX:130,clientY:2});});
-    assert(existsRegex(/Mark Unread/), 'Swipe-right mark-as-read still works, reciprocal Mark Unread available');
-    assert(!existsRegex('Mark all as read'), 'Mark all as read correctly disappears once that swipe marked the only unread notification as read (zero unread remaining)');
-  });
-
-  step('11. Regression — tab persistence and draft booking still work', () => {
+step('11. Regression — tab persistence and draft booking still work', () => {
     clickTab('Home'); click('Assemble bed');
     clickTab('Bookings');
     assert(existsRegex(/Post Job/), 'Draft booking still persists across a tab switch');
@@ -1262,8 +1318,7 @@ async function runTippingChecks(){
   await stepAsync('17. Tipping — action order, receipt access before tipping, no preselected amount', async () => {
     click('Mount TV');
     await clickPostJobAndWait();
-    click('Accept job (start travel)');
-    clickRegex(/Arrive/); clickRegex(/Start work/); clickRegex(/Complete job/);
+    await completeBackendJobViaPoll('Mount TV');
     const t = document.body.textContent;
     assert(t.indexOf('Rate') < t.indexOf('Tip Pro') && t.indexOf('Tip Pro') < t.indexOf('View Receipt'), 'Completed-job action order is Rate, Tip Pro, View Receipt');
     click('🧾 View Receipt');
@@ -1323,7 +1378,7 @@ async function runUxImprovementChecks(){
   await stepAsync('20. Arrival window progressively tightens (deterministic, elapsed-time-based)', async () => {
     click('Mount TV');
     await clickPostJobAndWait();
-    click('Accept job (start travel)');
+    await advanceBackendJobViaPoll('en_route', 'Mount TV');
     assert(existsRegex('Arriving') && !existsRegex('Time remaining'), 'Broad stage: shows Arriving + a window, not yet the precise breakdown');
   });
 
@@ -1609,8 +1664,7 @@ async function runReceiptPdfChecks(){
   await stepAsync('38. Completing a job populates real receipt content (work performed, materials, notes) — not empty, not placeholder', async () => {
     click('Mount TV');
     await clickPostJobAndWait();
-    click('Accept job (start travel)');
-    clickRegex(/Arrive/); clickRegex(/Start work/); clickRegex(/Complete job/);
+    await completeBackendJobViaPoll('Mount TV');
     const jobsData = JSON.parse(storedData['haven_jobs']);
     const job = jobsData.data[jobsData.data.length-1];
     assert(Array.isArray(job.workPerformed) && job.workPerformed.length>0, 'Completed job has real work-performed bullets, not an empty list');
@@ -1837,7 +1891,7 @@ function runHomeIntentArchitectureChecks(){
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 
-  runArrivedVisibilityChecks().then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => {
+  runA2QaTesterGateChecks().then(() => runArrivedVisibilityChecks()).then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => {
     assert(unexpectedRequests.length === 0, `No request left the mocked backend (unexpected: ${JSON.stringify(unexpectedRequests.slice(0,3))})`);
     console.log(`\n--- Full audit: ${pass} passing, ${fail} failing ---`);
     if (fail > 0) process.exit(1);
@@ -2224,10 +2278,9 @@ async function runLockedPriceChecks(){
     assert(existsRegex(`$${job.lockedPrice}`), 'Bookings list shows the locked price');
   });
 
-  step('69. Complete the job; completion/receipt flows use the locked price', () => {
-    // Open the job and advance through the lifecycle
-    act(()=>{ fireEvent.click(screen.queryAllByText(/Deep Home Cleaning/)[0]); });
-    click('Accept job (start travel)'); clickRegex(/Arrive/); clickRegex(/Start work/); clickRegex(/Complete job/);
+  await stepAsync('69. Complete the job; completion/receipt flows use the locked price', async () => {
+    // A2: the backend (poll) advances the job, not the demo controls.
+    await completeBackendJobViaPoll('Deep Home Cleaning');
     // Receipt access button should be present and totals should match locked
     click('🧾 View Receipt');
     const jobsData = JSON.parse(storedData['haven_jobs']);
@@ -2260,6 +2313,122 @@ async function runLockedPriceChecks(){
 // arrived, diagnosing, in_progress, and complete map forward onto the local job.
 // in_progress also advances materials_requested and materials_approved.
 // Materials mapping stays. Later statuses are not walked backward.
+
+// ── Phase 1B A2: QA tester gate ─────────────────────────────────────────
+async function runA2QaTesterGateChecks(){
+  const saved = { ...storedData };
+  try {
+    // (a) Non-tester: no Reset, no Simulate location, no DEMO panel.
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    backendMock.qaTester = false;
+    mockJobsById.clear();
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(!existsRegex('Reset Prototype Data'), 'A2 non-tester: Reset Prototype Data hidden');
+    assert(!existsRegex(/^Testing$/), 'A2 non-tester: Testing section hidden');
+    click('‹');
+    clickTab('Home');
+    click('Mount TV');
+    // Location match path: request location then check simulate link.
+    if (existsRegex('Check my location')) clickRegex(/Check my location/);
+    await delay(400);
+    assert(!existsRegex('Simulate different location'), 'A2 non-tester: Simulate different location hidden');
+    assert(!existsRegex('DEMO — PRO CONTROLS') && !existsRegex('Accept job (start travel)'), 'A2 non-tester: no DEMO PRO CONTROLS');
+    click('← Back');
+
+    // (b) Tester: Reset visible; DEMO PRO CONTROLS still absent (removed).
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    backendMock.qaTester = true;
+    mockJobsById.clear();
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(existsRegex('Reset Prototype Data'), 'A2 tester: Reset Prototype Data visible');
+    click('‹');
+    assert(!existsRegex('DEMO — PRO CONTROLS') && !existsRegex('Accept job (start travel)'), 'A2 tester: DEMO PRO CONTROLS still removed (no local advancement)');
+
+    // (c) RPC error: hidden (fail closed).
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    backendMock.qaTester = 'error';
+    mockJobsById.clear();
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(!existsRegex('Reset Prototype Data'), 'A2 RPC error: Reset Prototype Data hidden');
+    click('‹');
+
+    // (c2) RPC pending: hidden until the server answers true.
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    backendMock.qaTester = 'hang';
+    backendMock.qaHangResolvers.length = 0;
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(!existsRegex('Reset Prototype Data'), 'A2 RPC pending: Reset Prototype Data hidden while loading');
+    const pendingRpc = backendMock.qaHangResolvers.shift();
+    assert(!!pendingRpc, 'A2: tester check was requested from the server');
+    if (pendingRpc) {
+      await act(async () => { pendingRpc.resolve(mockResponse(200, true)); await delay(20); });
+      assert(existsRegex('Reset Prototype Data'), 'A2 RPC resolves true: Reset Prototype Data appears');
+    }
+    const rpcCall = fetchLog.filter(c => String(c.url).includes('/rest/v1/rpc/is_qa_tester')).pop();
+    assert(!!rpcCall && rpcCall.opts.method === 'POST' && rpcCall.opts.headers && rpcCall.opts.headers.Authorization === 'Bearer signed-in-access-token', 'A2: is_qa_tester RPC is called with the signed-in user bearer');
+    click('‹');
+
+    // (c3) Never decided from localStorage or email.
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    storedData['haven_qa_tester'] = 'true';
+    storedData['haven_auth_email'] = 'qa-tester@haven.test';
+    backendMock.qaTester = false;
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(!existsRegex('Reset Prototype Data'), 'A2: a localStorage flag or a QA-looking email does not show QA controls');
+    click('‹');
+    delete storedData['haven_qa_tester'];
+
+    // (d) Static SQL: flag not self-settable; provider results require a tester.
+    const sql = fs.readFileSync(require('path').join(__dirname, 'supabase/migrations/0024_qa_tester_gate.sql'), 'utf8');
+    assert(/is_qa_tester boolean not null default false/i.test(sql), '0024 adds is_qa_tester boolean not null default false');
+    assert(/revoke insert \(is_qa_tester\), update \(is_qa_tester\) on table public\.profiles from authenticated/i.test(sql) && /revoke insert \(is_qa_tester\), update \(is_qa_tester\) on table public\.profiles from anon/i.test(sql), '0024 revokes INSERT/UPDATE on is_qa_tester from authenticated and anon');
+    assert(!/grant[^;]*\(\s*[^)]*is_qa_tester[^)]*\)[^;]*to (authenticated|anon)/i.test(sql), '0024 never grants is_qa_tester to an API role');
+    assert(/is_qa_tester is founder-set only/i.test(sql), '0024 trigger blocks self-set of the flag');
+    assert(/create or replace function public\.is_qa_tester\(\)/i.test(sql), '0024 defines is_qa_tester() RPC');
+    assert(/security definer/i.test(sql) && /grant execute on function public\.is_qa_tester\(\) to authenticated/i.test(sql), '0024 RPC is SECURITY DEFINER for authenticated');
+    assert(/revoke all on function public\.is_qa_tester\(\) from anon/i.test(sql), '0024 RPC is not executable by anon');
+    assert(/QA tester only/i.test(sql) && /identityVerification/i.test(sql) && /payoutsEnabled/i.test(sql), '0024 guards provider-result statuses and payoutsEnabled');
+    assert(/profiles_guard_qa_fields/i.test(sql), '0024 installs profiles_guard_qa_fields trigger');
+    assert(/b79c42e9-6e09-4335-9035-a11ecf37d032/i.test(sql) && /971c6625-afa7-455b-9b8b-672c8dc562d9/i.test(sql), '0024 comments the founder UPDATE for the two QA accounts');
+    assert(/-- update public\.profiles/i.test(sql), '0024 founder UPDATE is commented out (founder pastes by hand)');
+    assert(!/jobs_posted_within_radius|jobs_enforce_claim_radius|pro_claim_job/.test(sql.replace(/Does not change[\s\S]*radius/, '')), '0024 does not redefine radius/claim functions');
+  } catch (e) {
+    fail++;
+    console.error('FAIL (A2 QA tester gate):', (e && e.stack) || e);
+  } finally {
+    backendMock.qaTester = true;
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    cleanup();
+  }
+  console.log(`\n--- A2 QA tester gate: ${pass} passing, ${fail} failing ---`);
+}
+
 async function runArrivedVisibilityChecks(){
   const backendId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const origFetch = global.fetch;
