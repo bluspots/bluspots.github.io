@@ -3,6 +3,16 @@ import React, { useState, useRef, useEffect } from "react";
 // Recognized so a job write can refuse it. Signed-out job writes do not send it.
 // A signed-in session uses that user's id and must not fall back to this one.
 const DEMO_CUSTOMER_ID = "11111111-1111-4111-8111-111111111111";
+// Receipt "Billed to" account email, masked: the first 2 chars of the local
+// part + ••• + the full domain (ja•••@gmail.com). A 1-char local part shows
+// that one char (a•••@gmail.com). Empty or malformed input returns "" so the
+// caller omits the row.
+function maskReceiptEmail(email){
+  const clean = typeof email === "string" ? email.trim() : "";
+  const at = clean.lastIndexOf("@");
+  if (at < 1 || at === clean.length - 1) return "";
+  return `${clean.slice(0, Math.min(2, at))}•••${clean.slice(at)}`;
+}
 // Card for the pro stored on a backend job. Never the catalog demo pro.
 function havenRealProCard(proId, displayName) {
   const name = (displayName && String(displayName).trim()) || "Haven Pro";
@@ -572,6 +582,9 @@ export default function App(){
   // Session mirror for Profile/Settings. Job writes read the same storage keys
   // at request time (havenJobCustomerId / havenJobRestBearer), not this state.
   const [havenAuth,setHavenAuth]=useState(()=>readHavenAuthMirror());
+  // profiles.display_name for the signed-in user (receipt "Billed to" only).
+  const [havenProfileDisplayName,setHavenProfileDisplayName]=useState("");
+  const displayNameFromProfileRow=row=>row&&typeof row.display_name==="string"?row.display_name.trim():"";
   const [authEmailInput,setAuthEmailInput]=useState("");
   const [authPasswordInput,setAuthPasswordInput]=useState("");
   const [authBusy,setAuthBusy]=useState(false);
@@ -594,6 +607,7 @@ export default function App(){
           const row=await havenFetchOwnProfile(client, data.session.user.id);
           if(cancelled||!row) return;
           havenApplyProfileRow(row);
+          setHavenProfileDisplayName(displayNameFromProfileRow(row));
           applyView();
         }
       }catch(err){
@@ -627,6 +641,7 @@ export default function App(){
     if(result.ok && result.signedIn && result.userId && client){
       const row=await havenFetchOwnProfile(client, result.userId);
       if(row) havenApplyProfileRow(row);
+      setHavenProfileDisplayName(displayNameFromProfileRow(row));
     }
     setHavenAuth(readHavenAuthMirror());
     setAuthBusy(false);
@@ -639,6 +654,7 @@ export default function App(){
     setAuthBusy(true);
     await havenSignOut();
     setHavenAuth(null);
+    setHavenProfileDisplayName("");
     setAuthNotice("Signed out.");
     setAuthBusy(false);
   };
@@ -2895,6 +2911,18 @@ export default function App(){
   // in-app receipt screen below, which is intentionally unchanged. Every
   // value drawn here is read from the job/profile/pro records passed in —
   // nothing about a specific receipt is hardcoded in this function.
+  // Receipt "Billed to" block, shared by the in-app receipt, the PDF and the
+  // share text. Name: profiles.display_name, else the Edit Profile name; the
+  // "Jane Doe" seed is never printed ("" means omit the row). Email: the auth
+  // mirror only (never profile.email, which is the DEFAULT_PROFILE seed),
+  // masked; "" means omit the row.
+  const receiptBilledTo=()=>{
+    const mirror=typeof readHavenAuthMirror==="function"?readHavenAuthMirror():null;
+    const displayName=mirror?havenProfileDisplayName:"";
+    const editName=typeof profile.name==="string"?profile.name.trim():"";
+    const name=displayName||(editName&&editName!==DEFAULT_PROFILE.name?editName:"");
+    return {name,maskedEmail:maskReceiptEmail(mirror?mirror.email:"")};
+  };
   const generateReceiptPDF=(job)=>{
     if(typeof window==="undefined"||!window.jspdf) return null;
     const { jsPDF }=window.jspdf;
@@ -2956,19 +2984,25 @@ export default function App(){
 
     // === CUSTOMER & PROFESSIONAL (two columns) ===
     const colGap=20, colW=(CONTENT_W-colGap)/2, rightX=MARGIN+colW+colGap;
-    label("Customer",MARGIN,y); label("Service Professional",rightX,y);
+    label("Billed To",MARGIN,y); label("Service Professional",rightX,y);
     const colBlockTop=y+15;
     y=colBlockTop;
+    const billedTo=receiptBilledTo();
     doc.setFont("helvetica","bold"); doc.setFontSize(11); setInk();
-    doc.text(profile.name,MARGIN,y); doc.text(jPro.n,rightX,y);
+    if(billedTo.name) doc.text(billedTo.name,MARGIN,y);
+    doc.text(jPro.n,rightX,y);
     y+=15;
     doc.setFont("helvetica","normal"); doc.setFontSize(9); setMuted();
-    // Left column: address can wrap to multiple lines (long addresses).
+    // Left column (Billed to): name (above, omitted when there is no real
+    // name, so the address moves up), address (can wrap), address label if
+    // present, masked account email if present.
+    let leftY=billedTo.name?y:colBlockTop;
     const addrLines=doc.splitTextToSize(job.addressText||"—",colW);
-    addrLines.forEach((line,i)=>doc.text(line,MARGIN,y+i*11.5));
-    doc.text(profile.email||"—",MARGIN,y+addrLines.length*11.5);
-    doc.text(profile.phone||"—",MARGIN,y+(addrLines.length+1)*11.5);
-    const leftColBottom=y+(addrLines.length+2)*11.5;
+    addrLines.forEach((line,i)=>doc.text(line,MARGIN,leftY+i*11.5));
+    leftY+=addrLines.length*11.5;
+    if(job.addressLabel){ setFaint(); doc.text(job.addressLabel,MARGIN,leftY); setMuted(); leftY+=11.5; }
+    if(billedTo.maskedEmail){ doc.text(billedTo.maskedEmail,MARGIN,leftY); leftY+=11.5; }
+    const leftColBottom=leftY;
     // Right column: fixed four rows, independent of the left column's
     // height — a long address can never misalign the professional column.
     doc.text("Verified Haven Professional",rightX,y);
@@ -3095,6 +3129,7 @@ export default function App(){
     const dateStr=new Date(job.completedAt||job.id).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
     const timeStr=new Date(job.completedAt||job.id).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
     const receiptId=`HVN-${String(job.id).slice(-6).toUpperCase()}`;
+    const billedTo=receiptBilledTo();
     const lineItems=[
       ["Labor",`$${basePrice}`],
       ...(job.surge>0?[["ASAP surge",`$${job.surge}`]]:[]),
@@ -3108,8 +3143,9 @@ export default function App(){
         `Receipt #${receiptId}   PAID`,
         `Completed ${dateStr} at ${timeStr}`,
         "",
-        `Customer: ${profile.name}`,
+        ...(billedTo.name?[`Billed to: ${billedTo.name}`]:[]),
         `Service address: ${job.addressText||"—"}`,
+        ...(billedTo.maskedEmail?[`Account: ${billedTo.maskedEmail}`]:[]),
         `Pro: ${jPro.n}`,
         `Service: ${jt?jt.n:"Custom job"}`,
         "",
@@ -3155,6 +3191,7 @@ export default function App(){
     const dateStr=new Date(vj.completedAt||vj.id).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
     const timeStr=new Date(vj.completedAt||vj.id).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
     const receiptId=`HVN-${String(vj.id).slice(-6).toUpperCase()}`;
+    const billedTo=receiptBilledTo();
     const serviceName=vjTask?vjTask.n:"Custom job";
     const basePrice=vj.taskId?(vj.lockedPrice??(vjTask?vjTask.p:0)):(vj.custom?.price||0);
     const lineItems=[
@@ -3245,9 +3282,10 @@ export default function App(){
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:20}}>
               <div>
                 <div style={{fontSize:10,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:4}}>BILLED TO</div>
-                <div style={{fontSize:13,fontWeight:700,color:TX}}>{profile.name}</div>
+                {billedTo.name&&<div style={{fontSize:13,fontWeight:700,color:TX}}>{billedTo.name}</div>}
                 <div style={{fontSize:12,color:TS,marginTop:2,lineHeight:1.4}}>{vj.addressText||"—"}</div>
                 {vj.addressLabel&&<div style={{fontSize:11,color:TM,marginTop:1}}>{vj.addressLabel}</div>}
+                {billedTo.maskedEmail&&<div style={{fontSize:12,color:TS,marginTop:2}}>{billedTo.maskedEmail}</div>}
               </div>
               <div>
                 <div style={{fontSize:10,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:4}}>SERVICE PROVIDER</div>
@@ -3260,7 +3298,7 @@ export default function App(){
               <div style={{width:40,height:40,borderRadius:20,background:W,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontSize:20}}>{vjTask?vjTask.e:"🔧"}</span></div>
               <div style={{flex:1}}>
                 <div style={{fontWeight:700,fontSize:14,color:TX}}>{serviceName}</div>
-                <div style={{fontSize:11,color:TS,marginTop:1}}>Job #{vj.id} · Completed {dateStr} at {timeStr}</div>
+                <div style={{fontSize:11,color:TS,marginTop:1}}>Completed {dateStr} at {timeStr}</div>
               </div>
             </div>
 
