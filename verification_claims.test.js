@@ -78,12 +78,15 @@ const scriptMatch = html.match(/<script type="text\/babel">([\s\S]*?)<\/script>/
 if (!scriptMatch) { console.error('no babel script block in prototype.html'); process.exit(1); }
 const scriptBody = scriptMatch[1].replace(
   /const root = ReactDOM\.createRoot\(document\.getElementById\('root'\)\);\s*root\.render\(<ErrorBoundary><App\/><\/ErrorBoundary>\);\s*$/,
-  'module.exports.App = App; module.exports.ErrorBoundary = ErrorBoundary;'
+  'module.exports.App = App; module.exports.ErrorBoundary = ErrorBoundary; module.exports.proProfileFacts = typeof proProfileFacts === "function" ? proProfileFacts : null; module.exports.havenRealProCard = typeof havenRealProCard === "function" ? havenRealProCard : null;'
 );
 const { code } = babel.transformSync(scriptBody, { presets: [['@babel/preset-react', { runtime: 'classic' }]], filename: 'shipped.jsx' });
 const moduleObj = { exports: {} };
 eval(`(function(React, module){ ${code} \n})`)(React, moduleObj);
 const { App: RawApp, ErrorBoundary } = moduleObj.exports;
+// Distinct names: the eval above is direct, so it must not see these bindings.
+const shippedProProfileFacts = moduleObj.exports.proProfileFacts;
+const shippedRealProCard = moduleObj.exports.havenRealProCard;
 const App = () => React.createElement(ErrorBoundary, null, React.createElement(RawApp));
 
 // ── Mocked backend ──
@@ -282,16 +285,75 @@ async function checkReceipt(job, who) {
     noClaims(profileText, 'Pro profile');
   });
 
-  await step('4. Posted screen: no "Verified pros" and no claim on the pros list / their profiles', async () => {
+  await step('4. Posted screen: no "Verified pros" and no claim', async () => {
     await mount([{ id: now - 1000, status: 'posted', taskId: 1, tpId: 2, lockedPrice: 65, msgs: [], photos: [], desc: '', pro: null }]);
     await clickText(/^Bookings$/, 'Bookings tab');
     await clickText(/Assemble furniture/, 'job card');
     await waitFor(() => /Looking for a pro/.test(bodyText()), 'posted screen');
     assert(bodyText().includes('Pros near you can see your job. This screen updates as soon as one accepts.'), 'posted subtitle is the approved copy');
     noClaims(bodyText(), 'posted screen');
-    await clickText(/^David R\.$/, 'posted-list pro');
-    assert(/Pro profile/.test(bodyText()), 'posted-list pro profile opened');
-    noClaims(bodyText(), 'posted-list pro profile');
+  });
+
+  // ── Phase 1B C2: no demo pros on the Posted screen; no null metrics ──
+  const DEMO_PRO_TEXT = /Pros near you viewing this job|Marcus T\.|David R\.|Sarah K\.|Trust Score|🛡️|\d+% on-time|would hire again|\/100/i;
+  const BROKEN_TEXT = /\bnull\b|\bundefined\b|\bNaN\b/;
+  for (const [label, job] of [
+    ['local waiting job', { id: now - 1500, status: 'posted', taskId: 1, tpId: 2, lockedPrice: 65, msgs: [], photos: [], desc: '', pro: null }],
+    ['backend waiting job', { id: now - 1400, status: 'posted', taskId: 1, tpId: 2, lockedPrice: 65, msgs: [], photos: [], desc: '', pro: null, backendJobId: 'dddddddd-eeee-4fff-8aaa-bbbbbbbbbbbb' }],
+  ]) {
+    await step(`C2-1. Posted screen (${label}): no demo pros, Trust Score or percentages`, async () => {
+      await mount([job]);
+      await clickText(/^Bookings$/, 'Bookings tab');
+      await clickText(/Assemble furniture/, 'job card');
+      await waitFor(() => /Looking for a pro/.test(bodyText()), 'posted screen');
+      const text = bodyText();
+      const m = text.match(DEMO_PRO_TEXT);
+      assert(!m, `${label}: no demo pro list / Trust Score / percentages (found ${m && m[0]})`);
+      assert(text.includes('Pros near you can see your job. This screen updates as soon as one accepts.'), `${label}: subtitle kept`);
+      assert(/Cancel Job/.test(text), `${label}: Cancel Job still offered`);
+      assert(!BROKEN_TEXT.test(text), `${label}: no null/undefined/NaN`);
+    });
+  }
+
+  await step('C2-2. Real backend Pro: profile not reachable from Tracking; facts hide every missing value', async () => {
+    // Tracking: the real pro card has no profile link.
+    await mount([backendJob]);
+    await clickText(/^Bookings$/, 'Bookings tab');
+    await clickText(/Assemble furniture/, 'job card');
+    await waitFor(() => /View Receipt/.test(bodyText()), 'tracking');
+    await clickText(/^Grace Hopper$/, 'real pro card');
+    assert(!/Pro profile/.test(bodyText()), 'tapping the real pro card does not open a Pro profile');
+    assert(!BROKEN_TEXT.test(bodyText()) && !/\/100|Trust Score/.test(bodyText()), 'tracking shows no null/undefined/NaN or Trust Score for the real pro');
+    // Guard used by the Pro profile screen, on the exact card a backend job carries.
+    assert(typeof shippedProProfileFacts === 'function' && typeof shippedRealProCard === 'function', 'helpers exported from the shipped build');
+    for (const card of [shippedRealProCard(PRO_UUID, 'Grace Hopper'), shippedRealProCard(null, '')]) {
+      const facts = shippedProProfileFacts(card);
+      assert(facts.trustScore === null && facts.ratingLine === null && facts.metrics.length === 0, `real pro "${card.n}": no Trust Score, rating or metric chips`);
+      assert(card.s === 'Haven Pro' && typeof card.n === 'string' && card.n.length > 0, `real pro "${card.n}": name and 'Haven Pro' remain`);
+    }
+    const partial = shippedProProfileFacts({ trustScore: NaN, onTimeRate: undefined, hireAgainRate: null, completionRate: 97, responseTime: '' , r: 4.9, j: undefined });
+    assert(partial.trustScore === null && partial.ratingLine === null && partial.metrics.length === 1 && partial.metrics[0][1] === '97%', 'only rows with a real value survive');
+    const demo = shippedProProfileFacts({ trustScore: 98, onTimeRate: 99, hireAgainRate: 97, completionRate: 99, responseTime: '4 min', r: 4.97, j: 543 });
+    assert(demo.trustScore === 98 && demo.metrics.length === 4 && demo.ratingLine === '⭐ 4.97 · 543 completed jobs', 'demo values still pass through unchanged');
+    // Screen source: every stat goes through the guard; Message stays.
+    const jsx = fs.readFileSync('home_services_app.jsx', 'utf8');
+    const screenSrc = jsx.slice(jsx.indexOf('const proProfileScreen=()=>'), jsx.indexOf('// ── EDIT PROFILE'));
+    assert(!/p\.(trustScore|onTimeRate|hireAgainRate|completionRate|responseTime|r|j)\b/.test(screenSrc), 'Pro profile renders no raw demo stat');
+    assert(/facts\.trustScore!=null&&/.test(screenSrc) && /metrics\.length>0&&/.test(screenSrc) && /facts\.ratingLine&&/.test(screenSrc), 'Trust Score, chips and rating line are each guarded');
+    assert(/{p\.n}/.test(screenSrc) && /{p\.s}/.test(screenSrc) && /💬 Message/.test(screenSrc), "name, 'Haven Pro' and Message remain");
+    assert(!/Pros near you viewing this job/.test(jsx), 'demo Posted list removed from source');
+  });
+
+  await step('C2-3. Demo pro profile (legacy local job) still renders its stored values without null', async () => {
+    await mount([legacyLocalJob]);
+    await clickText(/^Bookings$/, 'Bookings tab');
+    await clickText(/Assemble furniture/, 'job card');
+    await waitFor(() => /View Receipt/.test(bodyText()), 'tracking');
+    await clickText(/^Marcus T\.$/, 'demo pro card');
+    await waitFor(() => /Pro profile/.test(bodyText()), 'Pro profile');
+    const text = bodyText();
+    assert(!BROKEN_TEXT.test(text), 'no null/undefined/NaN on the demo pro profile');
+    assert(/Marcus T\./.test(text) && /💬 Message Marcus/.test(text), 'name and Message shown');
   });
 
   await step('5. Home header and Help topics show no claim', async () => {
