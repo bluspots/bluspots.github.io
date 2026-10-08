@@ -3003,15 +3003,20 @@ export default function App(){
     if(job.addressLabel){ setFaint(); doc.text(job.addressLabel,MARGIN,leftY); setMuted(); leftY+=11.5; }
     if(billedTo.maskedEmail){ doc.text(billedTo.maskedEmail,MARGIN,leftY); leftY+=11.5; }
     const leftColBottom=leftY;
-    // Right column: fixed four rows, independent of the left column's
+    // Right column: rows stack top-down, independent of the left column's
     // height — a long address can never misalign the professional column.
-    doc.text("Verified Haven Professional",rightX,y);
-    doc.text("Background Checked",rightX,y+11.5);
+    // Rating and Member since print only with a real value (real backend
+    // pros have neither), and a skipped row leaves no blank line.
+    let rightY=y;
+    doc.text("Verified Haven Professional",rightX,rightY); rightY+=11.5;
+    doc.text("Background Checked",rightX,rightY); rightY+=11.5;
     if(typeof jPro.r==="number"&&typeof jPro.j==="number"){
-      doc.text(`${jPro.r.toFixed(2)} rating (${jPro.j} jobs)`,rightX,y+11.5*2);
+      doc.text(`${jPro.r.toFixed(2)} rating (${jPro.j} jobs)`,rightX,rightY); rightY+=11.5;
     }
-    doc.text(`Member since ${jPro.memberSince||"—"}`,rightX,y+11.5*3);
-    const rightColBottom=y+11.5*4;
+    if(typeof jPro.memberSince==="string"&&jPro.memberSince.trim()){
+      doc.text(`Member since ${jPro.memberSince.trim()}`,rightX,rightY); rightY+=11.5;
+    }
+    const rightColBottom=rightY;
     y=Math.max(leftColBottom,rightColBottom)+16;
 
     divider(y); y+=22;
@@ -3056,7 +3061,11 @@ export default function App(){
     ];
     doc.setFont("helvetica","normal"); doc.setFontSize(9.5);
     rows.forEach(([kicker,desc,qty,amt])=>{
-      ensureSpace(20);
+      // A row with a kicker (LABOR / PRIORITY / TIP) gets 6pt more room
+      // above it, so the first row sits 24pt below the PAYMENT divider
+      // (like the PDF's other post-divider gaps). Materials rows stay 18.
+      ensureSpace(kicker?26:20);
+      if(kicker) y+=6;
       if(kicker){ doc.setFont("helvetica","bold"); setFaint(); doc.setFontSize(7); doc.text(kicker.toUpperCase(),MARGIN,y-9,{charSpace:0.5}); }
       doc.setFont("helvetica","normal"); doc.setFontSize(9.5); setInk();
       doc.text(desc,MARGIN,y);
