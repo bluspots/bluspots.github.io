@@ -5,7 +5,7 @@
   "description": "Haven — home services marketplace customer app. Single-file React PWA prototype (home_services_app.jsx), compiled in-browser via Babel Standalone, no bundler. These devDependencies are for the local audit test suite only — the shipped app itself loads React/ReactDOM/Babel/jsPDF from CDN (see _shell_pre.txt), not from node_modules.",
   "scripts": {
     "build": "bash build.sh",
-    "test": "node audit.test.js",
+    "test": "node audit.test.js && node verification_claims.test.js",
     "boot-check": "node boot_check.js",
     "verify": "npm run build && npm run boot-check && npm test"
   },

@@ -15,6 +15,7 @@ Signed-out job writes do not use the demo customer. See `docs/SLICE4_DEMO_RETIRE
 Job mutations fail closed when Supabase is configured. See `docs/SLICE5_FAIL_CLOSED.md`.
 Signed-in job polls stay on that user's jobs. See `docs/SLICE6_SCOPED_READS.md`.
 Anonymous job writes are revoked at the database. See `docs/SLICE7_ANON_WRITE_LOCKDOWN.md`.
+The app connects to Supabase automatically with the shipped public config (no demo mode). See `docs/PHASE1B_A1_AUTO_CONNECT.md`.
 
 ## Quick start
 
@@ -80,6 +81,7 @@ under `file://`).
 | File | Purpose |
 |---|---|
 | `home_services_app.jsx` | Source of truth — the entire app |
+| `supabase_public_config.js` | Public Supabase URL + anon key (the only connection config; never a secret key) |
 | `build.sh` | Regenerates `index.html` from the JSX + shell templates |
 | `_shell_pre.txt` / `_shell_post.txt` | HTML shell surrounding the compiled app (CDN script tags, root div, etc.) |
 | `audit.test.js` | Functional regression suite (jsdom) |
@@ -90,7 +92,7 @@ under `file://`).
 
 ## Known limitations (by design, for now)
 
-- No backend — everything is `localStorage`-persisted and client-simulated.
+- Jobs and accounts go through Supabase (config in `supabase_public_config.js`). Other domains (addresses, cards, notifications, preferences) are still `localStorage`-persisted, and pro-side progress can still be simulated with the demo pro controls.
 - Single ~4,700-line file, no code-splitting. Acceptable for a
   fast-iterating prototype; should become a real modular project before
   production.

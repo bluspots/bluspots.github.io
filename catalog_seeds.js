@@ -88,14 +88,11 @@ const TASKS=[
 ];
 const PROS=[
   {i:"MT",n:"Marcus T.",r:4.97,j:543,s:"TV Mount Pro",   col:"#1E40AF",memberSince:"2019",
-    trustScore:98,onTimeRate:99,hireAgainRate:97,completionRate:99,responseTime:"4 min",
-    badges:["Identity verified","Background checked"]},
+    trustScore:98,onTimeRate:99,hireAgainRate:97,completionRate:99,responseTime:"4 min"},
   {i:"DR",n:"David R.", r:4.93,j:312,s:"Assembly Pro",   col:"#065F46",memberSince:"2020",
-    trustScore:95,onTimeRate:96,hireAgainRate:94,completionRate:98,responseTime:"7 min",
-    badges:["Identity verified","Background checked"]},
+    trustScore:95,onTimeRate:96,hireAgainRate:94,completionRate:98,responseTime:"7 min"},
   {i:"SK",n:"Sarah K.", r:4.99,j:189,s:"Smart Home Pro", col:"#5B21B6",memberSince:"2021",
-    trustScore:99,onTimeRate:100,hireAgainRate:98,completionRate:99,responseTime:"3 min",
-    badges:["Identity verified","Background checked","Licensed"]},
+    trustScore:99,onTimeRate:100,hireAgainRate:98,completionRate:99,responseTime:"3 min"},
 ];
 // Simulated job-completion detail (work performed, materials, pro notes),
 // keyed by category so a plumbing job and an electrical job get distinct,
