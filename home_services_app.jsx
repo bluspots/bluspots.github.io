@@ -94,6 +94,9 @@ const EMERGENCY_OPTIONS=[
 // Demo/placeholder support number — replace before launch.
 const SUPPORT_PHONE_DISPLAY="(407) 555-0147";
 const SUPPORT_PHONE_LINK="tel:+14075550147";
+// Phase 1A: the Home Report placeholder card on My Home is hidden from the
+// Customer UI. Code is kept intact; flip to true to show it again.
+const SHOW_HOME_REPORT_CARD=false;
 
 const TOPICS=[
   {t:"Booking & pricing questions",a:"All prices shown are fixed — what you see at booking is what you pay, plus a surge fee only if you choose ASAP scheduling. There are no hidden fees or hourly surprises."},
@@ -2719,12 +2722,14 @@ export default function App(){
           <span style={{color:TM,fontSize:20}}>›</span>
         </div>
 
-        {/* Home Report */}
+        {/* Home Report — gated by SHOW_HOME_REPORT_CARD (off by default) */}
+        {SHOW_HOME_REPORT_CARD&&(
         <div style={{background:"linear-gradient(135deg,#1C2B3A,#2E4359)",borderRadius:20,padding:20}}>
           <div style={{fontWeight:700,fontSize:15,color:W,marginBottom:6}}>📄 Home Report</div>
           <div style={{fontSize:12,color:"rgba(255,255,255,.65)",lineHeight:1.5,marginBottom:14}}>Your Home Report will combine completed services, receipts, and maintenance history into one clean record.</div>
           <button disabled style={{width:"100%",padding:13,borderRadius:14,border:"none",background:"rgba(255,255,255,.15)",color:"rgba(255,255,255,.7)",fontWeight:700,fontSize:13,cursor:"default"}}>Coming soon</button>
         </div>
+        )}
       </div>
     </div>
     );
@@ -4165,7 +4170,7 @@ export default function App(){
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,paddingTop:10,borderTop:`1px solid ${BD}`}}>
                     <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Distance remaining</span>
-                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{vjArrivalSim.milesAway} miles</span>
+                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{typeof vjArrivalSim.milesAway==="number"?vjArrivalSim.milesAway.toFixed(1):vjArrivalSim.milesAway} miles</span>
                   </div>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",paddingTop:10,borderTop:`1px solid ${BD}`}}>
                     <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Estimated arrival</span>
