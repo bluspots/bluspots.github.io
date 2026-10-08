@@ -17,6 +17,15 @@
 --      SQLSTATE 42501 "Only the customer can approve or decline materials on
 --      this job" and the row does not change. This replaces 0025's softer
 --      rule (Pro-alone approval moved the status but recorded $0).
+--      inspection_completed is in this list only as a move FROM
+--      materials_requested: that is the diagnosis-category decline
+--      (HAVEN_JOB_CONTRACT.md: "materials_requested -> inspection_completed |
+--      Customer | Declines on diagnosis categories"; 0006 "diagnosis decline
+--      path"; the Customer app sends it from Decline for diagnosis jobs). It
+--      is the same customer decision as materials_declined under the
+--      diagnosis-path name. inspection_completed or materials_declined from
+--      any other status (diagnosing, in_progress, arrived, ...), and the Pro
+--      app re-sending a terminal the customer already set, are unchanged.
 --      Pros can still create and re-send materials requests. Every other
 --      transition is exactly as before: no RLS policy, status value or
 --      lifecycle policy is added, dropped or changed.

@@ -3203,6 +3203,7 @@ async function runReceiptTotalsChecks(){
       assert(/0026 needs 0025_materials_approved_lock\.sql first/.test(live), '0026 stops with a clear error when 0025 is missing');
       assert(/create or replace function public\.jobs_lock_materials_approved\(\)/.test(live) && /create trigger jobs_lock_materials_approved\s+before insert or update on public\.jobs/i.test(live), '0026 replaces the 0025 trigger function on the same BEFORE INSERT OR UPDATE trigger');
       assert(/old\.status = 'materials_requested'[\s\S]{0,200}new\.status in \('materials_approved', 'materials_declined', 'inspection_completed'\)[\s\S]{0,120}not privileged[\s\S]{0,120}auth\.uid\(\) is distinct from old\.customer_id/.test(live), '0026 guards approve and both decline states: privileged or the job customer only');
+      assert(/diagnosis-category decline/.test(sql) && /from\s+--\s+any other status/.test(sql), '0026 documents inspection_completed as the diagnosis decline, refused only from materials_requested');
       assert(/raise exception 'Only the customer can approve or decline materials on this job'\s+using errcode = '42501'/.test(live), '0026 refuses with 42501 and a clear message');
       assert(/current_user not in \('anon', 'authenticated'\)/.test(live), '0026 uses the same privileged-caller check as 0024/0025');
       assert(/add column materials_request_seq integer not null default 0/.test(live) && /add column if not exists materials_decided_seq integer not null default 0/.test(live), '0026 adds the request number and decided marker');
