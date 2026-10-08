@@ -106,6 +106,8 @@ global.fetch = async (url, init) => {
   const u = String(url);
   requests.push(u);
   const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+  if (u.endsWith('/auth/v1/health')) return ok({});
+  if (u.includes('/rest/v1/rpc/is_qa_tester')) return ok(false);
   if (u.includes('/rest/v1/rpc/job_assigned_pro_labels')) {
     return ok([{
       job_id: BACKEND_JOB, display_name: 'Grace Hopper',
@@ -123,6 +125,24 @@ global.fetch = async (url, init) => {
   return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
 };
 global.window.fetch = global.fetch;
+// Supabase Auth stub for builds that connect on load (Phase 1B A1): the
+// session mirrors the seeded haven_auth_* keys. Older builds ignore it.
+function storedSession() {
+  const token = storedData['haven_auth_access_token'];
+  if (!token) return null;
+  return { access_token: token, user: { id: storedData['haven_auth_user_id'], email: storedData['haven_auth_email'], user_metadata: { role: 'customer' } } };
+}
+global.supabase = global.window.supabase = {
+  createClient: () => ({
+    auth: {
+      getSession: async () => ({ data: { session: storedSession() }, error: null }),
+      getUser: async () => { const s = storedSession(); return { data: { user: s ? s.user : null }, error: null }; },
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe(){} } } }),
+      signOut: async () => ({ error: null }),
+    },
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+  }),
+};
 
 function seed(jobs) {
   Object.keys(storedData).forEach(k => delete storedData[k]);
@@ -155,6 +175,7 @@ function lastByText(re) {
   return all.length ? all[all.length - 1] : null;
 }
 async function clickText(re, label) {
+  for (let i = 0; i < 80 && !lastByText(re); i++) await act(async () => { await delay(25); });
   const el = lastByText(re);
   if (!el) throw new Error('No element for ' + (label || re) + '\n' + bodyText().slice(0, 500));
   await act(async () => { fireEvent.click(el); });
