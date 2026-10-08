@@ -2723,9 +2723,13 @@ async function runPlaceholderChecks(){
   const origFetch = global.fetch;
   const origClipboard = global.navigator.clipboard;
   const origJspdf = global.window.jspdf;
-  global.fetch = async (url) => {
-    if (String(url).includes('/rest/v1/jobs')) return { ok: true, json: async () => [], text: async () => '' };
-    return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+  // Phase 1B A1 harness: jobs reads return no rows; everything else (Auth
+  // health, is_qa_tester RPC, unexpected-request guard) goes to the shared
+  // mocked backend so the app connects and signs in like every other phase.
+  resetBackendMock();
+  global.fetch = async (url, opts) => {
+    if (String(url).includes('/rest/v1/jobs')) { fetchLog.push({ url: String(url), opts: opts || {} }); return { ok: true, json: async () => [], text: async () => '' }; }
+    return defaultBackendFetch(url, opts);
   };
   let copied = '';
   global.navigator.clipboard = { writeText: (t) => { copied = String(t); return Promise.resolve(); } };
@@ -2756,23 +2760,21 @@ async function runPlaceholderChecks(){
   });
   const mount = async (job, { backend }) => {
     cleanup();
+    // Since #43 the app ignores stored URL/key and connects with the shipped
+    // public config; the signed-in session comes from the mocked Auth client.
+    delete storedData['haven_supabase_url'];
+    delete storedData['haven_supabase_anon_key'];
     if (backend) {
-      storedData['haven_supabase_url'] = 'https://example.supabase.co';
-      storedData['haven_supabase_anon_key'] = 'test-anon-key';
-      storedData['haven_auth_access_token'] = 'signed-in-access-token';
+      seedSignedInCustomer();
       storedData['haven_auth_user_id'] = authUserId;
-      storedData['haven_auth_email'] = 'qa-customer@example.com';
-      storedData['haven_auth_role'] = 'customer';
     } else {
-      delete storedData['haven_supabase_url'];
-      delete storedData['haven_supabase_anon_key'];
       clearHavenAuthTestKeys();
     }
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: job ? [job] : [] });
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
     const container = document.createElement('div');
     document.body.appendChild(container);
-    await act(async () => { render(React.createElement(App), container); });
+    await mountApp(container);
     await act(async () => { await delay(40); });
   };
   const readReceiptSurfaces = async () => {
