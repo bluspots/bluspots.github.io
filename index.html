@@ -5912,11 +5912,12 @@ function App(){
     if(!vj) return unavailableScreen("Tracking",goBookings);
     const info=SI[vj.status]||SI.en_route;
     const emBg={en_route:"#FEF3C7",arrived:"#DBEAFE",in_progress:"#FEF3C7",complete:SL}[vj.status]||"#FEF3C7";
-    // Booking Summary total (Phase 1B B3): the same backend total as the
+    // Booking Summary amounts (Phase 1B B3): the same backend values as the
     // receipt (labor + approved materials + priority fee + tip, with the
-    // 0025 column-absent fallback). No backend row yet: the local total.
+    // 0025 column-absent fallback). No backend row, or not loaded yet:
+    // "Total not available yet" and no amounts, like the receipt. Local
+    // price, surge and emergency fee never reach this block.
     const vjReceipt=receiptForJob(vj);
-    const bookingSummaryTotal=vjReceipt?receiptMoney(vjReceipt.totalCents):`$${vjTotal}`;
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         {vj.justAccepted&&(
@@ -6054,10 +6055,11 @@ function App(){
               {vj.emergency&&<span style={{fontSize:11,fontWeight:700,color:"#C2410C",background:"#FFF1EE",padding:"4px 10px",borderRadius:20}}>🚨 Emergency priority</span>}
             </div>
             {[["Service",vjTask?vjTask.n:"Custom job"],["Time",vjTp?vjTp.label:"—"],["Photos",vj.photos?.length>0?`${vj.photos.length} shared`:"None"],
-              ...(vj.emergency?[["Emergency fee",`+$${vj.emergencyFee}`]]:[]),
-              ["Total",bookingSummaryTotal]].map(([l,v])=>(
+              ...(vjReceipt&&vjReceipt.priorityFeeCents>0?[["Emergency fee",`+${receiptMoney(vjReceipt.priorityFeeCents)}`]]:[]),
+              ...(vjReceipt?[["Total",receiptMoney(vjReceipt.totalCents)]]:[])].map(([l,v])=>(
               <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:l==="Total"?AM:TX}}>{v}</span></div>
             ))}
+            {!vjReceipt&&<div style={{fontSize:13,color:TS,marginBottom:9}}>Total not available yet</div>}
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div></div>}
           </div>
           {(()=>{
