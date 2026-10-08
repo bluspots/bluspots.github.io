@@ -2915,6 +2915,121 @@ async function runReceiptTotalsChecks(){
     assert(!!read && (!read.opts.method || read.opts.method === 'GET'), 'receipt amounts are a GET');
     assert(!!read && ['fixed_customer_labor_price_cents', 'materials_estimate_cents', 'emergency_fee_cents', 'tip_amount_cents'].every(c => read.url.includes(c)), 'jobs read selects labor, materials, priority fee and tip');
     assert(!!read && !read.url.includes('payment_snapshot'), 'jobs read does not select payment_snapshot');
+
+    // ── Phase 1B B2: approved-materials lock (0025) ──────────────────────
+    step('B2-1. materials come from materials_approved_cents when the column is present', () => {
+      const approved = havenReceiptFromBackendRow(row({ materials_estimate_cents: 1800, materials_approved_cents: 1800 }));
+      assert(approved && approved.materialsCents === 1800 && approved.totalCents === 10700, 'B2: $89 labor + $18 approved materials = $107');
+      ['in_progress', 'complete'].forEach(st => {
+        const declined = havenReceiptFromBackendRow(row({ status: st, materials_estimate_cents: 1800, materials_approved_cents: 0 }));
+        assert(declined && declined.materialsCents === 0 && declined.totalCents === 8900, `B2: declined then ${st}: estimate ignored, total $89`);
+      });
+      const nullApproved = havenReceiptFromBackendRow(row({ materials_estimate_cents: 1800, materials_approved_cents: null }));
+      assert(nullApproved && nullApproved.materialsCents === 0 && nullApproved.totalCents === 8900, 'B2: materials_approved_cents null means $0 materials');
+      const pending = havenReceiptFromBackendRow(row({ status: 'materials_requested', materials_estimate_cents: 1200, materials_approved_cents: 1800 }));
+      assert(pending && pending.materialsCents === 1800, 'B2: a pending re-request does not change the locked amount');
+      const noEstimate = row({ materials_approved_cents: 1800 }); delete noEstimate.materials_estimate_cents;
+      assert(havenReceiptFromBackendRow(noEstimate)?.totalCents === 10700, 'B2: the locked amount does not need the estimate column');
+      assert(havenReceiptFromBackendRow(row({ materials_approved_cents: -5 })) === null, 'B2: an invalid locked amount gives no total, no guess');
+      // Column absent (0025 not pasted): PR #45 status rule.
+      const fbComplete = row({ materials_estimate_cents: 1800 });
+      assert(!('materials_approved_cents' in fbComplete) && havenReceiptFromBackendRow(fbComplete).totalCents === 10700, 'B2 fallback: column absent, complete counts the estimate ($107)');
+      assert(havenReceiptFromBackendRow(row({ status: 'materials_declined', materials_estimate_cents: 1800 })).totalCents === 8900, 'B2 fallback: column absent, materials_declined adds nothing');
+      assert(havenReceiptFromBackendRow(row({ status: 'materials_requested', materials_estimate_cents: 1800 })).totalCents === 8900, 'B2 fallback: column absent, a pending request adds nothing');
+    });
+
+    // Every surface: declined then complete shows $89 and no materials line.
+    // Same #43 harness as above: jobs reads return remoteRow, everything else
+    // (Auth health, is_qa_tester RPC) goes to the shared mocked backend.
+    global.fetch = async (url, opts) => {
+      const u = String(url);
+      if (u.includes('/rest/v1/jobs')) { fetchLog.push({ url: u, opts: opts || {} }); return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' }; }
+      return defaultBackendFetch(url, opts);
+    };
+    remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: 0 });
+    await mountCompleted(localJob({ id: 9711 }));
+    await openReceiptsList();
+    assert(existsRegex('$89.00') && !existsRegex('$107.00'), 'B2 list: declined then complete shows $89.00, not $107.00');
+    await openReceipt();
+    out = await readSurfaces();
+    assert(/Total\$89\.00/.test(out.inApp) && !/Approved materials/.test(out.inApp), 'B2 in-app: total $89.00, no approved materials line');
+    assert(out.share.includes('Total: $89.00') && !out.share.includes('Approved materials'), 'B2 share text: total $89.00, no materials line');
+    assert(out.pdf.includes('$89.00') && !out.pdf.includes('$107.00') && !out.pdf.includes('$18.00'), 'B2 PDF: $89.00, no $18.00 or $107.00');
+
+    // Every surface: approved $18 locked shows $107.
+    remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: 1800 });
+    await mountCompleted(localJob({ id: 9712 }));
+    await openReceiptsList();
+    assert(existsRegex('$107.00'), 'B2 list: approved materials total $107.00');
+    await openReceipt();
+    out = await readSurfaces();
+    assert(/Approved materials\$18\.00/.test(out.inApp) && /Total\$107\.00/.test(out.inApp), 'B2 in-app: approved materials $18.00, total $107.00');
+    assert(out.share.includes('Approved materials: $18.00') && out.share.includes('Total: $107.00'), 'B2 share text: $18.00 and $107.00');
+    assert(out.pdf.includes('$18.00') && out.pdf.includes('$107.00'), 'B2 PDF: $18.00 and $107.00');
+
+    // Null locked amount (column present, nothing approved): $89.
+    remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: null });
+    await mountCompleted(localJob({ id: 9713 }));
+    await openReceiptsList();
+    await openReceipt();
+    out = await readSurfaces();
+    assert(/Total\$89\.00/.test(out.inApp) && out.share.includes('Total: $89.00') && out.pdf.includes('$89.00'), 'B2: null locked amount shows $89.00 on every surface');
+
+    // Deploy order. The read names the 0025 column. A 400 for another reason
+    // is not retried. A 400 about the missing column retries once without it,
+    // the receipt falls back to the #45 rule, and later reads skip it.
+    const calls = [];
+    let mode = 'ok';
+    global.fetch = async (url, opts) => {
+      const u = String(url);
+      calls.push(u);
+      if (!u.includes('/rest/v1/jobs')) return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+      if (mode === 'other400') return { ok: false, status: 400, json: async () => ({}), text: async () => '{"code":"PGRST100","message":"failed to parse filter"}' };
+      if (mode === 'missing' && u.includes('materials_approved_cents')) {
+        return { ok: false, status: 400, json: async () => ({}), text: async () => '{"code":"42703","message":"column jobs.materials_approved_cents does not exist"}' };
+      }
+      return { ok: true, json: async () => [row({ materials_estimate_cents: 1800 })], text: async () => '' };
+    };
+    let rows = await fetchCanonicalJobsByIds([backendId]);
+    assert(calls.length === 1 && calls[0].includes(',materials_approved_cents') && calls[0].includes('materials_estimate_cents'), 'B2: jobs read selects materials_approved_cents (and still the estimate for the fallback)');
+    calls.length = 0; mode = 'other400';
+    rows = await fetchCanonicalJobsByIds([backendId]);
+    assert(calls.length === 1 && Array.isArray(rows) && rows.length === 0, 'B2: an unrelated 400 is not retried');
+    calls.length = 0; mode = 'missing';
+    rows = await fetchCanonicalJobsByIds([backendId]);
+    assert(calls.length === 2 && calls[0].includes('materials_approved_cents') && !calls[1].includes('materials_approved_cents'), 'B2: missing column: one retry without materials_approved_cents');
+    assert(rows.length === 1 && havenReceiptFromBackendRow(rows[0]).totalCents === 10700, 'B2: missing column: rows still load and use the #45 fallback');
+    calls.length = 0;
+    rows = await fetchCanonicalJobsByIds([backendId]);
+    assert(calls.length === 1 && !calls[0].includes('materials_approved_cents') && rows.length === 1, 'B2: after a missing-column 400, later reads skip the column');
+
+    step('B2-2. 0025 migration text (static)', () => {
+      const sql = fs.readFileSync(require('path').join(__dirname, 'supabase/migrations/0025_materials_approved_lock.sql'), 'utf8');
+      const live = sql.split('\n').filter(l => !/^\s*--/.test(l)).join('\n');
+      assert(/after 0024/i.test(sql) && /Safe to re-run/i.test(sql), '0025 header: paste after 0024, safe to re-run');
+      assert(/add column if not exists materials_approved_cents integer/i.test(live) && /add column if not exists materials_approved_at timestamptz/i.test(live), '0025 adds materials_approved_cents integer and materials_approved_at timestamptz');
+      assert(/create trigger jobs_lock_materials_approved\s+before insert or update on public\.jobs/i.test(live), '0025 installs a BEFORE INSERT OR UPDATE trigger on public.jobs');
+      assert(/current_user not in \('anon', 'authenticated'\)/.test(live), '0025 privileged-caller check is inline (file stands alone)');
+      assert(!/haven_qa_privileged_caller/.test(live), '0025 does not depend on 0024 functions');
+      assert(/old\.status = 'materials_requested'/.test(live) && /new\.status = 'materials_approved'/.test(live) && /old\.materials_estimate_cents/.test(live), '0025 locks OLD.materials_estimate_cents on materials_requested -> materials_approved');
+      assert(/new\.status in \('materials_declined', 'inspection_completed'\)/.test(live), '0025 handles both decline states');
+      assert(/if privileged\s+or \(auth\.uid\(\) is not null and auth\.uid\(\) = old\.customer_id\) then\s+new\.materials_approved_cents := prior_cents \+ coalesce\(old\.materials_estimate_cents, 0\);/.test(live), '0025 records an approval only for the job customer (auth.uid() = old.customer_id) or a privileged caller');
+      assert((live.match(/new\.materials_approved_at := now\(\)/g) || []).length === 1, '0025 stamps materials_approved_at only inside the customer/privileged branch');
+      assert(/Pro-alone approval adds \$0 materials/i.test(sql) && /-- Pro-alone approval, rolled back/.test(sql), '0025 documents and verifies that a Pro-alone approval records nothing');
+      assert(/coalesce\(materials_requested_at, posted_at\) < '<0025 paste time>'/.test(sql), '0025 backfill only touches requests made before the paste');
+      assert(/new\.materials_approved_cents := old\.materials_approved_cents/.test(live) && /new\.materials_approved_cents := null/.test(live), '0025 ignores client values (OLD on update, null on insert)');
+      ['public', 'anon', 'authenticated'].forEach(r => {
+        assert(new RegExp(`revoke insert \\(materials_approved_cents, materials_approved_at\\),\\s+update \\(materials_approved_cents, materials_approved_at\\)\\s+on table public\\.jobs from ${r};`, 'i').test(live), `0025 revokes column INSERT/UPDATE from ${r}`);
+      });
+      assert(!/grant[^;]*materials_approved_(cents|at)[^;]*to (authenticated|anon)/i.test(live), '0025 never grants the columns to an API role');
+      assert(!/\b(create|alter|drop) policy\b/i.test(live) && !/row level security/i.test(live), '0025 does not touch RLS policies');
+      assert(!/alter type|job_status_events|jobs_posted_within_radius|jobs_enforce_claim_radius|pro_claim_job|haven_caller_within_radius/i.test(live), '0025 does not touch the status enum or radius/claim objects');
+      assert(!/fixed_customer_labor_price_cents|emergency_fee_cents|convenience_fee_cents|tip_amount_cents/.test(live), '0025 does not change pricing or fee columns');
+      assert(!/^\s*update public\.jobs/im.test(live), '0025 backfill is commented out (founder step)');
+      assert(/-- update public\.jobs/.test(sql) && /evidence/.test(sql) && /-- select id, status, materials_estimate_cents/.test(sql), '0025 has a commented preview SELECT and backfill');
+      assert(/-- drop trigger if exists jobs_lock_materials_approved/.test(sql) && /-- alter table public\.jobs drop column if exists materials_approved_cents/.test(sql), '0025 has a commented rollback');
+      assert(!/in_progress before complete/i.test(live), '0025 adds no in_progress-before-complete rule');
+    });
   } catch (e) {
     fail++;
     console.error('FAIL (receipt totals):', (e && e.stack) || e);
