@@ -385,7 +385,6 @@ export default function App(){
     const live=liveContextRef.current;
     if(!live.isAppVisible) return true;
     if(type===NOTIF_TYPES.MESSAGE && live.scr==="messages" && conversationId!=null && live.vjid===conversationId) return false;
-    if(type===NOTIF_TYPES.SUPPORT && live.scr==="help" && live.showSupportChat) return false;
     if(type===NOTIF_TYPES.JOB_UPDATE && (live.scr==="tracking"||live.scr==="posted") && jobId!=null && live.vjid===jobId) return false;
     if(type===NOTIF_TYPES.RECEIPT && live.scr==="receipt" && jobId!=null && live.vjid===jobId) return false;
     return true;
@@ -462,7 +461,6 @@ export default function App(){
     const copy={
       requested:["Cancellation request received","We've received your cancellation request and will follow up shortly."],
       approved:["Cancellation approved","Your cancellation has been approved."],
-      denied:["Cancellation needs attention","Haven Support has a question about your cancellation request."],
     }[kind];
     if(!copy)return;
     createNotification({type:NOTIF_TYPES.CANCELLATION,title:copy[0],body:copy[1],jobId,destination:{screen:"tracking",jobId}});
@@ -484,21 +482,6 @@ export default function App(){
         return next;
       }
       return [makeNotification({type:NOTIF_TYPES.MESSAGE,title:`New message from ${proName}`,body:"Tap to view the conversation.",jobId,destination:{screen:"messages",jobId}}),...prev];
-    });
-  };
-  const handleIncomingSupportMessage=()=>{
-    if(!notifAllowed(NOTIF_TYPES.SUPPORT))return;
-    if(!shouldCreateNotification({type:NOTIF_TYPES.SUPPORT}))return; // live in the open support conversation — seen, not suppressed-then-delayed
-    setNotifications(prev=>{
-      const idx=prev.findIndex(n=>n.type===NOTIF_TYPES.SUPPORT&&!n.isRead);
-      if(idx>=0){
-        const existing=prev[idx];
-        const count=(existing.count||1)+1;
-        const updated={...existing,count,title:`${count} new messages from Haven Support`,createdAt:Date.now()};
-        const next=prev.slice(); next[idx]=updated;
-        return next;
-      }
-      return [makeNotification({type:NOTIF_TYPES.SUPPORT,title:"New message from Haven Support",body:"Tap to view the conversation.",destination:{screen:"help",supportChat:true}}),...prev];
     });
   };
   const markNotifRead=(id,read=true)=>setNotifications(prev=>prev.map(n=>n.id===id?{...n,isRead:read}:n));
@@ -531,7 +514,7 @@ export default function App(){
       case "rating": setVjid(job.id); openRating(); break;
       case "receipt": openReceipt(job.id); break;
       case "messages": setVjid(job.id); goTo("messages"); break;
-      case "help": openHelp(); if(d.supportChat) setShowSupportChat(true); break;
+      case "help": openHelp(); break;
       case "payment": goTo("payment"); break;
       case "draftAddress":
         if(hasDraft){ goTo(tid?"task":"custom",navFrom[tid?"task":"custom"]); }
@@ -785,11 +768,7 @@ export default function App(){
   const [selectedCardId,setSelectedCardId]=useState(1); // which card the current booking will use
   const [showCardPicker,setShowCardPicker]=useState(false);
   // Help & support
-  const [showSupportChat,setShowSupportChat]=useState(false);
-  useEffect(()=>{ liveContextRef.current = {scr,tab,vjid,isAppVisible,showSupportChat}; });
-  const [supportMsgs,setSupportMsgs]=useState([{id:1,f:"agent",m:"Hi! I'm a support specialist — what can I help with today?",t:"Just now"}]);
-  const [supportInput,setSupportInput]=useState("");
-  const [supportTyping,setSupportTyping]=useState(false);
+  useEffect(()=>{ liveContextRef.current = {scr,tab,vjid,isAppVisible}; });
   const [openTopicIdx,setOpenTopicIdx]=useState(null);
   // Pro profile
   const [proProfileId,setProProfileId]=useState(null);
@@ -1469,7 +1448,7 @@ export default function App(){
   };
   const openReceipt=(jobId)=>{ setVjid(jobId); goTo("receipt"); };
   const openProProfile=(pro,ctx)=>{setProProfileId(pro.i);setProProfileCtx(ctx);goTo("proProfile");};
-  const openHelp=()=>{setShowSupportChat(false);setOpenTopicIdx(null);goTo("help");};
+  const openHelp=()=>{setOpenTopicIdx(null);goTo("help");};
 
   // Payment methods
   const setCardDefault=id=>{setCards(cs=>cs.map(c=>({...c,isDefault:c.id===id})));setExpandedCard(null);};
@@ -1497,19 +1476,6 @@ export default function App(){
     setConfirmDeleteAddrId(null);
   };
   const setPrimaryAddress=id=>{setAddresses(as=>as.map(a=>({...a,isPrimary:a.id===id})));setExpandedAddr(null);};
-
-  // Support chat
-  const sendSupportMsg=()=>{
-    if(!supportInput.trim())return;
-    const txt=supportInput.trim();
-    setSupportMsgs(p=>[...p,{id:Date.now(),f:"me",m:txt,t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}]);
-    setSupportInput("");setSupportTyping(true);
-    setTimeout(()=>{
-      setSupportTyping(false);
-      setSupportMsgs(p=>[...p,{id:Date.now()+1,f:"agent",m:"Thanks for the details — a specialist will follow up shortly. Anything else I can help with in the meantime?",t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}]);
-      handleIncomingSupportMessage();
-    },1800);
-  };
 
   const openBrowse=(cats=null,label="",emergency=false)=>{
     setCatGroup(cats?{cats,label}:null);
@@ -3823,52 +3789,10 @@ export default function App(){
 
   // ── HELP & SUPPORT ────────────────────────────────────────────────────────
   const helpScreen=()=>{
-    if(showSupportChat) return(
-      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
-        {subHeader("Support chat",()=>setShowSupportChat(false))}
-        <div className="sc" style={{flex:1,overflowY:"auto",padding:"16px 20px"}}>
-          {supportMsgs.map(m=>{
-            const mine=m.f==="me";
-            return(
-              <div key={m.id} style={{display:"flex",flexDirection:mine?"row-reverse":"row",gap:10,marginBottom:14,alignItems:"flex-end"}}>
-                {!mine&&<div style={{width:30,height:30,borderRadius:15,background:N,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:13,flexShrink:0}}>🎧</div>}
-                <div style={{maxWidth:"72%"}}>
-                  <div style={{background:mine?N:W,borderRadius:mine?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",boxShadow:mine?"none":"0 1px 4px rgba(28,43,58,.08)"}}>
-                    <div style={{fontSize:14,color:mine?W:TX,lineHeight:1.45}}>{m.m}</div>
-                  </div>
-                  <div style={{fontSize:10,color:TM,marginTop:4,textAlign:mine?"right":"left",fontWeight:500}}>{m.t}</div>
-                </div>
-              </div>
-            );
-          })}
-          {supportTyping&&(
-            <div style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-end"}}>
-              <div style={{width:30,height:30,borderRadius:15,background:N,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:13,flexShrink:0}}>🎧</div>
-              <div style={{background:W,borderRadius:"18px 18px 18px 4px",padding:"12px 16px",boxShadow:"0 1px 4px rgba(28,43,58,.08)"}}>
-                <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                  {[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:3.5,background:TM,opacity:.7,animation:`bounce 0.6s ${i*0.15}s infinite alternate`}}/>)}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-        <div style={{flexShrink:0,padding:"12px 16px 24px",background:W,borderTop:`1px solid ${BD}`,display:"flex",gap:10,alignItems:"center"}}>
-          <input value={supportInput} onChange={e=>setSupportInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendSupportMsg()}
-            placeholder="Describe your issue…"
-            style={{flex:1,background:BG,border:`1.5px solid ${BD}`,borderRadius:24,padding:"12px 18px",fontSize:14,color:TX,outline:"none"}}/>
-          <button onClick={sendSupportMsg} style={{width:46,height:46,borderRadius:23,background:supportInput.trim()?N:BD,border:"none",color:W,fontSize:18,cursor:supportInput.trim()?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>➤</button>
-        </div>
-      </div>
-    );
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         {subHeader("Help & support",()=>backFrom("help",{scr:"home",tab:"profile"}))}
         <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-          <div onClick={()=>setShowSupportChat(true)} style={{background:W,borderRadius:18,padding:16,marginBottom:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
-            <span style={{fontSize:22}}>💬</span>
-            <div style={{flex:1}}><div style={{fontWeight:700,fontSize:14,color:TX}}>Chat with support</div><div style={{fontSize:12,color:TS,marginTop:2}}>Avg. response time: 3 minutes</div></div>
-            <span style={{color:TM,fontSize:18}}>›</span>
-          </div>
           <div style={{fontSize:12,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:10}}>Common topics</div>
           <div style={{background:W,borderRadius:18,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16}}>
             {TOPICS.map((topic,i)=>{

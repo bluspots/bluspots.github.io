@@ -2348,8 +2348,51 @@ async function runPlaceholderChecks(){
       const links = Array.from(document.querySelectorAll('a[href]')).map(a => a.getAttribute('href'));
       assert(!/555-0147|1-800-555-0199|support@haven\.app|Speak with support/.test(help), 'Help: no placeholder phone or email');
       assert(!links.some(h => /^(tel|mailto):/i.test(h)), 'Help: no tel: or mailto: link');
-      assert(existsRegex('Chat with support'), 'Help: the support chat entry stays (flagged for the founder, not removed)');
+      assert(!existsRegex('Chat with support') && !existsRegex(/Avg\. response time/), 'Help: no simulated "Chat with support" entry and no "Avg. response time" (D2)');
     });
+
+    // Phase 1B D2: no simulated support agent, notification or reply.
+    await mount(null, { backend: true });
+    forceProfileRoot();
+    click('Help & Support');
+    await act(async () => { await delay(40); });
+    const helpNow = document.body.textContent;
+    assert(!/Chat with support|Avg\. response time|Support chat|support specialist/.test(helpNow), 'D2 Help: no chat entry, response-time claim or agent greeting');
+    assert(/Common topics/.test(helpNow) && /Report an issue with a pro/.test(helpNow), 'D2 Help: common topics still listed');
+    await act(async () => { await delay(2200); });
+    const helpLater = document.body.textContent;
+    const notifsLater = storedData['haven_notifications'] || '';
+    assert(!/a specialist will follow up|support specialist|New message from Haven Support|new messages from Haven Support/.test(helpLater), 'D2 Help: no agent reply after 2.2s');
+    assert(!/Haven Support/.test(notifsLater) && !/"type":"SUPPORT"/.test(notifsLater), 'D2: no "New message from Haven Support" notification created after 2.2s');
+
+    // Phase 1B D2: cancel request still submits; no "Haven Support has a question".
+    await mount({
+      id: 9811, status: 'en_route', taskId: 1, tpId: 2, acceptedAt: Date.now(), lockedPrice: 65,
+      pro: { i: 'MT', n: 'Marcus T.', r: 4.97, j: 543, s: 'TV Mount Pro', col: '#1E40AF', trustScore: 98 },
+      msgs: [], photos: [], desc: '', cancelStatus: null, cancellationRequestedAt: null,
+    }, { backend: true });
+    clickTab('Bookings');
+    const cancelCards = screen.queryAllByText(/Assemble furniture/);
+    act(() => { fireEvent.click(cancelCards[cancelCards.length - 1]); });
+    await act(async () => { await delay(40); });
+    click('Need to cancel this job?');
+    assert(existsRegex('Request cancellation') && existsRegex('Contact Haven Support'), 'D2 cancel: panel unchanged (Request cancellation, Contact Haven Support)');
+    const beforeCancel = Date.now();
+    click('Request cancellation');
+    await act(async () => { await delay(40); });
+    const cancelJob = JSON.parse(storedData['haven_jobs']).data.find(j => j.id === 9811);
+    assert(cancelJob && cancelJob.cancelStatus === 'requested' && cancelJob.cancellationRequestedAt >= beforeCancel, 'D2 cancel: job saved as cancelStatus requested with a timestamp');
+    assert(existsRegex('Pending Cancellation'), 'D2 cancel: Pending Cancellation shown');
+    assert(/Cancellation request received/.test(storedData['haven_notifications'] || ''), 'D2 cancel: "Cancellation request received" notification still created');
+    await act(async () => { await delay(2200); });
+    const cancelNotifs = storedData['haven_notifications'] || '';
+    assert(!/Haven Support has a question|Cancellation needs attention/.test(cancelNotifs + document.body.textContent), 'D2 cancel: no "Haven Support has a question" notification, even after 2.2s');
+    assert(JSON.parse(storedData['haven_jobs']).data.find(j => j.id === 9811).cancelStatus === 'requested', 'D2 cancel: request stays pending (no simulated decision)');
+    {
+      const src = fs.readFileSync('home_services_app.jsx', 'utf8');
+      assert(!/Haven Support has a question|New message from Haven Support|support specialist|a specialist will follow up|Avg\. response time|Chat with support/.test(src), 'D2 source: no simulated support agent, reply, notification or response-time copy');
+      assert(!/sendSupportMsg|handleIncomingSupportMessage|showSupportChat|supportMsgs/.test(src), 'D2 source: support-chat state and handlers removed');
+    }
   } catch (e) {
     fail++;
     console.error('FAIL (placeholders):', (e && e.stack) || e);
