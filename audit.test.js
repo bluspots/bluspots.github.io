@@ -2505,6 +2505,10 @@ async function runReceiptTotalsChecks(){
       assert(!/haven_qa_privileged_caller/.test(live), '0025 does not depend on 0024 functions');
       assert(/old\.status = 'materials_requested'/.test(live) && /new\.status = 'materials_approved'/.test(live) && /old\.materials_estimate_cents/.test(live), '0025 locks OLD.materials_estimate_cents on materials_requested -> materials_approved');
       assert(/new\.status in \('materials_declined', 'inspection_completed'\)/.test(live), '0025 handles both decline states');
+      assert(/if privileged\s+or \(auth\.uid\(\) is not null and auth\.uid\(\) = old\.customer_id\) then\s+new\.materials_approved_cents := prior_cents \+ coalesce\(old\.materials_estimate_cents, 0\);/.test(live), '0025 records an approval only for the job customer (auth.uid() = old.customer_id) or a privileged caller');
+      assert((live.match(/new\.materials_approved_at := now\(\)/g) || []).length === 1, '0025 stamps materials_approved_at only inside the customer/privileged branch');
+      assert(/Pro-alone approval adds \$0 materials/i.test(sql) && /-- Pro-alone approval, rolled back/.test(sql), '0025 documents and verifies that a Pro-alone approval records nothing');
+      assert(/coalesce\(materials_requested_at, posted_at\) < '<0025 paste time>'/.test(sql), '0025 backfill only touches requests made before the paste');
       assert(/new\.materials_approved_cents := old\.materials_approved_cents/.test(live) && /new\.materials_approved_cents := null/.test(live), '0025 ignores client values (OLD on update, null on insert)');
       ['public', 'anon', 'authenticated'].forEach(r => {
         assert(new RegExp(`revoke insert \\(materials_approved_cents, materials_approved_at\\),\\s+update \\(materials_approved_cents, materials_approved_at\\)\\s+on table public\\.jobs from ${r};`, 'i').test(live), `0025 revokes column INSERT/UPDATE from ${r}`);

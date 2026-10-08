@@ -30,12 +30,19 @@
 --      is changed by adding the columns.
 --   2. BEFORE INSERT OR UPDATE trigger jobs_lock_materials_approved on
 --      public.jobs. Status values are the job_status enum from 0001 / 0004.
---        materials_requested -> materials_approved (customer approves, 0008):
+--        materials_requested -> materials_approved (customer approves, 0008),
+--        sent by the job's customer (auth.uid() = OLD.customer_id) or by a
+--        privileged caller (database owner / SQL editor, service_role):
 --          materials_approved_cents = prior approved amount (or 0)
 --                                     + OLD.materials_estimate_cents
 --          materials_approved_at    = now()
 --          OLD is the estimate the customer was shown. An estimate change
 --          sent in the same PATCH as the approval is not what gets locked.
+--        The same status move sent by anyone else (in practice the assigned
+--        Pro alone): the status still moves (RLS decides that, unchanged
+--        here), but nothing is recorded. Both columns keep OLD, so the
+--        customer total gains $0 materials. materials_approved_cents means
+--        customer approval only.
 --        materials_requested -> materials_declined (standard decline, 0006)
 --        materials_requested -> inspection_completed (diagnosis decline, 0006):
 --          materials_approved_cents = prior approved amount, or 0 if none
@@ -91,8 +98,9 @@
 -- Note (not changed here): permissive UPDATE policies are OR-ed, and 0006 /
 --   0012 / 0013 use USING (pro_id is not null). So any assigned row can be
 --   moved to materials_approved, including by the assigned Pro (0017 allows
---   the Pro on their own job). This trigger records the amount on any
---   materials_requested -> materials_approved write, whoever sends it.
+--   the Pro on their own job). This file does not block that move (a
+--   lifecycle change, for the founder separately). It only refuses to record
+--   an amount for it: a Pro-alone approval adds $0 materials.
 
 -- ── 1. Columns ────────────────────────────────────────────────────────────
 alter table public.jobs
@@ -103,7 +111,7 @@ alter table public.jobs
   add column if not exists materials_approved_at timestamptz null;
 
 comment on column public.jobs.materials_approved_cents is
-  'Materials the customer approved on this job, in cents. Set only by trigger jobs_lock_materials_approved on materials_requested -> materials_approved (adds OLD.materials_estimate_cents). A decline adds nothing. null = no approval recorded. Clients cannot write it.';
+  'Materials the customer approved on this job, in cents. Set only by trigger jobs_lock_materials_approved on materials_requested -> materials_approved sent by the job customer or a privileged caller (adds OLD.materials_estimate_cents). A Pro-alone approval or a decline adds nothing. null = no approval recorded. Clients cannot write it.';
 
 comment on column public.jobs.materials_approved_at is
   'When the latest materials approval was recorded. Set only by trigger jobs_lock_materials_approved. Clients cannot write it.';
@@ -113,6 +121,8 @@ comment on column public.jobs.materials_approved_at is
 -- PostgREST runs client requests as anon or authenticated; the SQL editor
 -- runs as the owner; server jobs use service_role. Same test as 0024's
 -- haven_qa_privileged_caller(), inlined so this file stands alone.
+-- auth.uid() is Supabase's helper (request.jwt claims sub); null for the
+-- SQL editor and service_role, which pass as privileged instead.
 create or replace function public.jobs_lock_materials_approved()
 returns trigger
 language plpgsql
@@ -146,8 +156,12 @@ begin
   if old.status = 'materials_requested' and new.status is distinct from old.status then
     prior_cents := coalesce(old.materials_approved_cents, 0);
     if new.status = 'materials_approved' then
-      new.materials_approved_cents := prior_cents + coalesce(old.materials_estimate_cents, 0);
-      new.materials_approved_at := now();
+      -- Customer approval only. A Pro-alone move records nothing (OLD kept).
+      if privileged
+         or (auth.uid() is not null and auth.uid() = old.customer_id) then
+        new.materials_approved_cents := prior_cents + coalesce(old.materials_estimate_cents, 0);
+        new.materials_approved_at := now();
+      end if;
     elsif new.status in ('materials_declined', 'inspection_completed') then
       new.materials_approved_cents := prior_cents;
       -- materials_approved_at stays OLD: null when nothing was ever approved.
@@ -218,6 +232,12 @@ revoke insert (materials_approved_cents, materials_approved_at),
 --      yet"), understating is safer than billing a declined amount.
 --   Run the backfill before any re-request on a legacy job: a later approval
 --   adds to the stored amount, and null counts as 0.
+--   Legacy rows only: after this file, a Pro-alone approval also leaves
+--   materials_approved_cents null on purpose (and a receipt can follow it).
+--   The queries below therefore only look at requests made before 0025 was
+--   pasted. Replace <0025 paste time> with that time, for example
+--   '2026-10-08 16:00-04'. If you run this in the same sitting as the paste,
+--   now() also works.
 --
 -- History tables (expect all three to be 0):
 -- select (select count(*) from public.job_status_events)   as status_events,
@@ -237,6 +257,7 @@ revoke insert (materials_approved_cents, materials_approved_at),
 --  where status in ('materials_approved', 'in_progress', 'complete')
 --    and materials_estimate_cents > 0
 --    and materials_approved_cents is null
+--    and coalesce(materials_requested_at, posted_at) < '<0025 paste time>'
 --  order by evidence, posted_at;
 --
 -- Option C (buckets 1 and 2). materials_approved_at is set to the backfill
@@ -247,6 +268,7 @@ revoke insert (materials_approved_cents, materials_approved_at),
 --        materials_approved_at    = now()
 --  where materials_approved_cents is null
 --    and materials_estimate_cents > 0
+--    and coalesce(materials_requested_at, posted_at) < '<0025 paste time>'
 --    and (   status = 'materials_approved'
 --         or (status in ('in_progress', 'complete')
 --             and materials_reimbursed_cents > 0
@@ -288,6 +310,16 @@ revoke insert (materials_approved_cents, materials_approved_at),
 --   select set_config('request.jwt.claims', '{"sub":"<customer uuid>","role":"authenticated"}', true);
 --   update public.jobs set materials_approved_cents = 99999, materials_approved_at = now()
 --    where id = '<job uuid>';
+--   select id, status, materials_approved_cents, materials_approved_at from public.jobs where id = '<job uuid>';
+-- rollback;
+--
+-- Pro-alone approval, rolled back (replace with a job now at
+-- materials_requested and its assigned Pro). The status moves to
+-- materials_approved, but materials_approved_cents / _at stay as they were.
+-- begin;
+--   set local role authenticated;
+--   select set_config('request.jwt.claims', '{"sub":"<pro uuid>","role":"authenticated"}', true);
+--   update public.jobs set status = 'materials_approved' where id = '<job uuid>';
 --   select id, status, materials_approved_cents, materials_approved_at from public.jobs where id = '<job uuid>';
 -- rollback;
 --
