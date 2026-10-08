@@ -3140,12 +3140,14 @@ export default function App(){
     divider(footerY-14,0.75);
     // Phase 1B item D: no placeholder support contacts, no made-up
     // Transaction ID. Receipt ID only with a backend job id; rows stack up.
+    // RECEIPT DETAILS sits in the left column (x = MARGIN), now that
+    // QUESTIONS? is gone.
     doc.setFont("helvetica","bold"); doc.setFontSize(7.5); setFaint();
-    doc.text("RECEIPT DETAILS",rightX,footerY);
+    doc.text("RECEIPT DETAILS",MARGIN,footerY);
     doc.setFont("helvetica","normal"); doc.setFontSize(8.5); setMuted();
     let detailY=footerY+12;
-    if(receiptId){ doc.text(`Receipt ID: ${receiptId}`,rightX,detailY); detailY+=12; }
-    doc.text(`${job.paymentBrand||"Card"} •••• ${job.paymentLast4||"----"} · Paid ${dateStr}`,rightX,detailY);
+    if(receiptId){ doc.text(`Receipt ID: ${receiptId}`,MARGIN,detailY); detailY+=12; }
+    doc.text(`${job.paymentBrand||"Card"} •••• ${job.paymentLast4||"----"} · Paid ${dateStr}`,MARGIN,detailY);
 
     return { doc, receiptId };
   };

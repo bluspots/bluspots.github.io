@@ -2227,12 +2227,18 @@ async function runPlaceholderChecks(){
   let copied = '';
   global.navigator.clipboard = { writeText: (t) => { copied = String(t); return Promise.resolve(); } };
   let pdfTexts = [];
+  let pdfDraws = []; // {text, x, y} for every doc.text call
   const RealJsPDF = origJspdf.jsPDF;
   // jsPDF puts text() and save() on each instance, so wrap the instance.
   function SpyJsPDF(...args) {
     const doc = new RealJsPDF(...args);
     const realText = doc.text.bind(doc);
-    doc.text = (t, ...rest) => { pdfTexts.push(Array.isArray(t) ? t.join(' ') : String(t)); return realText(t, ...rest); };
+    doc.text = (t, ...rest) => {
+      const str = Array.isArray(t) ? t.join(' ') : String(t);
+      pdfTexts.push(str);
+      pdfDraws.push({ text: str, x: rest[0], y: rest[1] });
+      return realText(t, ...rest);
+    };
     doc.save = () => doc;
     return doc;
   }
@@ -2279,10 +2285,11 @@ async function runPlaceholderChecks(){
     click('📋 Copy Receipt Details');
     await act(async () => { await delay(20); });
     pdfTexts = [];
+    pdfDraws = [];
     click('⬆️ Share Receipt');
     click('⬇️ Save or Download Receipt');
     await act(async () => { await delay(20); });
-    return { inApp, share: copied, pdf: pdfTexts.join('\n') };
+    return { inApp, share: copied, pdf: pdfTexts.join('\n'), draws: pdfDraws.slice() };
   };
   const PLACEHOLDERS = /1-800-555-0199|TXN-|Transaction ID|support@haven\.app|555-0147|tel:|mailto:/;
 
@@ -2307,6 +2314,14 @@ async function runPlaceholderChecks(){
     });
     assert(!out.pdf.split('\n').includes('QUESTIONS?'), 'PDF: no empty QUESTIONS? heading');
     assert(!out.inApp.includes('Questions about this receipt'), 'in-app: no support email line');
+    // PDF footer: RECEIPT DETAILS block in the left column (x = MARGIN = 54).
+    const PDF_MARGIN = 54;
+    const detailsLabel = out.draws.find(d => d.text === 'RECEIPT DETAILS');
+    const receiptIdRow = out.draws.find(d => d.text === 'Receipt ID: HVN-1A2B3C4D');
+    const cardRow = out.draws.find(d => / · Paid /.test(d.text));
+    assert(!!detailsLabel && detailsLabel.x === PDF_MARGIN, 'PDF: RECEIPT DETAILS label starts at MARGIN (left column)');
+    assert(!!receiptIdRow && receiptIdRow.x === PDF_MARGIN && cardRow && cardRow.x === PDF_MARGIN, 'PDF: RECEIPT DETAILS rows start at MARGIN');
+    assert(!!detailsLabel && !!receiptIdRow && !!cardRow && receiptIdRow.y === detailsLabel.y + 12 && cardRow.y === receiptIdRow.y + 12, 'PDF: RECEIPT DETAILS rows keep the 12pt rhythm');
 
     // Signed in and configured, but this job never got a backend id.
     await mount(completedJob({ id: 9802, backendJobId: null }), { backend: true });
@@ -2316,6 +2331,14 @@ async function runPlaceholderChecks(){
       assert(!PLACEHOLDERS.test(txt), `${name}: no placeholders without a backend job`);
     });
     assert(!/Receipt #|Receipt ID/.test(out.share + out.pdf), 'no empty Receipt # / Receipt ID label without a backend job');
+    {
+      // #47 alone: RECEIPT DETAILS still has the card row with no backend id,
+      // so the block is never empty; the in-app bottom block still has its line.
+      const label = out.draws.find(d => d.text === 'RECEIPT DETAILS');
+      const card = out.draws.find(d => / · Paid /.test(d.text));
+      assert(!!label && label.x === 54 && !!card && card.x === 54 && card.y === label.y + 12, 'PDF without a backend id: RECEIPT DETAILS at MARGIN with its card row moved up');
+      assert(out.inApp.includes('This receipt confirms a completed payment'), 'in-app without a backend id: the bottom bordered block still has its line');
+    }
     assert(out.inApp.includes('RECEIPT') && out.share.includes('HAVEN — RECEIPT') && out.pdf.includes('SERVICE RECEIPT'), 'all three surfaces still render without a number');
 
     step('D2. Help & Support shows no unestablished phone or email', () => {
