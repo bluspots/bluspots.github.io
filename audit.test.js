@@ -401,6 +401,7 @@ const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports12 = typeof postCanonicalJob !== 'undefined' ? postCanonicalJob : undefined;
   module.exports13 = typeof updateCanonicalJob !== 'undefined' ? updateCanonicalJob : undefined;
   module.exports14 = typeof fetchCanonicalJobsByIds !== 'undefined' ? fetchCanonicalJobsByIds : undefined;
+  module.exports15 = typeof havenReceiptNumber !== 'undefined' ? havenReceiptNumber : undefined;
 })`;
 const moduleObj = { exports: {} };
 eval(wrapped)(React, React.useState, React.useRef, React.useEffect, moduleObj);
@@ -419,6 +420,7 @@ const havenJobRestHeaders = moduleObj.exports11;
 const postCanonicalJob = moduleObj.exports12;
 const updateCanonicalJob = moduleObj.exports13;
 const fetchCanonicalJobsByIds = moduleObj.exports14;
+const havenReceiptNumber = moduleObj.exports15;
 
 function havenTestJwt(sub){
   const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
@@ -1479,7 +1481,7 @@ function runHomeIntentArchitectureChecks(){
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 
-  runArrivedVisibilityChecks().then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => {
+  runArrivedVisibilityChecks().then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runPlaceholderChecks()).then(() => {
     if (fail > 0) process.exit(1);
   }).catch((e) => {
     console.error('FAIL (arrived visibility crashed):', e);
@@ -2206,4 +2208,136 @@ async function runArrivedVisibilityChecks(){
     cleanup();
   }
   console.log(`\n--- Arrived visibility audit: ${pass} passing, ${fail} failing ---`);
+}
+
+
+// Phase 1B item D: no placeholder phone, no made-up Transaction ID, no
+// unestablished support contact, and the receipt number comes from the
+// backend job id (none without one).
+async function runPlaceholderChecks(){
+  const backendId = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
+  const authUserId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const origFetch = global.fetch;
+  const origClipboard = global.navigator.clipboard;
+  const origJspdf = global.window.jspdf;
+  global.fetch = async (url) => {
+    if (String(url).includes('/rest/v1/jobs')) return { ok: true, json: async () => [], text: async () => '' };
+    return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+  };
+  let copied = '';
+  global.navigator.clipboard = { writeText: (t) => { copied = String(t); return Promise.resolve(); } };
+  let pdfTexts = [];
+  const RealJsPDF = origJspdf.jsPDF;
+  // jsPDF puts text() and save() on each instance, so wrap the instance.
+  function SpyJsPDF(...args) {
+    const doc = new RealJsPDF(...args);
+    const realText = doc.text.bind(doc);
+    doc.text = (t, ...rest) => { pdfTexts.push(Array.isArray(t) ? t.join(' ') : String(t)); return realText(t, ...rest); };
+    doc.save = () => doc;
+    return doc;
+  }
+  global.window.jspdf = { jsPDF: SpyJsPDF };
+
+  const completedJob = (fields) => ({
+    id: 9801, status: 'complete', taskId: 1, tpId: 2,
+    completedAt: Date.now(), acceptedAt: Date.now(),
+    pro: { i: 'MT', n: 'Marcus T.', r: 4.97, j: 543, s: 'TV Mount Pro', col: '#1E40AF', trustScore: 98 },
+    msgs: [], photos: [], desc: '', lockedPrice: 65,
+    ...fields,
+  });
+  const mount = async (job, { backend }) => {
+    cleanup();
+    if (backend) {
+      storedData['haven_supabase_url'] = 'https://example.supabase.co';
+      storedData['haven_supabase_anon_key'] = 'test-anon-key';
+      storedData['haven_auth_access_token'] = 'signed-in-access-token';
+      storedData['haven_auth_user_id'] = authUserId;
+      storedData['haven_auth_email'] = 'qa-customer@example.com';
+      storedData['haven_auth_role'] = 'customer';
+    } else {
+      delete storedData['haven_supabase_url'];
+      delete storedData['haven_supabase_anon_key'];
+      clearHavenAuthTestKeys();
+    }
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: job ? [job] : [] });
+    storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    await act(async () => { render(React.createElement(App), container); });
+    await act(async () => { await delay(40); });
+  };
+  const readReceiptSurfaces = async () => {
+    forceProfileRoot();
+    click('My Home');
+    click('Receipts');
+    await act(async () => { await delay(40); });
+    click('View Receipt');
+    await act(async () => { await delay(40); });
+    const inApp = document.body.textContent;
+    copied = '';
+    click('⬆️ Share Receipt');
+    click('📋 Copy Receipt Details');
+    await act(async () => { await delay(20); });
+    pdfTexts = [];
+    click('⬆️ Share Receipt');
+    click('⬇️ Save or Download Receipt');
+    await act(async () => { await delay(20); });
+    return { inApp, share: copied, pdf: pdfTexts.join('\n') };
+  };
+  const PLACEHOLDERS = /1-800-555-0199|TXN-|Transaction ID|support@haven\.app|555-0147|tel:|mailto:/;
+
+  try {
+    step('D1. Receipt number comes from the backend job id', () => {
+      assert(typeof havenReceiptNumber === 'function', 'havenReceiptNumber loaded');
+      assert(havenReceiptNumber({ id: 1700000000000, backendJobId: backendId }) === 'HVN-1A2B3C4D', 'HVN- plus the first 8 hex chars of jobs.id, uppercased');
+      assert(havenReceiptNumber({ id: 1700000000000, backendJobId: null }) === '', 'no backend job id: no receipt number');
+      assert(havenReceiptNumber({ id: 1700000000000 }) === '', 'a local id never becomes a receipt number');
+      assert(havenReceiptNumber({ backendJobId: 'not-a-uuid' }) === '', 'a non-uuid backend id gives no receipt number');
+      assert(havenReceiptNumber(null) === '', 'no job: no receipt number');
+    });
+
+    await mount(completedJob({ backendJobId: backendId }), { backend: true });
+    let out = await readReceiptSurfaces();
+    assert(out.inApp.includes('#HVN-1A2B3C4D'), 'in-app: Receipt #HVN-1A2B3C4D from the backend id');
+    assert(out.share.includes('Receipt #HVN-1A2B3C4D'), 'share text: Receipt #HVN-1A2B3C4D');
+    assert(out.pdf.includes('Receipt # HVN-1A2B3C4D') && out.pdf.includes('Receipt ID: HVN-1A2B3C4D'), 'PDF: header and footer use HVN-1A2B3C4D');
+    assert(!/HVN-\w*9801|HVN-[0-9]{6}\b/.test(out.inApp + out.share + out.pdf), 'no receipt number from the local job id');
+    [['in-app', out.inApp], ['share', out.share], ['PDF', out.pdf]].forEach(([name, txt]) => {
+      assert(!PLACEHOLDERS.test(txt), `${name}: no 1-800-555-0199, no TXN-/Transaction ID, no unestablished support contact`);
+    });
+    assert(!out.pdf.split('\n').includes('QUESTIONS?'), 'PDF: no empty QUESTIONS? heading');
+    assert(!out.inApp.includes('Questions about this receipt'), 'in-app: no support email line');
+
+    // Signed in and configured, but this job never got a backend id.
+    await mount(completedJob({ id: 9802, backendJobId: null }), { backend: true });
+    out = await readReceiptSurfaces();
+    [['in-app', out.inApp], ['share', out.share], ['PDF', out.pdf]].forEach(([name, txt]) => {
+      assert(!/HVN-/.test(txt), `${name}: no receipt number without a backend job`);
+      assert(!PLACEHOLDERS.test(txt), `${name}: no placeholders without a backend job`);
+    });
+    assert(!/Receipt #|Receipt ID/.test(out.share + out.pdf), 'no empty Receipt # / Receipt ID label without a backend job');
+    assert(out.inApp.includes('RECEIPT') && out.share.includes('HAVEN — RECEIPT') && out.pdf.includes('SERVICE RECEIPT'), 'all three surfaces still render without a number');
+
+    step('D2. Help & Support shows no unestablished phone or email', () => {
+      forceProfileRoot();
+      click('Help & Support');
+      const help = document.body.textContent;
+      const links = Array.from(document.querySelectorAll('a[href]')).map(a => a.getAttribute('href'));
+      assert(!/555-0147|1-800-555-0199|support@haven\.app|Speak with support/.test(help), 'Help: no placeholder phone or email');
+      assert(!links.some(h => /^(tel|mailto):/i.test(h)), 'Help: no tel: or mailto: link');
+      assert(existsRegex('Chat with support'), 'Help: the support chat entry stays (flagged for the founder, not removed)');
+    });
+  } catch (e) {
+    fail++;
+    console.error('FAIL (placeholders):', (e && e.stack) || e);
+  } finally {
+    global.fetch = origFetch;
+    global.navigator.clipboard = origClipboard;
+    global.window.jspdf = origJspdf;
+    delete storedData['haven_supabase_url'];
+    delete storedData['haven_supabase_anon_key'];
+    clearHavenAuthTestKeys();
+    cleanup();
+  }
+  console.log(`\n--- Placeholder audit: ${pass} passing, ${fail} failing ---`);
 }

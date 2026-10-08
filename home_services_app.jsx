@@ -13,6 +13,19 @@ function maskReceiptEmail(email){
   if (at < 1 || at === clean.length - 1) return "";
   return `${clean.slice(0, Math.min(2, at))}•••${clean.slice(at)}`;
 }
+// Receipt number (Phase 1B item D): HVN- plus the first 8 hex characters of
+// the backend job id (jobs.id), uppercased. HVN-1A2B3C4D for
+// 1a2b3c4d-…. No backend job id means no receipt number (""), never one made
+// from the local job id.
+function havenReceiptNumber(job) {
+  const raw = job && job.backendJobId != null ? String(job.backendJobId).trim() : "";
+  const m = /^([0-9a-f]{8})-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.exec(raw);
+  return m ? `HVN-${m[1].toUpperCase()}` : "";
+}
+// Download / share file name, without a number when there is none.
+function havenReceiptFileBase(receiptId) {
+  return receiptId ? `Haven-Receipt-${receiptId}` : "Haven-Receipt";
+}
 // Card for the pro stored on a backend job. Never the catalog demo pro.
 function havenRealProCard(proId, displayName) {
   const name = (displayName && String(displayName).trim()) || "Haven Pro";
@@ -101,9 +114,6 @@ const EMERGENCY_OPTIONS=[
   {key:"garage",label:"Garage door stuck",        e:"🚪", taskId:43, desc:"Emergency: garage door stuck — needs urgent attention."},
   {key:"other", label:"Other urgent repair",      e:"❗", taskId:null, customTitle:"", customPrice:"", ccat:"Repair", desc:"Emergency: urgent repair needed — details below."},
 ];
-// Demo/placeholder support number — replace before launch.
-const SUPPORT_PHONE_DISPLAY="(407) 555-0147";
-const SUPPORT_PHONE_LINK="tel:+14075550147";
 // Phase 1A: the Home Report placeholder card on My Home is hidden from the
 // Customer UI. Code is kept intact; flip to true to show it again.
 const SHOW_HOME_REPORT_CARD=false;
@@ -2861,7 +2871,7 @@ export default function App(){
           try{
             const pdfResult=generateReceiptPDF(job);
             if(pdfResult){
-              pdfResult.doc.save(`Haven-Receipt-${pdfResult.receiptId}.pdf`);
+              pdfResult.doc.save(`${havenReceiptFileBase(pdfResult.receiptId)}.pdf`);
               setListShareFallbackJobId(null);
               return;
             }
@@ -2871,7 +2881,7 @@ export default function App(){
             const blob=new Blob([text],{type:"text/plain"});
             const url=URL.createObjectURL(blob);
             const a=document.createElement("a");
-            a.href=url; a.download=`Haven-Receipt-${receiptId}.txt`;
+            a.href=url; a.download=`${havenReceiptFileBase(receiptId)}.txt`;
             document.body.appendChild(a); a.click(); document.body.removeChild(a);
             URL.revokeObjectURL(url);
           }catch{}
@@ -2947,10 +2957,7 @@ export default function App(){
     const grandTotal=laborTotal+materialsCost+(job.surge||0)+(job.emergencyFee||0)+(job.tipAmount>0?job.tipAmount:0);
     const dateObj=new Date(job.completedAt||job.id);
     const dateStr=dateObj.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
-    const receiptId=`HVN-${String(job.id).slice(-6).toUpperCase()}`;
-    // Deterministic, derived from the real job id — not stored separately,
-    // not randomly regenerated on each export.
-    const transactionId=`TXN-${String(job.id).slice(-8).toUpperCase()}`;
+    const receiptId=havenReceiptNumber(job);
 
     const doc=new jsPDF({unit:"pt",format:"letter"});
     const PAGE_W=doc.internal.pageSize.getWidth();
@@ -2983,7 +2990,7 @@ export default function App(){
     doc.setFont("helvetica","bold"); doc.setFontSize(10.5); setInk();
     doc.text("SERVICE RECEIPT",PAGE_W-MARGIN,y+12,{align:"right",charSpace:0.6});
     doc.setFont("helvetica","normal"); doc.setFontSize(8.5); setMuted();
-    doc.text(`Receipt # ${receiptId}`,PAGE_W-MARGIN,y+25,{align:"right"});
+    if(receiptId) doc.text(`Receipt # ${receiptId}`,PAGE_W-MARGIN,y+25,{align:"right"});
     doc.text(`Date: ${dateStr}`,PAGE_W-MARGIN,y+37,{align:"right"});
     const pillW=38,pillH=13;
     doc.setFillColor(GREEN_BG[0],GREEN_BG[1],GREEN_BG[2]);
@@ -3131,15 +3138,14 @@ export default function App(){
     const footerY=PAGE_H-MARGIN-30;
     if(y>footerY-10){ doc.addPage(); y=MARGIN; }
     divider(footerY-14,0.75);
+    // Phase 1B item D: no placeholder support contacts, no made-up
+    // Transaction ID. Receipt ID only with a backend job id; rows stack up.
     doc.setFont("helvetica","bold"); doc.setFontSize(7.5); setFaint();
-    doc.text("QUESTIONS?",MARGIN,footerY);
     doc.text("RECEIPT DETAILS",rightX,footerY);
     doc.setFont("helvetica","normal"); doc.setFontSize(8.5); setMuted();
-    doc.text("support@haven.app",MARGIN,footerY+12);
-    doc.text("1-800-555-0199",MARGIN,footerY+24);
-    doc.text(`Receipt ID: ${receiptId}`,rightX,footerY+12);
-    doc.text(`Transaction ID: ${transactionId}`,rightX,footerY+24);
-    doc.text(`${job.paymentBrand||"Card"} •••• ${job.paymentLast4||"----"} · Paid ${dateStr}`,rightX,footerY+36);
+    let detailY=footerY+12;
+    if(receiptId){ doc.text(`Receipt ID: ${receiptId}`,rightX,detailY); detailY+=12; }
+    doc.text(`${job.paymentBrand||"Card"} •••• ${job.paymentLast4||"----"} · Paid ${dateStr}`,rightX,detailY);
 
     return { doc, receiptId };
   };
@@ -3152,7 +3158,7 @@ export default function App(){
     const grandTotal=jTotal+(job.tipAmount>0?job.tipAmount:0);
     const dateStr=new Date(job.completedAt||job.id).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
     const timeStr=new Date(job.completedAt||job.id).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-    const receiptId=`HVN-${String(job.id).slice(-6).toUpperCase()}`;
+    const receiptId=havenReceiptNumber(job);
     const billedTo=receiptBilledTo(job);
     const lineItems=[
       ["Labor",`$${basePrice}`],
@@ -3164,7 +3170,7 @@ export default function App(){
       receiptId,
       text:[
         "HAVEN — RECEIPT",
-        `Receipt #${receiptId}   PAID`,
+        `${receiptId?`Receipt #${receiptId}   `:""}PAID`,
         `Completed ${dateStr} at ${timeStr}`,
         "",
         ...(billedTo.name?[`Billed to: ${billedTo.name}`]:[]),
@@ -3177,8 +3183,6 @@ export default function App(){
         `Total paid: $${grandTotal.toFixed(2)}`,
         "",
         `Payment method: ${job.paymentBrand||"Card"} •••• ${job.paymentLast4||"----"} — Paid`,
-        "",
-        "Haven Support: support@haven.app",
       ].join("\n"),
     };
   };
@@ -3189,7 +3193,7 @@ export default function App(){
       const pdfResult=generateReceiptPDF(job);
       if(pdfResult&&typeof navigator!=="undefined"&&navigator.share){
         const pdfBlob=pdfResult.doc.output("blob");
-        const pdfFile=new File([pdfBlob],`Haven-Receipt-${pdfResult.receiptId}.pdf`,{type:"application/pdf"});
+        const pdfFile=new File([pdfBlob],`${havenReceiptFileBase(pdfResult.receiptId)}.pdf`,{type:"application/pdf"});
         const canShareFiles=typeof navigator.canShare==="function"&&navigator.canShare({files:[pdfFile]});
         if(canShareFiles){
           navigator.share({title:"Haven Receipt",files:[pdfFile]}).catch(()=>{
@@ -3214,7 +3218,8 @@ export default function App(){
     const BG="#F5F2ED", W="#FFFFFF", TX="#1C2B3A", TS="#5A6B78", TM="#9AAAB6", BD="#E5DED4", SL="#ECFDF5";
     const dateStr=new Date(vj.completedAt||vj.id).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
     const timeStr=new Date(vj.completedAt||vj.id).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-    const receiptId=`HVN-${String(vj.id).slice(-6).toUpperCase()}`;
+    const receiptId=havenReceiptNumber(vj);
+    const shareTitle=receiptId?`Haven Receipt ${receiptId}`:"Haven Receipt";
     const billedTo=receiptBilledTo(vj);
     const serviceName=vjTask?vjTask.n:"Custom job";
     const basePrice=vj.taskId?(vj.lockedPrice??(vjTask?vjTask.p:0)):(vj.custom?.price||0);
@@ -3231,17 +3236,17 @@ export default function App(){
         const pdfResult=generateReceiptPDF(vj);
         if(pdfResult&&typeof navigator!=="undefined"&&navigator.share){
           const pdfBlob=pdfResult.doc.output("blob");
-          const pdfFile=new File([pdfBlob],`Haven-Receipt-${pdfResult.receiptId}.pdf`,{type:"application/pdf"});
+          const pdfFile=new File([pdfBlob],`${havenReceiptFileBase(pdfResult.receiptId)}.pdf`,{type:"application/pdf"});
           const canShareFiles=typeof navigator.canShare==="function"&&navigator.canShare({files:[pdfFile]});
           if(canShareFiles){
-            navigator.share({title:`Haven Receipt ${pdfResult.receiptId}`,files:[pdfFile]}).catch(()=>{
-              navigator.share({title:`Haven Receipt ${pdfResult.receiptId}`,text:shareText}).catch(()=>{});
+            navigator.share({title:shareTitle,files:[pdfFile]}).catch(()=>{
+              navigator.share({title:shareTitle,text:shareText}).catch(()=>{});
             });
             return;
           }
         }
         if(typeof navigator!=="undefined"&&navigator.share){
-          navigator.share({title:`Haven Receipt ${receiptId}`,text:shareText}).catch(()=>{});
+          navigator.share({title:shareTitle,text:shareText}).catch(()=>{});
         }else{
           setShowShareFallback(true);
         }
@@ -3255,7 +3260,7 @@ export default function App(){
       try{
         const pdfResult=generateReceiptPDF(vj);
         if(pdfResult){
-          pdfResult.doc.save(`Haven-Receipt-${pdfResult.receiptId}.pdf`);
+          pdfResult.doc.save(`${havenReceiptFileBase(pdfResult.receiptId)}.pdf`);
           setShowShareFallback(false);
           return;
         }
@@ -3266,7 +3271,7 @@ export default function App(){
         const blob=new Blob([shareText],{type:"text/plain"});
         const url=URL.createObjectURL(blob);
         const a=document.createElement("a");
-        a.href=url; a.download=`Haven-Receipt-${receiptId}.txt`;
+        a.href=url; a.download=`${havenReceiptFileBase(receiptId)}.txt`;
         document.body.appendChild(a); a.click(); document.body.removeChild(a);
         URL.revokeObjectURL(url);
       }catch{}
@@ -3296,7 +3301,7 @@ export default function App(){
               </div>
               <div style={{textAlign:"right"}}>
                 <div style={{fontSize:13,fontWeight:800,color:TX,letterSpacing:2}}>RECEIPT</div>
-                <div style={{fontSize:11,color:TS,marginTop:3}}>#{receiptId}</div>
+                {receiptId&&<div style={{fontSize:11,color:TS,marginTop:3}}>#{receiptId}</div>}
                 <div style={{display:"inline-block",marginTop:5,padding:"2px 10px",borderRadius:8,background:SL,color:SC,fontSize:10,fontWeight:800,letterSpacing:.5}}>PAID</div>
                 <div style={{fontSize:11,color:TS,marginTop:5}}>{dateStr} · {timeStr}</div>
               </div>
@@ -3370,8 +3375,7 @@ export default function App(){
             </div>
 
             <div style={{borderTop:`1px solid ${BD}`,paddingTop:14,textAlign:"center"}}>
-              <div style={{fontSize:11,color:TM,lineHeight:1.6}}>Questions about this receipt? Contact Haven Support at support@haven.app</div>
-              <div style={{fontSize:10,color:TM,marginTop:6}}>This receipt confirms a completed payment. No balance is owed.</div>
+              <div style={{fontSize:10,color:TM}}>This receipt confirms a completed payment. No balance is owed.</div>
             </div>
           </div>
 
@@ -3858,14 +3862,6 @@ export default function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         {subHeader("Help & support",()=>backFrom("help",{scr:"home",tab:"profile"}))}
         <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-          <a href={SUPPORT_PHONE_LINK} style={{textDecoration:"none",background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
-            <span style={{fontSize:22}}>📞</span>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:700,fontSize:14,color:TX}}>Speak with support</div>
-              <div style={{fontSize:13,fontWeight:700,color:N,marginTop:2}}>{SUPPORT_PHONE_DISPLAY}</div>
-            </div>
-            <span style={{color:TM,fontSize:18}}>›</span>
-          </a>
           <div onClick={()=>setShowSupportChat(true)} style={{background:W,borderRadius:18,padding:16,marginBottom:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
             <span style={{fontSize:22}}>💬</span>
             <div style={{flex:1}}><div style={{fontWeight:700,fontSize:14,color:TX}}>Chat with support</div><div style={{fontSize:12,color:TS,marginTop:2}}>Avg. response time: 3 minutes</div></div>
