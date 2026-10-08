@@ -30,6 +30,153 @@ global.localStorage = {
   setItem: (k, v) => { storedData[k] = v; },
   removeItem: (k) => { delete storedData[k]; },
 };
+// ── Phase 1B A1: mocked backend (no real network, ever) ────────────────────
+// The app now connects to the shipped Supabase project on every load. These
+// mocks stand in for it: a Supabase Auth client (global.supabase, like the
+// CDN UMD build) and a default fetch. Anything unexpected gets a 599 so a
+// missed mock fails loudly instead of reaching the internet.
+const fetchLog = [];
+const unexpectedRequests = [];
+const backendMock = {
+  health: 'ok',          // 'ok' | 'network' | 'http' | 'hang'
+  hangResolvers: [],
+  sessionError: null,    // error object returned by auth.getSession()
+  getUserError: null,    // error object returned by auth.getUser()
+  createClientCalls: [],
+  signOutCalls: 0,
+  // Phase 1B A2: is_qa_tester RPC. true | false | 'error' | 'hang'
+  qaTester: true,
+  qaHangResolvers: [],
+};
+let mockJobSeq = 0;
+const mockJobsById = new Map();
+const AUDIT_CUSTOMER_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const AUDIT_PRO_ID = '971c6625-afa7-455b-9b8b-672c8dc562d9';
+function mockResponse(status, body){
+  return { ok: status >= 200 && status < 300, status, json: async () => body, text: async () => (typeof body === 'string' ? body : JSON.stringify(body)) };
+}
+async function mockHealthResponse(){
+  if (backendMock.health === 'network') throw new TypeError('Failed to fetch');
+  if (backendMock.health === 'http') return mockResponse(503, 'unavailable');
+  if (backendMock.health === 'hang') {
+    return new Promise((resolve, reject) => { backendMock.hangResolvers.push({ resolve, reject }); });
+  }
+  return mockResponse(200, { name: 'GoTrue' });
+}
+function isHealthUrl(url){ return String(url).endsWith('/auth/v1/health'); }
+// Per-phase fetch mocks only describe REST/Mapbox. Route the Auth health
+// check (made on every app mount) to the backend mock first.
+function withBackendHealth(fn){
+  return async (url, opts) => {
+    if (isHealthUrl(url)) { fetchLog.push({ url: String(url), opts: opts || {} }); return mockHealthResponse(); }
+    return fn(url, opts);
+  };
+}
+async function defaultBackendFetch(url, opts){
+  const u = String(url);
+  const method = (opts && opts.method) || 'GET';
+  fetchLog.push({ url: u, opts: opts || {} });
+  if (isHealthUrl(u)) return mockHealthResponse();
+  if (u.includes('api.mapbox.com/search/geocode')) {
+    return mockResponse(200, { features: [{ geometry: { type: 'Point', coordinates: [-122.401, 37.789] } }] });
+  }
+  if (u.includes('/rest/v1/jobs') && method === 'POST') {
+    mockJobSeq += 1;
+    const id = `eeeeeeee-0000-4000-8000-${String(mockJobSeq).padStart(12, '0')}`;
+    mockJobsById.set(id, { id, status: 'posted', customer_id: AUDIT_CUSTOMER_ID, pro_id: null });
+    return mockResponse(201, [{ id }]);
+  }
+  if (u.includes('/rest/v1/jobs') && method === 'PATCH') {
+    let body = {};
+    try { body = JSON.parse((opts && opts.body) || '{}'); } catch { body = {}; }
+    const m = u.match(/id=eq\.([^&]+)/);
+    const id = m ? decodeURIComponent(m[1]) : '';
+    if (id && mockJobsById.has(id)) {
+      const row = Object.assign({}, mockJobsById.get(id), body);
+      mockJobsById.set(id, row);
+      return mockResponse(200, [row]);
+    }
+    return mockResponse(200, [{ id, ...body }]);
+  }
+  if (u.includes('/rest/v1/jobs')) {
+    // Poll: id=in.(...)&customer_id=eq.... Return stored remote rows.
+    const ids = [];
+    const inMatch = u.match(/id=in\.\(([^)]*)\)/);
+    if (inMatch) {
+      inMatch[1].split(',').forEach(raw => {
+        const id = decodeURIComponent(raw.trim());
+        if (id) ids.push(id);
+      });
+    }
+    const eqMatch = u.match(/id=eq\.([^&]+)/);
+    if (eqMatch) ids.push(decodeURIComponent(eqMatch[1]));
+    const rows = ids.length
+      ? ids.map(id => mockJobsById.get(id)).filter(Boolean)
+      : Array.from(mockJobsById.values());
+    return mockResponse(200, rows);
+  }
+  if (u.includes('/rest/v1/rpc/is_qa_tester')) {
+    if (backendMock.qaTester === 'hang') {
+      return new Promise((resolve, reject) => { backendMock.qaHangResolvers.push({ resolve, reject }); });
+    }
+    if (backendMock.qaTester === 'error') return mockResponse(500, { message: 'rpc failed' });
+    return mockResponse(200, backendMock.qaTester === true);
+  }
+  if (u.includes('/rest/v1/rpc/')) return mockResponse(200, []);
+  unexpectedRequests.push(u.replace(/^https?:\/\/[^/]+/, '<host>'));
+  return mockResponse(599, 'audit: unexpected request (no network in tests)');
+}
+global.fetch = defaultBackendFetch;
+// Stands in for the Supabase session persisted by supabase-js. Tests seed a
+// signed-in customer through the same storage keys the app mirrors.
+function mockStoredSession(){
+  const token = storedData['haven_auth_access_token'];
+  if (!token) return null;
+  return {
+    access_token: token,
+    user: {
+      id: storedData['haven_auth_user_id'] || undefined,
+      email: storedData['haven_auth_email'] || undefined,
+      user_metadata: { role: storedData['haven_auth_role'] || 'customer' },
+    },
+  };
+}
+function makeMockSupabaseClient(){
+  return {
+    auth: {
+      getSession: async () => {
+        if (backendMock.sessionError) return { data: { session: null }, error: backendMock.sessionError };
+        return { data: { session: mockStoredSession() }, error: null };
+      },
+      getUser: async () => {
+        if (backendMock.getUserError) return { data: { user: null }, error: backendMock.getUserError };
+        const session = mockStoredSession();
+        return { data: { user: session ? session.user : null }, error: null };
+      },
+      onAuthStateChange: () => ({ data: { subscription: { unsubscribe(){} } } }),
+      signOut: async () => { backendMock.signOutCalls += 1; return { error: null }; },
+      signInWithPassword: async () => ({ data: { session: null, user: null }, error: { name: 'AuthApiError', status: 400, message: 'Invalid login credentials' } }),
+      signUp: async () => ({ data: { session: null, user: null }, error: { name: 'AuthApiError', status: 400, message: 'Sign up disabled in audit' } }),
+    },
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+  };
+}
+global.supabase = {
+  createClient: (url, key, opts) => {
+    backendMock.createClientCalls.push({ url, key, opts });
+    return makeMockSupabaseClient();
+  },
+};
+function resetBackendMock(){
+  backendMock.health = 'ok';
+  backendMock.hangResolvers.length = 0;
+  backendMock.sessionError = null;
+  backendMock.getUserError = null;
+  backendMock.qaTester = true;
+  backendMock.qaHangResolvers.length = 0;
+  mockJobsById.clear();
+}
+
 function storedNotifPrefsRaw(){ return storedData['haven_notif_prefs'] ?? null; }
 function storedAddressesRaw(){ return storedData['haven_addresses'] ?? null; }
 function primaryHomeRaw(){
@@ -42,7 +189,7 @@ global.navigator.setAppBadge = (n) => { appBadgeValue = n; return Promise.resolv
 global.navigator.clearAppBadge = () => { appBadgeValue = 0; return Promise.resolve(); };
 global.navigator.clipboard = { writeText: () => Promise.resolve() };
 
-const { render, screen, fireEvent, cleanup } = require('@testing-library/react');
+const { render, screen, fireEvent, cleanup, within } = require('@testing-library/react');
 const { act } = require('react-dom/test-utils');
 const babel = require('@babel/core');
 const fs = require('fs');
@@ -375,6 +522,7 @@ const SOURCE_FILES = [
   'ui_atoms.js',
   'persistence.js',
   'intent_matching.js',
+  'supabase_public_config.js',
   'backend_adapter.js',
   'auth_session.js',
   'job_factories.js',
@@ -392,7 +540,7 @@ const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports3 = typeof matchRepairIntent !== 'undefined' ? matchRepairIntent : undefined;
   module.exports4 = typeof interpretHomeIntent !== 'undefined' ? interpretHomeIntent : undefined;
   module.exports5 = typeof resolveProfileRole !== 'undefined' ? resolveProfileRole : undefined;
-  module.exports6 = typeof havenPrototypeAnonModeEnabled !== 'undefined' ? havenPrototypeAnonModeEnabled : undefined;
+  module.exports6 = typeof getSupabaseConfig !== 'undefined' ? getSupabaseConfig : undefined;
   module.exports7 = typeof havenCustomerSignUpMetadata !== 'undefined' ? havenCustomerSignUpMetadata : undefined;
   module.exports8 = typeof havenJobRestBearer !== 'undefined' ? havenJobRestBearer : undefined;
   module.exports9 = typeof DEMO_CUSTOMER_ID !== 'undefined' ? DEMO_CUSTOMER_ID : undefined;
@@ -401,8 +549,15 @@ const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports12 = typeof postCanonicalJob !== 'undefined' ? postCanonicalJob : undefined;
   module.exports13 = typeof updateCanonicalJob !== 'undefined' ? updateCanonicalJob : undefined;
   module.exports14 = typeof fetchCanonicalJobsByIds !== 'undefined' ? fetchCanonicalJobsByIds : undefined;
-  module.exports15 = typeof havenReceiptFromBackendRow !== 'undefined' ? havenReceiptFromBackendRow : undefined;
-  module.exports16 = typeof havenReceiptPaymentState !== 'undefined' ? havenReceiptPaymentState : undefined;
+  module.exports15 = typeof HAVEN_PUBLIC_SUPABASE_URL !== 'undefined' ? HAVEN_PUBLIC_SUPABASE_URL : undefined;
+  module.exports16 = typeof HAVEN_PUBLIC_SUPABASE_ANON_KEY !== 'undefined' ? HAVEN_PUBLIC_SUPABASE_ANON_KEY : undefined;
+  module.exports17 = typeof HAVEN_CONNECTION_ERROR_MESSAGE !== 'undefined' ? HAVEN_CONNECTION_ERROR_MESSAGE : undefined;
+  module.exports18 = typeof havenPrototypeAnonModeEnabled !== 'undefined' ? havenPrototypeAnonModeEnabled : undefined;
+  module.exports19 = typeof havenSupabaseKeyIsPublic !== 'undefined' ? havenSupabaseKeyIsPublic : undefined;
+  module.exports20 = typeof havenSupabaseCreateClient !== 'undefined' ? havenSupabaseCreateClient : undefined;
+  module.exports21 = typeof havenNavigation !== 'undefined' ? havenNavigation : undefined;
+  module.exports22 = typeof havenReceiptFromBackendRow !== 'undefined' ? havenReceiptFromBackendRow : undefined;
+  module.exports23 = typeof havenReceiptPaymentState !== 'undefined' ? havenReceiptPaymentState : undefined;
 })`;
 const moduleObj = { exports: {} };
 eval(wrapped)(React, React.useState, React.useRef, React.useEffect, moduleObj);
@@ -412,7 +567,7 @@ const App = function WrappedApp(props){ return React.createElement(ErrorBoundary
 const matchRepairIntent = moduleObj.exports3;
 const interpretHomeIntent = moduleObj.exports4;
 const resolveProfileRole = moduleObj.exports5;
-const havenPrototypeAnonModeEnabled = moduleObj.exports6;
+const getSupabaseConfig = moduleObj.exports6;
 const havenCustomerSignUpMetadata = moduleObj.exports7;
 const havenJobRestBearer = moduleObj.exports8;
 const DEMO_CUSTOMER_ID = moduleObj.exports9;
@@ -421,8 +576,16 @@ const havenJobRestHeaders = moduleObj.exports11;
 const postCanonicalJob = moduleObj.exports12;
 const updateCanonicalJob = moduleObj.exports13;
 const fetchCanonicalJobsByIds = moduleObj.exports14;
-const havenReceiptFromBackendRow = moduleObj.exports15;
-const havenReceiptPaymentState = moduleObj.exports16;
+// Shipped public config. Compared by value only; never printed.
+const PUBLIC_SUPABASE_URL = moduleObj.exports15;
+const PUBLIC_SUPABASE_KEY = moduleObj.exports16;
+const CONNECTION_ERROR_MESSAGE = moduleObj.exports17;
+const legacyAnonModeHelper = moduleObj.exports18;
+const havenSupabaseKeyIsPublic = moduleObj.exports19;
+const havenSupabaseCreateClient = moduleObj.exports20;
+const havenNavigation = moduleObj.exports21;
+const havenReceiptFromBackendRow = moduleObj.exports22;
+const havenReceiptPaymentState = moduleObj.exports23;
 
 function havenTestJwt(sub){
   const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
@@ -437,7 +600,7 @@ function clearHavenAuthTestKeys(){
 
 assert(typeof App === 'function', 'App component loaded from compiled source');
 
-step('0. Slice 1 profile role, anon-mode default, and Slice 2 session job identity', () => {
+step('0. Slice 1 profile role, shipped public config, and Slice 2 session job identity', () => {
   assert(typeof resolveProfileRole === 'function', 'resolveProfileRole loaded');
   assert(resolveProfileRole({role:'customer'}) === 'customer', 'customer metadata stays customer');
   assert(resolveProfileRole({role:' Customer '}) === 'customer', 'customer role is trimmed and lowercased');
@@ -450,42 +613,33 @@ step('0. Slice 1 profile role, anon-mode default, and Slice 2 session job identi
   assert(Object.keys(havenCustomerSignUpMetadata()).join(',') === 'role', 'Customer sign-up metadata only sets role');
   assert(DEMO_CUSTOMER_ID === '11111111-1111-4111-8111-111111111111', 'DEMO_CUSTOMER_ID is unchanged');
 
-  delete storedData['haven_prototype_anon_mode'];
-  assert(havenPrototypeAnonModeEnabled() === true, 'missing haven_prototype_anon_mode defaults ON');
-  storedData['haven_prototype_anon_mode'] = '';
-  assert(havenPrototypeAnonModeEnabled() === true, 'blank flag stays ON');
-  storedData['haven_prototype_anon_mode'] = '1';
-  assert(havenPrototypeAnonModeEnabled() === true, '1 keeps anon mode ON');
-  storedData['haven_prototype_anon_mode'] = 'true';
-  assert(havenPrototypeAnonModeEnabled() === true, 'true keeps anon mode ON');
-  storedData['haven_prototype_anon_mode'] = '0';
-  assert(havenPrototypeAnonModeEnabled() === false, '0 turns the flag off');
-  storedData['haven_prototype_anon_mode'] = 'false';
-  assert(havenPrototypeAnonModeEnabled() === false, 'false turns the flag off');
-  storedData['haven_prototype_anon_mode'] = 'off';
-  assert(havenPrototypeAnonModeEnabled() === false, 'off turns the flag off');
-  storedData['haven_prototype_anon_mode'] = 'later';
-  assert(havenPrototypeAnonModeEnabled() === true, 'unrecognized flag values stay ON');
+  // Phase 1B A1: the demo / anon-mode flag is gone (no demo mode).
+  assert(legacyAnonModeHelper === undefined, 'havenPrototypeAnonModeEnabled (demo anon mode) no longer exists');
+  const shippedCfg = getSupabaseConfig();
+  assert(!!shippedCfg && shippedCfg.url === PUBLIC_SUPABASE_URL && shippedCfg.anonKey === PUBLIC_SUPABASE_KEY, 'getSupabaseConfig returns the shipped public config by default');
+  assert(typeof havenSupabaseKeyIsPublic === 'function', 'havenSupabaseKeyIsPublic loaded');
+  assert(havenSupabaseKeyIsPublic(PUBLIC_SUPABASE_KEY, PUBLIC_SUPABASE_URL) === true, 'real shipped anon key is accepted for the configured URL');
+  const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const mismatchedAnonJwt = `${b64url({alg:'none'})}.${b64url({role:'anon', ref:'otherprojectrefxxx'})}.sig`;
+  assert(havenSupabaseKeyIsPublic(mismatchedAnonJwt, PUBLIC_SUPABASE_URL) === false, 'anon JWT with a mismatched ref claim is rejected');
+  assert(havenSupabaseKeyIsPublic('sb_publishable_test_value', PUBLIC_SUPABASE_URL) === true, 'sb_publishable_ keys remain accepted');
+  assert(havenSupabaseKeyIsPublic('sb_secret_test_value', PUBLIC_SUPABASE_URL) === false, 'sb_secret_ keys remain rejected');
 
-  storedData['haven_supabase_url'] = 'https://example.supabase.co';
-  storedData['haven_supabase_anon_key'] = 'test-anon-key';
   clearHavenAuthTestKeys();
-  storedData['haven_prototype_anon_mode'] = '0';
-  assert(havenJobRestBearer() === 'test-anon-key', 'no session read bearer stays the anon key; writes do not use it');
+  assert(havenJobRestBearer() === PUBLIC_SUPABASE_KEY, 'no session read bearer stays the anon key; writes do not use it');
   assert(havenJobCustomerId() === null, 'no session does not use DEMO_CUSTOMER_ID');
   const signedOutHeaders = havenJobRestHeaders();
-  assert(signedOutHeaders && signedOutHeaders.apikey === 'test-anon-key', 'signed-out apikey is the anon key');
-  assert(signedOutHeaders && signedOutHeaders.Authorization === 'Bearer test-anon-key', 'signed-out Authorization is the anon key');
+  assert(signedOutHeaders && signedOutHeaders.apikey === PUBLIC_SUPABASE_KEY, 'signed-out apikey is the anon key');
+  assert(signedOutHeaders && signedOutHeaders.Authorization === 'Bearer ' + PUBLIC_SUPABASE_KEY, 'signed-out Authorization is the anon key');
 
   const authUserId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   storedData['haven_auth_access_token'] = 'signed-in-access-token';
   storedData['haven_auth_user_id'] = authUserId;
-  storedData['haven_prototype_anon_mode'] = '1';
   assert(havenJobRestBearer() === 'signed-in-access-token', 'signed-in bearer is the access token, not the anon key');
   assert(havenJobCustomerId() === authUserId, 'signed-in customer id is the auth user id');
   assert(havenJobCustomerId() !== DEMO_CUSTOMER_ID, 'signed-in customer id is not DEMO_CUSTOMER_ID');
   const signedInHeaders = havenJobRestHeaders();
-  assert(signedInHeaders && signedInHeaders.apikey === 'test-anon-key', 'signed-in apikey stays the anon key');
+  assert(signedInHeaders && signedInHeaders.apikey === PUBLIC_SUPABASE_KEY, 'signed-in apikey stays the anon key');
   assert(signedInHeaders && signedInHeaders.Authorization === 'Bearer signed-in-access-token', 'signed-in Authorization is the user access token');
 
   storedData['haven_auth_user_id'] = DEMO_CUSTOMER_ID;
@@ -500,13 +654,9 @@ step('0. Slice 1 profile role, anon-mode default, and Slice 2 session job identi
   storedData['haven_auth_user_id'] = authUserId;
   assert(havenJobCustomerId() === authUserId, 'mirror user id wins over the token sub');
 
-  delete storedData['haven_supabase_url'];
-  delete storedData['haven_supabase_anon_key'];
   clearHavenAuthTestKeys();
-  delete storedData['haven_prototype_anon_mode'];
-  assert(havenJobRestBearer() === null, 'job REST bearer is absent without a session or Supabase config');
-  assert(havenJobCustomerId() === null, 'no session does not resolve the demo customer id without Supabase config');
-  assert(havenPrototypeAnonModeEnabled() === true, 'cleared flag defaults anon mode ON before the app mounts');
+  assert(havenJobRestBearer() === PUBLIC_SUPABASE_KEY, 'with no session the only bearer is the shipped anon key (reads only; config is always present)');
+  assert(havenJobCustomerId() === null, 'no session does not resolve the demo customer id');
 });
 assert(typeof ErrorBoundary === 'function', 'ErrorBoundary class loaded from compiled source');
 
@@ -519,23 +669,303 @@ function seedSignedInCustomer(){
   storedData['haven_auth_email'] = 'qa-customer@example.com';
   storedData['haven_auth_role'] = 'customer';
 }
-seedSignedInCustomer();
-act(() => { mainContainer = render(React.createElement(App)).container; });
+// Phase 1B A1 helpers. Every mount connects to the (mocked) backend first.
+async function stepAsync(label, fn) {
+  try { await fn(); }
+  catch (e) { fail++; console.error(`FAIL (exception in "${label}"):`, e.message); }
+}
+function connectionScreenShowing(root){
+  const t = ((root || document.body).textContent) || '';
+  return t.includes('Connecting to Haven…') || t.includes("Can't connect to Haven");
+}
+async function mountApp(container){
+  let result;
+  await act(async () => { result = container ? render(React.createElement(App), container) : render(React.createElement(App)); });
+  const root = (result && result.container) || container;
+  await waitForCondition(() => !connectionScreenShowing(root), { timeout: 3000, message: 'App never finished connecting to the mocked backend.' });
+  await act(async () => { await nextTick(); });
+  return root;
+}
+// RTL's render() takes an options object, not a container element, so use
+// the container it returns.
+async function renderAppRaw(){
+  let result;
+  await act(async () => { result = render(React.createElement(App)); });
+  return result.container;
+}
+function storedJobCount(){
+  try { const parsed = JSON.parse(storedData['haven_jobs'] || '{}'); return Array.isArray(parsed.data) ? parsed.data.length : 0; }
+  catch { return 0; }
+}
+// Post Job now waits for the signed-in create to land (mocked geocode + POST).
+async function waitForPostedJob(before){
+  await waitForCondition(() => storedJobCount() > before, { timeout: 3000, message: 'Posted job never landed (mocked backend create).' });
+  await act(async () => { await nextTick(); });
+}
+async function clickPostJobAndWait(){
+  const before = storedJobCount();
+  clickRegex(/Post Job/);
+  await waitForPostedJob(before);
+}
+function latestStoredJob(){
+  try {
+    const parsed = JSON.parse(storedData['haven_jobs'] || '{}');
+    const list = Array.isArray(parsed.data) ? parsed.data : [];
+    return list.length ? list[list.length - 1] : null;
+  } catch { return null; }
+}
+function setMockJobRemote(backendId, patch){
+  const prev = mockJobsById.get(backendId) || { id: backendId, customer_id: AUDIT_CUSTOMER_ID, pro_id: null, status: 'posted' };
+  mockJobsById.set(backendId, Object.assign({}, prev, patch, { id: backendId, customer_id: AUDIT_CUSTOMER_ID }));
+}
+// Phase 1B A2: DEMO PRO CONTROLS never advance a backend-linked job. Drive
+// it the way a real Pro write does: change the remote row, then open the
+// job from Bookings so the poll (deps scr/tab) runs and maps the status.
+async function advanceBackendJobViaPoll(status, title){
+  const job = latestStoredJob();
+  if (!job || !job.backendJobId) throw new Error('advanceBackendJobViaPoll needs a posted backend job');
+  clickTab('Home');
+  await act(async () => { await delay(20); });
+  clickTab('Bookings');
+  await act(async () => { await delay(40); });
+  setMockJobRemote(job.backendJobId, { status, pro_id: AUDIT_PRO_ID });
+  // Earlier phases leave their mounts in the DOM; use the newest app root
+  // (the same one click()/clickTab() target) and its newest card.
+  const roots = Array.from(document.body.children).filter(el => el.tagName === 'DIV' && (el.textContent || '').trim());
+  const root = roots[roots.length - 1] || document.body;
+  const cards = within(root).queryAllByText(new RegExp(title));
+  if (!cards.length) throw new Error('no Bookings card for ' + title);
+  act(() => { fireEvent.click(cards[0]); });
+  await waitForCondition(() => {
+    const j = latestStoredJob();
+    return !!j && j.status === status;
+  }, { timeout: 4000, message: `Poll never mapped remote status ${status} for ${title}` });
+  await act(async () => { await delay(20); });
+}
+// Accept (en_route) then complete, both from the backend.
+async function completeBackendJobViaPoll(title){
+  await advanceBackendJobViaPoll('en_route', title);
+  await advanceBackendJobViaPoll('complete', title);
+}
+function emptyStoredData(){
+  const saved = { ...storedData };
+  Object.keys(storedData).forEach(k => { delete storedData[k]; });
+  return saved;
+}
+function restoreStoredData(saved){
+  Object.keys(storedData).forEach(k => { delete storedData[k]; });
+  Object.assign(storedData, saved);
+}
+function decodeJwtClaims(token){
+  try { return JSON.parse(Buffer.from(String(token).split('.')[1], 'base64url').toString('utf8')); }
+  catch { return null; }
+}
 
-step('0b. Signed-out auth gate — no marketplace without an account', () => {
+(async () => {
+  // ── Phase 1B A1: automatic connection, error + Retry, no demo fallback ──
+  await stepAsync('0a. Fresh browser (empty localStorage) gets the shipped config and connects', async () => {
+    cleanup();
+    const saved = emptyStoredData();
+    resetBackendMock();
+    fetchLog.length = 0;
+    const container = await renderAppRaw();
+    await waitForCondition(() => container.textContent.includes('Create customer account'), { timeout: 3000, message: 'Fresh browser never reached the auth gate.' });
+    assert(PUBLIC_SUPABASE_URL === 'https://tfykhsowsjffrrziefco.supabase.co', 'shipped Supabase URL is the live Haven project');
+    const claims = decodeJwtClaims(PUBLIC_SUPABASE_KEY);
+    assert(!!claims && claims.role === 'anon', 'shipped key is a public anon key (JWT role claim is anon)');
+    assert(!!claims && claims.role !== 'service_role' && !String(PUBLIC_SUPABASE_KEY).startsWith('sb_secret_'), 'shipped key is not a service_role or secret key');
+    const cfg = getSupabaseConfig();
+    assert(!!cfg && cfg.url === PUBLIC_SUPABASE_URL && cfg.anonKey === PUBLIC_SUPABASE_KEY, 'empty localStorage still gets the shipped config');
+    const created = backendMock.createClientCalls[0];
+    assert(!!created && created.url === PUBLIC_SUPABASE_URL && created.key === PUBLIC_SUPABASE_KEY, 'Supabase Auth client is created from the shipped config');
+    const health = fetchLog.find(c => isHealthUrl(c.url));
+    assert(!!health && health.url === PUBLIC_SUPABASE_URL + '/auth/v1/health', 'fresh browser attempts to connect to the Haven Auth server');
+    assert(!!health && health.opts.headers && health.opts.headers.apikey === PUBLIC_SUPABASE_KEY, 'connection attempt sends the public anon key as apikey');
+    assert(!('haven_supabase_url' in storedData) && !('haven_supabase_anon_key' in storedData), 'no localStorage config is required or written');
+    assert(!existsRegex('haven_supabase') && !existsRegex(/anon mode/i), 'no dev-facing connection controls or setup text on screen');
+    storedData['haven_supabase_url'] = 'https://example.supabase.co';
+    storedData['haven_supabase_anon_key'] = 'test-anon-key';
+    const stillShipped = getSupabaseConfig();
+    assert(!!stillShipped && stillShipped.url === PUBLIC_SUPABASE_URL && stillShipped.anonKey === PUBLIC_SUPABASE_KEY, 'legacy localStorage keys no longer override the shipped config');
+    cleanup();
+    restoreStoredData(saved);
+  });
+
+  resetBackendMock();
+  await stepAsync('0c. Network / Auth failure shows the connection error with Retry; Retry re-attempts', async () => {
+    cleanup();
+    const saved = emptyStoredData();
+    resetBackendMock();
+    backendMock.health = 'hang';
+    fetchLog.length = 0;
+    const connecting = await renderAppRaw();
+    await waitForCondition(() => connecting.textContent.includes('Connecting to Haven…'), { timeout: 3000, message: 'Hang never showed the connecting screen.' });
+    assert(connecting.textContent.includes('Home help,'), 'connecting screen keeps the hero headline');
+    assert(!connecting.textContent.includes('Create an account or sign in to book and track jobs.'), 'connecting screen shows no gate subtitle');
+    assert(!connecting.textContent.includes('There is no signed-out marketplace.'), 'connecting screen has no marketplace sentence');
+    const hangPending = backendMock.hangResolvers.shift();
+    hangPending.reject(new TypeError('Failed to fetch'));
+    cleanup();
+
+    resetBackendMock();
+    backendMock.health = 'network';
+    fetchLog.length = 0;
+    const container = await renderAppRaw();
+    await waitForCondition(() => container.textContent.includes("Can't connect to Haven"), { timeout: 3000, message: 'Network failure never showed the connection error.' });
+    assert(CONNECTION_ERROR_MESSAGE === "We couldn't reach Haven. Check your internet connection, then tap Retry.", 'connection error copy matches the Pro app');
+    assert(container.textContent.includes(CONNECTION_ERROR_MESSAGE), 'connection error shows the plain-language message');
+    assert(!container.textContent.includes('Create an account or sign in to book and track jobs.'), 'connection error screen shows no gate subtitle');
+    assert(!container.textContent.includes('There is no signed-out marketplace.'), 'connection error screen has no marketplace sentence');
+    const retryBtn = () => Array.from(container.querySelectorAll('button')).find(b => /^(Retry|Retrying…)$/.test(b.textContent.trim()));
+    assert(!!retryBtn() && retryBtn().textContent.trim() === 'Retry', 'connection error offers Retry');
+    assert(!container.textContent.includes('Create customer account') && !container.textContent.includes('Mount TV'), 'connection error does not open the gate or the marketplace');
+    const healthCount = () => fetchLog.filter(c => isHealthUrl(c.url)).length;
+    const before = healthCount();
+    backendMock.health = 'hang';
+    act(() => { fireEvent.click(retryBtn()); });
+    await waitForCondition(() => healthCount() > before, { timeout: 3000, message: 'Retry did not re-attempt the connection.' });
+    assert(retryBtn() && retryBtn().textContent.trim() === 'Retrying…' && retryBtn().disabled, 'Retry shows Retrying… and is disabled while the attempt runs');
+    const pending = backendMock.hangResolvers.shift();
+    pending.reject(new TypeError('Failed to fetch'));
+    await waitForCondition(() => retryBtn() && retryBtn().textContent.trim() === 'Retry', { timeout: 3000, message: 'Failed retry did not return to the error state.' });
+    assert(container.textContent.includes("Can't connect to Haven"), 'a failed retry shows the connection error again');
+    backendMock.health = 'ok';
+    const beforeOk = healthCount();
+    act(() => { fireEvent.click(retryBtn()); });
+    await waitForCondition(() => container.textContent.includes('Create customer account'), { timeout: 3000, message: 'Successful retry never reached the auth gate.' });
+    assert(healthCount() > beforeOk, 'successful Retry re-attempted the connection');
+    cleanup();
+
+    // Auth failure (session restore cannot reach Auth) is the same error, not demo mode.
+    resetBackendMock();
+    backendMock.sessionError = { name: 'AuthRetryableFetchError', status: 0, message: 'Failed to fetch' };
+    const authContainer = await renderAppRaw();
+    await waitForCondition(() => authContainer.textContent.includes("Can't connect to Haven"), { timeout: 3000, message: 'Auth failure never showed the connection error.' });
+    assert(!authContainer.textContent.includes('Create customer account') && !authContainer.textContent.includes('Mount TV'), 'Auth failure does not fall back to the gate or the marketplace');
+    backendMock.sessionError = null;
+    const authRetry = Array.from(authContainer.querySelectorAll('button')).find(b => b.textContent.trim() === 'Retry');
+    act(() => { fireEvent.click(authRetry); });
+    await waitForCondition(() => authContainer.textContent.includes('Create customer account'), { timeout: 3000, message: 'Retry after Auth recovery never reached the gate.' });
+    assert(true, 'Retry after Auth recovers reaches the auth gate');
+    cleanup();
+
+    // Backend HTTP failure (5xx) is the same error.
+    resetBackendMock();
+    backendMock.health = 'http';
+    const httpContainer = await renderAppRaw();
+    await waitForCondition(() => httpContainer.textContent.includes("Can't connect to Haven"), { timeout: 3000, message: 'Backend 503 never showed the connection error.' });
+    assert(true, 'backend 5xx shows the connection error');
+    cleanup();
+    resetBackendMock();
+    restoreStoredData(saved);
+  });
+
+  resetBackendMock();
+  await stepAsync('0c2. Retry after supabase-js CDN failure reloads the page', async () => {
+    cleanup();
+    const saved = emptyStoredData();
+    resetBackendMock();
+    fetchLog.length = 0;
+    const savedSupabase = global.supabase;
+    const savedWindowSupabase = window.supabase;
+    global.supabase = undefined;
+    try { delete window.supabase; } catch { window.supabase = undefined; }
+    assert(!!havenNavigation && typeof havenNavigation.reload === 'function', 'havenNavigation.reload is available to stub');
+    let reloadCalls = 0;
+    const originalReload = havenNavigation.reload;
+    havenNavigation.reload = () => { reloadCalls += 1; };
+    try {
+      const container = await renderAppRaw();
+      await waitForCondition(() => container.textContent.includes("Can't connect to Haven"), { timeout: 3000, message: 'Missing supabase-js CDN never showed the connection error.' });
+      assert(!container.textContent.includes('Create customer account') && !container.textContent.includes('Mount TV'), 'CDN failure does not open the gate or marketplace');
+      assert(typeof havenSupabaseCreateClient === 'function' && !havenSupabaseCreateClient(), 'supabase-js createClient is unavailable for the CDN-failure case');
+      const retryBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent.trim() === 'Retry');
+      assert(!!retryBtn, 'CDN failure offers Retry');
+      act(() => { fireEvent.click(retryBtn); });
+      assert(reloadCalls === 1, 'Retry after CDN failure calls window.location.reload');
+      assert(!container.textContent.includes('Retrying…'), 'CDN Retry does not enter the in-app retrying state');
+    } finally {
+      havenNavigation.reload = originalReload;
+      global.supabase = savedSupabase;
+      window.supabase = savedWindowSupabase;
+      restoreStoredData(saved);
+      cleanup();
+    }
+  });
+
+  resetBackendMock();
+  await stepAsync('0d. No demo fallback — no local account, no local job, no app without a real session', async () => {
+    cleanup();
+    let saved = emptyStoredData();
+    resetBackendMock();
+    backendMock.health = 'network';
+    fetchLog.length = 0;
+    const fresh = await renderAppRaw();
+    await waitForCondition(() => fresh.textContent.includes("Can't connect to Haven"), { timeout: 3000, message: 'Offline fresh browser never showed the connection error.' });
+    await act(async () => { await delay(50); });
+    assert(!storedData['haven_auth_access_token'] && !storedData['haven_auth_user_id'] && !storedData['haven_auth_email'], 'offline fresh browser creates no local / replacement account');
+    assert(storedJobCount() === 0, 'offline fresh browser creates no local job');
+    assert(!fresh.textContent.includes('Mount TV') && !fresh.textContent.includes('Post Job') && !fresh.textContent.includes('Bookings'), 'offline fresh browser cannot browse, post, or open bookings');
+    assert(!fetchLog.some(c => String(c.url).includes('/rest/v1/')), 'offline fresh browser sends no REST reads or writes');
+    cleanup();
+
+    // A stale signed-in mirror with the backend down does not open the app.
+    seedSignedInCustomer();
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [] });
+    const stale = await renderAppRaw();
+    await waitForCondition(() => stale.textContent.includes("Can't connect to Haven"), { timeout: 3000, message: 'Stale session + offline never showed the connection error.' });
+    assert(!stale.textContent.includes('Mount TV') && !stale.textContent.includes('Bookings') && !stale.textContent.includes('Receipts'), 'a stored session that cannot be confirmed does not open the marketplace, bookings, or receipts');
+    assert(storedJobCount() === 0, 'no job is created while the backend is unreachable');
+    cleanup();
+
+    // The server rejects the stored session: signed out (gate), mirror cleared.
+    resetBackendMock();
+    backendMock.getUserError = { name: 'AuthApiError', status: 401, message: 'invalid JWT' };
+    seedSignedInCustomer();
+    const revoked = await renderAppRaw();
+    await waitForCondition(() => revoked.textContent.includes('Create customer account'), { timeout: 3000, message: 'Rejected session never fell back to the auth gate.' });
+    assert(!revoked.textContent.includes('Mount TV') && !revoked.textContent.includes('Bookings'), 'a session the server rejects does not open the marketplace');
+    assert(!storedData['haven_auth_access_token'] && !storedData['haven_auth_user_id'], 'a rejected session is cleared, not replaced with a local account');
+    assert(backendMock.signOutCalls > 0, 'a rejected session is signed out locally');
+    cleanup();
+
+    // Signed out after connecting: only account creation, sign in, and help/legal.
+    resetBackendMock();
+    restoreStoredData(saved);
+    clearHavenAuthTestKeys();
+    const gate = await mountApp();
+    const gateButtons = Array.from(gate.querySelectorAll('button')).map(b => b.textContent.trim());
+    assert(gateButtons.join('|') === 'Sign in|Create customer account|Help & Support', 'signed-out gate only offers sign in, create account, and help');
+    assert(gate.textContent.includes('Terms of Service') && gate.textContent.includes('Privacy Policy'), 'signed-out gate keeps the legal line');
+    const GATE_SUBTITLE = 'Create an account or sign in to book and track jobs.';
+    assert(Array.from(gate.querySelectorAll('div')).some(d => d.children.length === 0 && d.textContent === GATE_SUBTITLE), 'gate subtitle equals exactly "Create an account or sign in to book and track jobs."');
+    assert(!gate.textContent.includes('There is no signed-out marketplace.'), 'gate subtitle no longer includes the marketplace sentence');
+    cleanup();
+    saved = null;
+  });
+
+  // A failed A1 step must not leave the backend mocked as down.
+  resetBackendMock();
+  seedSignedInCustomer();
+  mainContainer = await mountApp();
+
+await stepAsync('0b. Signed-out auth gate — no marketplace without an account', async () => {
   cleanup();
   clearHavenAuthTestKeys();
   const container = document.createElement('div');
   document.body.appendChild(container);
-  act(() => { render(React.createElement(App), container); });
+  const gateRoot = await mountApp(container);
   assert(existsRegex('Create customer account'), 'signed-out gate offers create account');
   assert(existsRegex('Sign in'), 'signed-out gate offers sign in');
   assert(existsRegex('Help'), 'signed-out gate offers help/support');
   assert(!existsRegex('Mount TV'), 'signed-out gate does not show marketplace catalog');
   assert(!existsRegex('need done'), 'signed-out gate does not show Home search');
+  const GATE_SUBTITLE = 'Create an account or sign in to book and track jobs.';
+  assert(Array.from(gateRoot.querySelectorAll('div')).some(d => d.children.length === 0 && d.textContent === GATE_SUBTITLE), 'signed-out gate subtitle equals exactly "Create an account or sign in to book and track jobs."');
+  assert(!gateRoot.textContent.includes('There is no signed-out marketplace.'), 'signed-out gate has no marketplace sentence');
   cleanup();
   seedSignedInCustomer();
-  act(() => { mainContainer = render(React.createElement(App)).container; });
+  mainContainer = await mountApp();
 });
 
 step('1. Profile — 3 large featured cards on top, standard list below, exact row order, no My Bookings', () => {
@@ -563,10 +993,10 @@ step('2. Settings consolidation', () => {
   assert(existsRegex('Notifications') && existsRegex('Job updates'), 'Notification preferences present inside Settings');
   assert(existsRegex('Appearance') && existsRegex('System') && existsRegex('Dark'), 'Appearance options present inside Settings');
   assert(existsRegex('Signed in') || existsRegex('qa-customer@example.com'), 'Settings shows signed-in account');
-  assert(existsRegex('Prototype anon mode'), 'Settings shows the demo anon flag');
+  assert(!existsRegex('Prototype anon mode'), 'Settings has no demo anon-mode switch');
   assert(existsRegex('Jobs you post while signed in use this account') || existsRegex('Sign out'), 'Settings shows signed-in job identity copy');
-  assert(existsRegex('This switch does not change job writes'), 'Prototype anon mode does not choose the job identity');
-  assert(document.querySelector('[aria-label="Prototype anon mode"]')?.getAttribute('aria-checked') === 'true', 'Prototype anon mode defaults on');
+  assert(!document.querySelector('[aria-label="Prototype anon mode"]'), 'no anon-mode control is reachable from Settings');
+  assert(!existsRegex('haven_supabase') && !existsRegex(/Supabase URL|anon key/i), 'Settings has no connection / config controls');
   click('Dark');
   click('‹');
   const bg1 = document.querySelector('.sc')?.style.background;
@@ -648,12 +1078,12 @@ step('4b. Saved Address action order (Set as Primary, Edit, Delete) and primary-
   click('‹');
 });
 
-step('5. Receipt Share — feature detection, fallback menu, copy, print isolation', () => {
+await stepAsync('5. Receipt Share — feature detection, fallback menu, copy, print isolation', async () => {
   clickTab('Home');
   click('Mount TV');
-  clickRegex(/Post Job/);
-  click('Accept job (start travel)');
-  clickRegex(/Arrive/); clickRegex(/Start work/); clickRegex(/Complete job/);
+  await clickPostJobAndWait();
+  assert(!existsRegex('DEMO — PRO CONTROLS') && !existsRegex('Accept job (start travel)'), 'A2: DEMO PRO CONTROLS removed (no local job advancement)');
+  await completeBackendJobViaPoll('Mount TV');
   clickRegex(/⭐ Rate/);
   const ratingHeading = byText('How was your experience?');
   const container = ratingHeading.nextElementSibling; // the rating widget itself (unchanged structurally — only the visual glyph became SVG)
@@ -670,106 +1100,81 @@ step('5. Receipt Share — feature detection, fallback menu, copy, print isolati
   click('📋 Copy Receipt Details');
 });
 
-step('6. Context-aware suppression — E: status change while viewing the exact posted/tracking screen is suppressed', () => {
+await stepAsync('6. Context-aware suppression — E: status change while viewing the exact posted/tracking screen is suppressed', async () => {
   clickTab('Home'); click('Assemble bed');
-  clickRegex(/Post Job/);
-  click('Accept job (start travel)'); // acceptance triggered WHILE watching this exact posted job — the bug this slice fixed
+  await clickPostJobAndWait();
+  // A2: backend accept (poll) observed WHILE opening this exact posted job.
+  await advanceBackendJobViaPoll('en_route', 'Assemble bed');
   forceProfileRoot();
   click('Notifications');
   assert(!existsRegex('Pro accepted your job'), 'Acceptance notification correctly suppressed — customer was already watching this exact job on the posted screen (previously a real bug: only "tracking" was checked, not "posted")');
   click('‹');
-  clickTab('Bookings');
-  act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
-  clickRegex(/Arrive/); // triggered WHILE already viewing this exact tracking screen
+  // Backend arrive (poll) observed WHILE viewing this exact tracking screen.
+  await advanceBackendJobViaPoll('arrived', 'Assemble bed');
   forceProfileRoot();
   click('Notifications');
   assert(!existsRegex('Pro arrived'), 'Status change while actively viewing the exact tracking screen does not create a redundant notification');
   click('‹');
 });
 
-let replyCountBeforeStep7;
-step('7. Context-aware suppression — A: message live in the exact open conversation is suppressed', () => {
+// Phase 1B A2: simulated pro replies are removed (they were a local-only
+// advancement). Steps 7–9 used to drive notification suppression off those
+// fabricated replies. Keep the customer-send path, assert no auto-reply, and
+// seed a real notification for the Notification Center regression.
+await stepAsync('7. Messaging — customer can send; no simulated pro reply', async () => {
   clickTab('Bookings');
   act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
   click('💬 Message');
-  replyCountBeforeStep7 = screen.queryAllByText(REPLY_REGEX).length;
   const msgInput = screen.getByPlaceholderText(/Message .*/);
   act(()=>{fireEvent.change(msgInput,{target:{value:'hi'}});});
   act(()=>{fireEvent.keyDown(msgInput,{key:'Enter'});});
+  assert(existsRegex(/^hi$/ ) || existsRegex('hi'), 'Customer message appears in the conversation');
+  await delay(2100);
+  assert(!existsRegex(REPLY_REGEX), 'A2: no simulated pro reply is fabricated');
+  forceProfileRoot();
+  click('Notifications');
+  assert(!existsRegex('New message from'), 'A2: no fabricated reply means no message notification');
+  click('‹');
 });
 
-(async () => {
-  await waitForNewReply(replyCountBeforeStep7, { message: 'Step 7: pro reply never arrived in the open conversation.' });
-
-  step('7b. (continued) message appears live, no notification while conversation is open', () => {
-    assert(existsRegex(/Got it|On it|Thanks|Almost there|Sounds good|Will do/i), 'Reply appears live in the open conversation');
-    forceProfileRoot();
-    click('Notifications');
-    assert(!existsRegex('New message from'), 'No notification created while that exact conversation was open');
-    click('‹');
+await stepAsync('8–10. Notification Center still works with a seeded message notification', async () => {
+  const job = latestStoredJob();
+  const jobId = job ? job.id : 1;
+  storedData['haven_notifications'] = JSON.stringify({
+    __v: 1,
+    data: [{
+      id: 'a2-seed-msg-1',
+      type: 'MESSAGE',
+      title: '2 new messages from Marcus T.',
+      body: 'Tap to view the conversation.',
+      jobId,
+      destination: { screen: 'messages', jobId },
+      isRead: false,
+      createdAt: Date.now(),
+      priority: 'normal',
+      conversationId: null,
+      propertyId: null,
+      receiptId: null,
+      count: 2,
+    }],
   });
+  cleanup();
+  seedSignedInCustomer();
+  mainContainer = await mountApp();
+  forceProfileRoot();
+  click('Notifications');
+  assert(existsRegex(/2 new messages/), 'Seeded message notification is visible');
+  assert(existsRegex('Mark all as read'), 'Mark all as read present while an unread notification exists');
+  const row = byRegex(/2 new messages/);
+  const rowEl = row.parentElement.parentElement;
+  act(()=>{fireEvent.pointerDown(rowEl,{clientX:0,clientY:0});});
+  act(()=>{fireEvent.pointerMove(rowEl,{clientX:130,clientY:2});});
+  act(()=>{fireEvent.pointerUp(rowEl,{clientX:130,clientY:2});});
+  assert(existsRegex(/Mark Unread/), 'Swipe-right mark-as-read still works, reciprocal Mark Unread available');
+  assert(!existsRegex('Mark all as read'), 'Mark all as read correctly disappears once that swipe marked the only unread notification as read (zero unread remaining)');
+});
 
-  step('8. Context-aware suppression — C: message on a different screen creates a notification', () => {
-    clickTab('Bookings');
-    act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
-    click('💬 Message');
-    const msgInput2 = screen.getByPlaceholderText(/Message .*/);
-    act(()=>{fireEvent.change(msgInput2,{target:{value:'hello again'}});});
-    act(()=>{fireEvent.keyDown(msgInput2,{key:'Enter'});});
-    click('‹');
-    clickTab('Home'); // different screen before the reply lands
-  });
-
-  // Unlike step 7, this navigates away from the messages screen before the
-  // reply lands — the reply's only observable effect at that point is a
-  // notification, not any visible message-bubble text, so there's no DOM
-  // condition to poll. An honest, tight, elapsed-time wait (matching the
-  // app's real 2000ms reply delay) is the correct approach here, not a
-  // workaround — just precise instead of the original's generous 2300ms.
-  await delay(2100);
-
-  step('8b. (continued) notification created for the different-screen case', () => {
-    forceProfileRoot();
-    click('Notifications');
-    assert(existsRegex('New message from'), 'Reply arriving while on a different screen creates a notification');
-    click('‹');
-  });
-
-  step('9. Context-aware suppression — D: backgrounded app never suppresses', () => {
-    clickTab('Bookings');
-    act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
-    click('💬 Message');
-    Object.defineProperty(document, 'visibilityState', { value: 'hidden', configurable: true });
-    act(()=>{ document.dispatchEvent(new dom.window.Event('visibilitychange')); });
-    const msgInput3 = screen.getByPlaceholderText(/Message .*/);
-    act(()=>{fireEvent.change(msgInput3,{target:{value:'one more'}});});
-    act(()=>{fireEvent.keyDown(msgInput3,{key:'Enter'});});
-  });
-
-  // Same reasoning as step 8 above — backgrounded, no visible signal to poll.
-  await delay(2100);
-
-  step('9b. (continued) backgrounded-app notification confirmed', () => {
-    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
-    act(()=>{ document.dispatchEvent(new dom.window.Event('visibilitychange')); });
-    click('‹');
-    forceProfileRoot();
-    click('Notifications');
-    assert(existsRegex(/2 new messages/), 'Backgrounded app still created/grouped the notification even while "viewing" the exact conversation');
-  });
-
-  step('10. Regression — Notification Center core features still work', () => {
-    assert(existsRegex('Mark all as read'), 'Mark all as read present while an unread notification exists');
-    const row = byRegex(/2 new messages/);
-    const rowEl = row.parentElement.parentElement;
-    act(()=>{fireEvent.pointerDown(rowEl,{clientX:0,clientY:0});});
-    act(()=>{fireEvent.pointerMove(rowEl,{clientX:130,clientY:2});});
-    act(()=>{fireEvent.pointerUp(rowEl,{clientX:130,clientY:2});});
-    assert(existsRegex(/Mark Unread/), 'Swipe-right mark-as-read still works, reciprocal Mark Unread available');
-    assert(!existsRegex('Mark all as read'), 'Mark all as read correctly disappears once that swipe marked the only unread notification as read (zero unread remaining)');
-  });
-
-  step('11. Regression — tab persistence and draft booking still work', () => {
+step('11. Regression — tab persistence and draft booking still work', () => {
     clickTab('Home'); click('Assemble bed');
     clickTab('Bookings');
     assert(existsRegex(/Post Job/), 'Draft booking still persists across a tab switch');
@@ -792,12 +1197,16 @@ step('7. Context-aware suppression — A: message live in the exact open convers
     click('‹');
   });
 
-  step('13. Bug sweep — rapid double-tap on Post Job cannot create a duplicate job', () => {
+  await stepAsync('13. Bug sweep — rapid double-tap on Post Job cannot create a duplicate job', async () => {
     clickTab('Home');
     goToServiceTask('Install smart lock', true);
     const postBtn = getPostJobButton();
     if (postBtn) {
+      const before = storedJobCount();
       act(()=>{ fireEvent.click(postBtn); fireEvent.click(postBtn); });
+      await waitForPostedJob(before);
+      await act(async () => { await delay(100); });
+      assert(storedJobCount() === before + 1, 'Rapid double-tap stored exactly one job');
     } else {
       fail++; console.error('FAIL: Post Job button not found on Install smart lock');
     }
@@ -826,23 +1235,27 @@ step('7. Context-aware suppression — A: message live in the exact open convers
   });
 
   console.log(`\n--- Interaction suite complete: ${pass} passing, ${fail} failing so far ---`);
-  runPersistenceAndCorruptStorageChecks();
-})();
+  await runPersistenceAndCorruptStorageChecks();
+})().catch((e) => {
+  fail++;
+  console.error('FAIL (main audit flow crashed):', (e && e.stack) || e);
+  process.exit(1);
+});
 
 // ── PHASE 2: real persistence round-trip + corrupt-storage matrix ─────────
 // Runs after the interaction suite finishes (needs its own render lifecycle
 // — a genuine unmount/remount, and for the corrupt-storage part, directly
 // tampering with storedData before mounting — neither of which fits the
 // single continuous click-driven session above).
-function runPersistenceAndCorruptStorageChecks(){
-  step('15. Persistence survives a real unmount/remount (simulated PWA close/reopen)', () => {
+async function runPersistenceAndCorruptStorageChecks(){
+  await stepAsync('15. Persistence survives a real unmount/remount (simulated PWA close/reopen)', async () => {
     act(()=>{ cleanup(); });
     const keysAfterClose = Object.keys(storedData);
     assert(keysAfterClose.includes('haven_jobs') && keysAfterClose.includes('haven_addresses') && keysAfterClose.includes('haven_cards') && keysAfterClose.includes('haven_profile'), 'All core domains were written to storage independently (not one blob) before close');
 
     const container2 = document.createElement('div');
     document.body.appendChild(container2);
-    act(()=>{ render(React.createElement(App), container2); });
+    await mountApp(container2);
 
     click('Bookings');
     assert(!existsRegex('Install smart lock') && !existsRegex('Mount TV'), 'The Reset Prototype Data from step 14 survived the remount — a fresh instance does not silently resurrect old jobs');
@@ -854,7 +1267,7 @@ function runPersistenceAndCorruptStorageChecks(){
     act(()=>{ cleanup(); });
   });
 
-  step('16. Corrupt/adversarial storage matrix — sanitized correctly, not just "doesn\'t crash"', () => {
+  await stepAsync('16. Corrupt/adversarial storage matrix — sanitized correctly, not just "doesn\'t crash"', async () => {
     // Deliberately corrupt every domain at once: duplicate primary, duplicate
     // default, invalid job status, duplicate job id, missing id, garbage
     // entry, wrong-typed prefs, unknown schema version, invalid JSON.
@@ -881,7 +1294,7 @@ function runPersistenceAndCorruptStorageChecks(){
     document.body.appendChild(container3);
     let crashed=false, crashMsg='';
     try{
-      act(()=>{ render(React.createElement(App), container3); });
+      await mountApp(container3);
     }catch(e){ crashed=true; crashMsg=e.message; }
     assert(!crashed, `App boots successfully despite a full matrix of corrupt/adversarial storage data across every domain at once${crashed?': '+crashMsg:''}`);
     assert(existsRegex(/need done/), 'Home screen renders normally after corrupt-storage boot');
@@ -895,22 +1308,21 @@ function runPersistenceAndCorruptStorageChecks(){
     act(()=>{ cleanup(); });
   });
 
-  runTippingChecks();
+  await runTippingChecks();
 }
 
 // ── PHASE 3: tipping — its own fresh mount, since it needs a completed job
 // and a real ~900ms processing delay that doesn't fit cleanly into the
 // earlier phases' timing budgets.
-function runTippingChecks(){
+async function runTippingChecks(){
   const container4 = document.createElement('div');
   document.body.appendChild(container4);
-  act(()=>{ render(React.createElement(App), container4); });
+  await mountApp(container4);
 
-  step('17. Tipping — action order, receipt access before tipping, no preselected amount', () => {
+  await stepAsync('17. Tipping — action order, receipt access before tipping, no preselected amount', async () => {
     click('Mount TV');
-    clickRegex(/Post Job/);
-    click('Accept job (start travel)');
-    clickRegex(/Arrive/); clickRegex(/Start work/); clickRegex(/Complete job/);
+    await clickPostJobAndWait();
+    await completeBackendJobViaPoll('Mount TV');
     const t = document.body.textContent;
     assert(t.indexOf('Rate') < t.indexOf('Tip Pro') && t.indexOf('Tip Pro') < t.indexOf('View Receipt'), 'Completed-job action order is Rate, Tip Pro, View Receipt');
     click('🧾 View Receipt');
@@ -939,7 +1351,8 @@ function runTippingChecks(){
     assert(existsRegex('Processing…'), 'Deliberate confirmation triggers a real processing state, not instant silent success');
   });
 
-  setTimeout(() => {
+  await delay(1200);
+  {
     step('19. Tipping — confirmed tip persists, prevents accidental double-tipping; a local-only tip does not change the Receipt', () => {
       assert(existsRegex('Tip sent: $12.50'), 'Tip resolved to paid and shows the confirmed amount');
       click('← Back');
@@ -955,22 +1368,22 @@ function runTippingChecks(){
       assert(existsRegex('Tip sent: $12.50') && !existsRegex('Recognize exceptional service'), 'Reopening Tip Pro after already tipping shows the sent state, not the selection flow again');
     });
 
-    runUxImprovementChecks();
-  }, 1200);
+    await runUxImprovementChecks();
+  }
 }
 
 // ── PHASE 4: UX & convenience improvements slice — arrival window/ETA, Job
 // Preferences, empty states, Trusted Home, search by symptom.
 // Own fresh mount, same reasoning as Phase 3.
-function runUxImprovementChecks(){
+async function runUxImprovementChecks(){
   const container5 = document.createElement('div');
   document.body.appendChild(container5);
-  act(()=>{ render(React.createElement(App), container5); });
+  await mountApp(container5);
 
-  step('20. Arrival window progressively tightens (deterministic, elapsed-time-based)', () => {
+  await stepAsync('20. Arrival window progressively tightens (deterministic, elapsed-time-based)', async () => {
     click('Mount TV');
-    clickRegex(/Post Job/);
-    click('Accept job (start travel)');
+    await clickPostJobAndWait();
+    await advanceBackendJobViaPoll('en_route', 'Mount TV');
     assert(existsRegex('Arriving') && !existsRegex('Time remaining'), 'Broad stage: shows Arriving + a window, not yet the precise breakdown');
   });
 
@@ -1036,7 +1449,7 @@ function runUxImprovementChecks(){
     assert(existsRegex('Install/repair toilet'), 'Selecting a clarification option navigates directly to that specific service');
   });
 
-  runInteractiveBackChecks();
+  await runInteractiveBackChecks();
 }
 
 // ── PHASE 5: interactive, reversible edge-swipe back gesture. Needs its own
@@ -1048,7 +1461,7 @@ function runUxImprovementChecks(){
 async function runInteractiveBackChecks(){
   const container6 = document.createElement('div');
   document.body.appendChild(container6);
-  act(()=>{ render(React.createElement(App), container6); });
+  await mountApp(container6);
   function pdown(x,y){ act(()=>{ document.dispatchEvent(new dom.window.PointerEvent('pointerdown',{clientX:x,clientY:y,bubbles:true})); }); }
   function pmove(x,y){ act(()=>{ document.dispatchEvent(new dom.window.PointerEvent('pointermove',{clientX:x,clientY:y,bubbles:true})); }); }
   function pup(x,y){ act(()=>{ document.dispatchEvent(new dom.window.PointerEvent('pointerup',{clientX:x,clientY:y,bubbles:true})); }); }
@@ -1148,16 +1561,16 @@ async function runInteractiveBackChecks(){
     assert(existsRegex('Jane Doe'), 'Visible Back button reaches the same destination the interactive gesture would');
   });
 
-  runInlineEditChecks();
+  await runInlineEditChecks();
 }
 
 // ── PHASE 7: My Home overview inline editing. Own fresh mount, same
 // reasoning as every prior phase — this touches persisted property data
 // and needs a clean slate.
-function runInlineEditChecks(){
+async function runInlineEditChecks(){
   const container7 = document.createElement('div');
   document.body.appendChild(container7);
-  act(()=>{ render(React.createElement(App), container7); });
+  await mountApp(container7);
 
   step('32. Home type — the control is always present, no separate "tap to reveal" step, and selecting a value saves instantly with no Save button', () => {
     click('Profile'); click('My Home');
@@ -1229,7 +1642,7 @@ function runInlineEditChecks(){
     assert(beforeCount===afterCount, 'No duplicate property was created by inline editing');
   });
 
-  runReceiptPdfChecks();
+  await runReceiptPdfChecks();
 }
 
 // ── PHASE 9: PDF receipt generation. Own fresh mount, same reasoning as
@@ -1242,7 +1655,7 @@ function runInlineEditChecks(){
 // were thoroughly verified manually during development (rasterized and
 // visually inspected). This phase verifies what a regression suite should:
 // the data feeding the PDF is correct, and the full flow never throws.
-function runReceiptPdfChecks(){
+async function runReceiptPdfChecks(){
   const container8 = document.createElement('div');
   document.body.appendChild(container8);
 
@@ -1251,13 +1664,12 @@ function runReceiptPdfChecks(){
   console.error = (...a) => captured.push(a.join(' '));
   console.warn = (...a) => captured.push(a.join(' '));
 
-  act(()=>{ render(React.createElement(App), container8); });
+  await mountApp(container8);
 
-  step('38. Completing a job populates real receipt content (work performed, materials, notes) — not empty, not placeholder', () => {
+  await stepAsync('38. Completing a job populates real receipt content (work performed, materials, notes) — not empty, not placeholder', async () => {
     click('Mount TV');
-    clickRegex(/Post Job/);
-    click('Accept job (start travel)');
-    clickRegex(/Arrive/); clickRegex(/Start work/); clickRegex(/Complete job/);
+    await clickPostJobAndWait();
+    await completeBackendJobViaPoll('Mount TV');
     const jobsData = JSON.parse(storedData['haven_jobs']);
     const job = jobsData.data[jobsData.data.length-1];
     assert(Array.isArray(job.workPerformed) && job.workPerformed.length>0, 'Completed job has real work-performed bullets, not an empty list');
@@ -1293,7 +1705,7 @@ function runReceiptPdfChecks(){
   console.error = origError; console.warn = origWarn;
 
   // Run locked-price checks next to ensure historical/booked totals remain on lockedPrice
-  runLockedPriceChecks();
+  await runLockedPriceChecks();
   runDiagnosisMatchingChecks();
 }
 
@@ -1480,7 +1892,9 @@ function runHomeIntentArchitectureChecks(){
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 
-  runArrivedVisibilityChecks().then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runReceiptTotalsChecks()).then(() => {
+  runA2QaTesterGateChecks().then(() => runArrivedVisibilityChecks()).then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runReceiptTotalsChecks()).then(() => {
+    assert(unexpectedRequests.length === 0, `No request left the mocked backend (unexpected: ${JSON.stringify(unexpectedRequests.slice(0,3))})`);
+    console.log(`\n--- Full audit: ${pass} passing, ${fail} failing ---`);
     if (fail > 0) process.exit(1);
   }).catch((e) => {
     console.error('FAIL (arrived visibility crashed):', e);
@@ -1494,7 +1908,7 @@ function runHomeIntentArchitectureChecks(){
 async function runSlice2SessionWriteChecks(){
   const origFetch = global.fetch;
   const calls = [];
-  global.fetch = async (url, opts) => {
+  global.fetch = withBackendHealth(async (url, opts) => {
     calls.push({ url: String(url), opts: opts || {} });
     const method = (opts && opts.method) || 'GET';
     if (String(url).includes("api.mapbox.com/search/geocode")) {
@@ -1527,19 +1941,16 @@ async function runSlice2SessionWriteChecks(){
       ],
       text: async () => '',
     };
-  };
+  });
 
   const authUserId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const findPost = () => calls.find(c => (c.opts.method === 'POST') && c.url.includes('/rest/v1/jobs'));
 
   try {
-    storedData['haven_supabase_url'] = 'https://example.supabase.co';
-    storedData['haven_supabase_anon_key'] = 'test-anon-key';
     storedData['haven_auth_access_token'] = 'signed-in-access-token';
     storedData['haven_auth_user_id'] = authUserId;
     storedData['haven_auth_email'] = 'customer@example.com';
     storedData['haven_auth_role'] = 'customer';
-    storedData['haven_prototype_anon_mode'] = '1';
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [] });
     delete storedData['haven_draft'];
     storedData['haven_addresses'] = JSON.stringify({__v:1, data:[
@@ -1563,7 +1974,7 @@ async function runSlice2SessionWriteChecks(){
     assert(!!patch, 'signed-in status update issued a PATCH');
     if (patch) {
       assert(patch.opts.headers.Authorization === 'Bearer signed-in-access-token', 'signed-in status update uses the user bearer');
-      assert(patch.opts.headers.apikey === 'test-anon-key', 'signed-in status update keeps the anon apikey');
+      assert(patch.opts.headers.apikey === PUBLIC_SUPABASE_KEY, 'signed-in status update keeps the anon apikey');
       const patchBody = JSON.parse(patch.opts.body);
       assert(patchBody.status === 'materials_approved', 'signed-in status update does not change the status value');
       assert(!('customer_id' in patchBody), 'status update does not rewrite customer_id');
@@ -1581,7 +1992,7 @@ async function runSlice2SessionWriteChecks(){
     if (scopedRead) {
       assert((!scopedRead.opts.method || scopedRead.opts.method === 'GET'), 'signed-in poll is a read');
       assert(scopedRead.opts.headers.Authorization === 'Bearer signed-in-access-token', 'signed-in poll uses the user bearer');
-      assert(scopedRead.opts.headers.apikey === 'test-anon-key', 'signed-in poll keeps the anon apikey');
+      assert(scopedRead.opts.headers.apikey === PUBLIC_SUPABASE_KEY, 'signed-in poll keeps the anon apikey');
       assert(scopedRead.url.includes('id=in.(cccccccc-dddd-4eee-8fff-000000000001)'), 'signed-in poll asks only for the linked ids');
       assert(scopedRead.url.includes('customer_id=eq.' + authUserId), 'signed-in poll filters customer_id to that user');
       assert(!scopedRead.url.includes(DEMO_CUSTOMER_ID), 'signed-in poll does not send DEMO_CUSTOMER');
@@ -1600,9 +2011,7 @@ async function runSlice2SessionWriteChecks(){
     calls.length = 0;
     const container = document.createElement('div');
     document.body.appendChild(container);
-    let renderResult;
-    await act(async () => { renderResult = render(React.createElement(App), container); });
-    mainContainer = (renderResult && renderResult.container) ? renderResult.container : container;
+    mainContainer = await mountApp(container);
     click('Mount TV');
     selectNonSurgeTimeWindow();
     const postBtn = getPostJobButton();
@@ -1618,7 +2027,7 @@ async function runSlice2SessionWriteChecks(){
       const body = JSON.parse(created.opts.body);
       assert(body.customer_id === authUserId, 'signed-in Customer create uses the auth user id');
       assert(created.opts.headers.Authorization === 'Bearer signed-in-access-token', 'signed-in Customer create uses the user bearer');
-      assert(created.opts.headers.apikey === 'test-anon-key', 'signed-in Customer create keeps the anon key as apikey');
+      assert(created.opts.headers.apikey === PUBLIC_SUPABASE_KEY, 'signed-in Customer create keeps the anon key as apikey');
       assert(body.status === 'posted', 'signed-in create still posts status posted');
       assert(body.margin_rate_bps === 2000, 'signed-in create keeps margin_rate_bps 2000');
       assert(body.fixed_customer_labor_price_cents === 8900, 'Mount TV customer labor price stays 8900 cents');
@@ -1633,7 +2042,6 @@ async function runSlice2SessionWriteChecks(){
     }
 
     clearHavenAuthTestKeys();
-    delete storedData['haven_prototype_anon_mode'];
     calls.length = 0;
     const stoppedCreate = await postCanonicalJob({ customer_id: DEMO_CUSTOMER_ID, status: 'posted' });
     assert(stoppedCreate === null, 'signed-out create does not send DEMO_CUSTOMER_ID');
@@ -1654,9 +2062,7 @@ async function runSlice2SessionWriteChecks(){
     calls.length = 0;
     const signedOut = document.createElement('div');
     document.body.appendChild(signedOut);
-    let signedOutRender;
-    await act(async () => { signedOutRender = render(React.createElement(App), signedOut); });
-    mainContainer = (signedOutRender && signedOutRender.container) ? signedOutRender.container : signedOut;
+    mainContainer = await mountApp(signedOut);
     assert(existsRegex('Create customer account'), 'signed-out UI is the auth gate');
     assert(existsRegex('Sign in'), 'signed-out UI offers sign in');
     assert(!existsRegex('Mount TV'), 'signed-out UI does not open the marketplace');
@@ -1666,39 +2072,30 @@ async function runSlice2SessionWriteChecks(){
       const headers = (c.opts && c.opts.headers) || {};
       const blob = String(c.url) + ' ' + ((c.opts && c.opts.body) || '') + ' ' + (headers.Authorization || '');
       const write = c.opts && (c.opts.method === 'POST' || c.opts.method === 'PATCH');
-      return blob.includes(DEMO_CUSTOMER_ID) || (write && headers.Authorization === 'Bearer test-anon-key');
+      return blob.includes(DEMO_CUSTOMER_ID) || (write && headers.Authorization === 'Bearer ' + PUBLIC_SUPABASE_KEY);
     });
     assert(!wroteDemo, 'signed-out create does not send the demo customer id or an anon bearer write');
 
-    delete storedData['haven_supabase_url'];
-    delete storedData['haven_supabase_anon_key'];
-    calls.length = 0;
-    const unconfigured = await fetchCanonicalJobsByIds(['cccccccc-dddd-4eee-8fff-000000000001']);
-    assert(unconfigured.length === 0, 'unconfigured preview poll returns no rows');
-    assert(calls.length === 0, 'unconfigured preview does not call the jobs API');
   } catch (e) {
     fail++;
     console.error('FAIL (slice 2 session writes):', (e && e.stack) || e);
   } finally {
     global.fetch = origFetch;
-    delete storedData['haven_supabase_url'];
-    delete storedData['haven_supabase_anon_key'];
     clearHavenAuthTestKeys();
-    delete storedData['haven_prototype_anon_mode'];
     cleanup();
   }
   console.log(`\n--- Slice 2 session write audit: ${pass} passing, ${fail} failing ---`);
 }
 
-// Approve fails closed when the backend is configured and the PATCH does not land.
-// Decline still local-advances to inspection_completed / materials_declined.
+// Approve and decline fail closed: the PATCH must land before the job advances.
+// Phase 1B A1: a job with no backend id (old demo/local job) cannot advance either.
 async function runApproveAndDeclineChecks(){
   const backendId = 'bbbbbbbb-cccc-4ddd-8eee-ffffffffffff';
   const origFetch = global.fetch;
   let patchOk = false;
   let remoteStatus = 'materials_requested';
   const patches = [];
-  global.fetch = async (url, opts) => {
+  global.fetch = withBackendHealth(async (url, opts) => {
     const method = (opts && opts.method) || 'GET';
     const u = String(url);
     if (u.includes('/rest/v1/jobs') && method === 'PATCH') {
@@ -1713,7 +2110,7 @@ async function runApproveAndDeclineChecks(){
       return { ok: true, json: async () => [{ id: backendId, status: remoteStatus }], text: async () => '' };
     }
     return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
-  };
+  });
 
   const pro = { i: 'MT', n: 'Marcus T.', r: 4.97, j: 543, s: 'TV Mount Pro', col: '#1E40AF', trustScore: 98 };
   const makeJob = (id, extra) => ({
@@ -1731,7 +2128,7 @@ async function runApproveAndDeclineChecks(){
     ...extra,
   });
 
-  const mount = async (job, { backend = true } = {}) => {
+  const mount = async (job) => {
     cleanup();
     remoteStatus = job.status;
     // Account required — keep a signed-in mirror so Bookings UI is reachable.
@@ -1739,18 +2136,11 @@ async function runApproveAndDeclineChecks(){
     storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     storedData['haven_auth_email'] = 'qa-customer@example.com';
     storedData['haven_auth_role'] = 'customer';
-    if (backend) {
-      storedData['haven_supabase_url'] = 'https://example.supabase.co';
-      storedData['haven_supabase_anon_key'] = 'test-anon-key';
-    } else {
-      delete storedData['haven_supabase_url'];
-      delete storedData['haven_supabase_anon_key'];
-    }
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
     const container = document.createElement('div');
     document.body.appendChild(container);
-    await act(async () => { render(React.createElement(App), container); });
+    await mountApp(container);
     clickTab('Bookings');
     const cards = screen.queryAllByText(/Assemble furniture/);
     act(() => { fireEvent.click(cards[cards.length - 1]); });
@@ -1773,7 +2163,7 @@ async function runApproveAndDeclineChecks(){
 
     // Slice 5: 2xx with an empty representation is not a landed write.
     const origFetchEmpty = global.fetch;
-    global.fetch = async (url, opts) => {
+    global.fetch = withBackendHealth(async (url, opts) => {
       const method = (opts && opts.method) || 'GET';
       const u = String(url);
       if (u.includes('/rest/v1/jobs') && method === 'PATCH') {
@@ -1784,7 +2174,7 @@ async function runApproveAndDeclineChecks(){
         return { ok: true, json: async () => [{ id: backendId, status: remoteStatus }], text: async () => '' };
       }
       return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
-    };
+    });
     patches.length = 0;
     await mount(makeJob(9106));
     const approveEmpty = byText('Approve materials');
@@ -1806,13 +2196,17 @@ async function runApproveAndDeclineChecks(){
     );
     assert(patches.some(p => p.status === 'materials_approved'), 'Successful approve PATCHes materials_approved');
 
-    await mount(makeJob(9103, { backendJobId: null }), { backend: false });
+    // Phase 1B A1: no demo path. A local-only job (no backend id) does not
+    // advance on approve; it fails closed like any other unsynced write.
+    patches.length = 0;
+    await mount(makeJob(9103, { backendJobId: null }));
     const approveDemo = byText('Approve materials');
     await act(async () => { fireEvent.click(approveDemo); });
-    await waitForCondition(
-      () => existsRegex('pro is buying'),
-      { timeout: 3000, message: 'Demo approve without a backend did not advance locally' }
-    );
+    await act(async () => { await delay(40); });
+    assert(existsRegex("Couldn't sync approval"), 'Approve on a job with no backend id shows the sync error (no demo advance)');
+    assert(!existsRegex('pro is buying'), 'Approve on a job with no backend id does not advance locally');
+    assert(JSON.parse(storedData['haven_jobs']).data[0].status === 'materials_requested', 'Approve on a job with no backend id does not persist a local advance');
+    assert(patches.length === 0, 'Approve on a job with no backend id sends no PATCH');
 
     patchOk = true;
     patches.length = 0;
@@ -1838,8 +2232,6 @@ async function runApproveAndDeclineChecks(){
     console.error('FAIL (approve/decline):', (e && e.stack) || e);
   } finally {
     global.fetch = origFetch;
-    delete storedData['haven_supabase_url'];
-    delete storedData['haven_supabase_anon_key'];
     clearHavenAuthTestKeys();
     cleanup();
   }
@@ -1847,7 +2239,7 @@ async function runApproveAndDeclineChecks(){
 }
 
 // PHASE 14 helper: locked price checks for property-scoped cleaning services.
-function runLockedPriceChecks(){
+async function runLockedPriceChecks(){
   // Seed a primary property with a size that yields a non-base cleaning price,
   // and ensure a clean jobs slate so we can assert against the newest job.
   storedData['haven_addresses'] = JSON.stringify({__v:1, data:[
@@ -1857,17 +2249,17 @@ function runLockedPriceChecks(){
   storedData['haven_jobs'] = JSON.stringify({__v:1, data:[]});
   const container = document.createElement('div');
   document.body.appendChild(container);
-  let renderResult;
-  act(()=>{ renderResult = render(React.createElement(App), container); });
   // Align all helpers to this fresh mount for Phase 14
-  mainContainer = (renderResult && renderResult.container) ? renderResult.container : container;
+  mainContainer = await mountApp(container);
 
-  step('67. Book a property-scoped cleaning job and capture its locked price at booking time', () => {
+  await stepAsync('67. Book a property-scoped cleaning job and capture its locked price at booking time', async () => {
     clickTab('Home');
     goToServiceTask('Deep Home Cleaning');
     const postBtn = getPostJobButton();
     if (postBtn) {
+      const before = storedJobCount();
       act(()=>{ fireEvent.click(postBtn); });
+      await waitForPostedJob(before);
     } else {
       fail++; console.error('FAIL: Post Job button not found on Deep Home Cleaning');
     }
@@ -1887,10 +2279,9 @@ function runLockedPriceChecks(){
     assert(existsRegex(`$${job.lockedPrice}`), 'Bookings list shows the locked price');
   });
 
-  step('69. Complete the job; completion/receipt flows use the locked price', () => {
-    // Open the job and advance through the lifecycle
-    act(()=>{ fireEvent.click(screen.queryAllByText(/Deep Home Cleaning/)[0]); });
-    click('Accept job (start travel)'); clickRegex(/Arrive/); clickRegex(/Start work/); clickRegex(/Complete job/);
+  await stepAsync('69. Complete the job; completion/receipt flows use the locked price', async () => {
+    // A2: the backend (poll) advances the job, not the demo controls.
+    await completeBackendJobViaPoll('Deep Home Cleaning');
     // Receipt access button should be present and totals should match locked
     click('🧾 View Receipt');
     const jobsData = JSON.parse(storedData['haven_jobs']);
@@ -1925,19 +2316,135 @@ function runLockedPriceChecks(){
 // arrived, diagnosing, in_progress, and complete map forward onto the local job.
 // in_progress also advances materials_requested and materials_approved.
 // Materials mapping stays. Later statuses are not walked backward.
+
+// ── Phase 1B A2: QA tester gate ─────────────────────────────────────────
+async function runA2QaTesterGateChecks(){
+  const saved = { ...storedData };
+  try {
+    // (a) Non-tester: no Reset, no Simulate location, no DEMO panel.
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    backendMock.qaTester = false;
+    mockJobsById.clear();
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(!existsRegex('Reset Prototype Data'), 'A2 non-tester: Reset Prototype Data hidden');
+    assert(!existsRegex(/^Testing$/), 'A2 non-tester: Testing section hidden');
+    click('‹');
+    clickTab('Home');
+    click('Mount TV');
+    // Location match path: request location then check simulate link.
+    if (existsRegex('Check my location')) clickRegex(/Check my location/);
+    await delay(400);
+    assert(!existsRegex('Simulate different location'), 'A2 non-tester: Simulate different location hidden');
+    assert(!existsRegex('DEMO — PRO CONTROLS') && !existsRegex('Accept job (start travel)'), 'A2 non-tester: no DEMO PRO CONTROLS');
+    click('← Back');
+
+    // (b) Tester: Reset visible; DEMO PRO CONTROLS still absent (removed).
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    backendMock.qaTester = true;
+    mockJobsById.clear();
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(existsRegex('Reset Prototype Data'), 'A2 tester: Reset Prototype Data visible');
+    click('‹');
+    assert(!existsRegex('DEMO — PRO CONTROLS') && !existsRegex('Accept job (start travel)'), 'A2 tester: DEMO PRO CONTROLS still removed (no local advancement)');
+
+    // (c) RPC error: hidden (fail closed).
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    backendMock.qaTester = 'error';
+    mockJobsById.clear();
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(!existsRegex('Reset Prototype Data'), 'A2 RPC error: Reset Prototype Data hidden');
+    click('‹');
+
+    // (c2) RPC pending: hidden until the server answers true.
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    backendMock.qaTester = 'hang';
+    backendMock.qaHangResolvers.length = 0;
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(!existsRegex('Reset Prototype Data'), 'A2 RPC pending: Reset Prototype Data hidden while loading');
+    const pendingRpc = backendMock.qaHangResolvers.shift();
+    assert(!!pendingRpc, 'A2: tester check was requested from the server');
+    if (pendingRpc) {
+      await act(async () => { pendingRpc.resolve(mockResponse(200, true)); await delay(20); });
+      assert(existsRegex('Reset Prototype Data'), 'A2 RPC resolves true: Reset Prototype Data appears');
+    }
+    const rpcCall = fetchLog.filter(c => String(c.url).includes('/rest/v1/rpc/is_qa_tester')).pop();
+    assert(!!rpcCall && rpcCall.opts.method === 'POST' && rpcCall.opts.headers && rpcCall.opts.headers.Authorization === 'Bearer signed-in-access-token', 'A2: is_qa_tester RPC is called with the signed-in user bearer');
+    click('‹');
+
+    // (c3) Never decided from localStorage or email.
+    cleanup();
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    seedSignedInCustomer();
+    storedData['haven_qa_tester'] = 'true';
+    storedData['haven_auth_email'] = 'qa-tester@haven.test';
+    backendMock.qaTester = false;
+    mainContainer = await mountApp();
+    forceProfileRoot();
+    click('Settings');
+    assert(!existsRegex('Reset Prototype Data'), 'A2: a localStorage flag or a QA-looking email does not show QA controls');
+    click('‹');
+    delete storedData['haven_qa_tester'];
+
+    // (d) Static SQL: flag not self-settable; provider results require a tester.
+    const sql = fs.readFileSync(require('path').join(__dirname, 'supabase/migrations/0024_qa_tester_gate.sql'), 'utf8');
+    assert(/is_qa_tester boolean not null default false/i.test(sql), '0024 adds is_qa_tester boolean not null default false');
+    assert(/revoke insert \(is_qa_tester\), update \(is_qa_tester\) on table public\.profiles from authenticated/i.test(sql) && /revoke insert \(is_qa_tester\), update \(is_qa_tester\) on table public\.profiles from anon/i.test(sql), '0024 revokes INSERT/UPDATE on is_qa_tester from authenticated and anon');
+    assert(!/grant[^;]*\(\s*[^)]*is_qa_tester[^)]*\)[^;]*to (authenticated|anon)/i.test(sql), '0024 never grants is_qa_tester to an API role');
+    assert(/is_qa_tester is founder-set only/i.test(sql), '0024 trigger blocks self-set of the flag');
+    assert(/create or replace function public\.is_qa_tester\(\)/i.test(sql), '0024 defines is_qa_tester() RPC');
+    assert(/security definer/i.test(sql) && /grant execute on function public\.is_qa_tester\(\) to authenticated/i.test(sql), '0024 RPC is SECURITY DEFINER for authenticated');
+    assert(/revoke all on function public\.is_qa_tester\(\) from anon/i.test(sql), '0024 RPC is not executable by anon');
+    assert(/QA tester only/i.test(sql) && /identityVerification/i.test(sql) && /payoutsEnabled/i.test(sql), '0024 guards provider-result statuses and payoutsEnabled');
+    assert(/profiles_guard_qa_fields/i.test(sql), '0024 installs profiles_guard_qa_fields trigger');
+    assert(/b79c42e9-6e09-4335-9035-a11ecf37d032/i.test(sql) && /971c6625-afa7-455b-9b8b-672c8dc562d9/i.test(sql), '0024 comments the founder UPDATE for the two QA accounts');
+    assert(/-- update public\.profiles/i.test(sql), '0024 founder UPDATE is commented out (founder pastes by hand)');
+    assert(!/jobs_posted_within_radius|jobs_enforce_claim_radius|pro_claim_job/.test(sql.replace(/Does not change[\s\S]*radius/, '')), '0024 does not redefine radius/claim functions');
+  } catch (e) {
+    fail++;
+    console.error('FAIL (A2 QA tester gate):', (e && e.stack) || e);
+  } finally {
+    backendMock.qaTester = true;
+    Object.keys(storedData).forEach(k => { delete storedData[k]; });
+    Object.assign(storedData, saved);
+    cleanup();
+  }
+  console.log(`\n--- A2 QA tester gate: ${pass} passing, ${fail} failing ---`);
+}
+
 async function runArrivedVisibilityChecks(){
   const backendId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const origFetch = global.fetch;
   let remoteStatus = 'en_route';
   let fetches = 0;
-  global.fetch = async (url) => {
+  global.fetch = withBackendHealth(async (url) => {
     const u = String(url);
     if (u.includes('/rest/v1/jobs')) {
       fetches += 1;
       return { ok: true, json: async () => [{ id: backendId, status: remoteStatus, customer_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' }], text: async () => '' };
     }
     return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
-  };
+  });
 
   const baseJob = {
     id: 9001,
@@ -1955,8 +2462,6 @@ async function runArrivedVisibilityChecks(){
   const mountWithJob = async (job) => {
     cleanup();
     fetches = 0;
-    storedData['haven_supabase_url'] = 'https://example.supabase.co';
-    storedData['haven_supabase_anon_key'] = 'test-anon-key';
     // Signed-in poll only — anon base-table SELECT is revoked.
     storedData['haven_auth_access_token'] = 'signed-in-access-token';
     storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -1966,7 +2471,7 @@ async function runArrivedVisibilityChecks(){
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
     const container = document.createElement('div');
     document.body.appendChild(container);
-    await act(async () => { render(React.createElement(App), container); });
+    await mountApp(container);
   };
 
   const openBookingsAndPoll = async () => {
@@ -2204,8 +2709,6 @@ async function runArrivedVisibilityChecks(){
     console.error('FAIL (arrived visibility):', (e && e.stack) || e);
   } finally {
     global.fetch = origFetch;
-    delete storedData['haven_supabase_url'];
-    delete storedData['haven_supabase_anon_key'];
     cleanup();
   }
   console.log(`\n--- Arrived visibility audit: ${pass} passing, ${fail} failing ---`);
@@ -2222,12 +2725,17 @@ async function runReceiptTotalsChecks(){
   const origClipboard = global.navigator.clipboard;
   const origJspdf = global.window.jspdf;
   let remoteRow = null;
-  global.fetch = async (url) => {
+  // Phase 1B A1 harness: jobs reads return remoteRow; everything else (Auth
+  // health, is_qa_tester RPC, unexpected-request guard) goes to the shared
+  // mocked backend so the app connects and signs in like every other phase.
+  resetBackendMock();
+  global.fetch = async (url, opts) => {
     const u = String(url);
     if (u.includes('/rest/v1/jobs')) {
+      fetchLog.push({ url: u, opts: opts || {} });
       return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' };
     }
-    return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+    return defaultBackendFetch(url, opts);
   };
   let copied = '';
   global.navigator.clipboard = { writeText: (t) => { copied = String(t); return Promise.resolve(); } };
@@ -2264,23 +2772,21 @@ async function runReceiptTotalsChecks(){
   });
   const mountCompleted = async (job, { backend = true } = {}) => {
     cleanup();
+    // Since #43 the app ignores stored URL/key and connects with the shipped
+    // public config; the signed-in session comes from the mocked Auth client.
+    delete storedData['haven_supabase_url'];
+    delete storedData['haven_supabase_anon_key'];
     if (backend) {
-      storedData['haven_supabase_url'] = 'https://example.supabase.co';
-      storedData['haven_supabase_anon_key'] = 'test-anon-key';
-      storedData['haven_auth_access_token'] = 'signed-in-access-token';
+      seedSignedInCustomer();
       storedData['haven_auth_user_id'] = authUserId;
-      storedData['haven_auth_email'] = 'qa-customer@example.com';
-      storedData['haven_auth_role'] = 'customer';
     } else {
-      delete storedData['haven_supabase_url'];
-      delete storedData['haven_supabase_anon_key'];
       clearHavenAuthTestKeys();
     }
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
     const container = document.createElement('div');
     document.body.appendChild(container);
-    await act(async () => { render(React.createElement(App), container); });
+    await mountApp(container);
     await act(async () => { await delay(40); });
   };
   const openReceiptsList = async () => {

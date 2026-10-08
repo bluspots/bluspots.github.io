@@ -59,6 +59,24 @@ function proShownForJob(job) {
   if (job.backendJobId) return havenRealProCard(null, "");
   return PROS[0];
 }
+// Pro profile facts that have a real value. Only the demo pros carry these
+// metrics; a real backend pro has none, so a missing value hides its row
+// instead of rendering null / undefined / NaN.
+function proProfileFacts(p){
+  const pro=p||{};
+  const num=v=>typeof v==="number"&&Number.isFinite(v);
+  const str=v=>typeof v==="string"&&v.trim()!=="";
+  return {
+    trustScore: num(pro.trustScore)?pro.trustScore:null,
+    ratingLine: num(pro.r)&&num(pro.j)?`⭐ ${pro.r} · ${pro.j} completed jobs`:null,
+    metrics:[
+      ["On-time rate",num(pro.onTimeRate)?`${pro.onTimeRate}%`:null],
+      ["Would hire again",num(pro.hireAgainRate)?`${pro.hireAgainRate}%`:null],
+      ["Completion rate",num(pro.completionRate)?`${pro.completionRate}%`:null],
+      ["Avg. response",str(pro.responseTime)?pro.responseTime:null],
+    ].filter(([,v])=>v!=null),
+  };
+}
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
 const TIME_PREFS=[
   {id:1,label:"ASAP",          sub:"Within 2 hours",              surge:10},
@@ -113,7 +131,7 @@ const TOPICS=[
   {t:"Cancel or reschedule a job",a:"You can cancel a job any time before a pro accepts it for free from the Bookings tab. Once a pro is en route, cancellations may include a small fee to compensate their travel time."},
   {t:"Report an issue with a pro",a:"If you experience a problem with a pro or a completed job, contact Haven Support. Our support team can review the booking details, messages, photos, and receipt and help determine the next steps."},
   {t:"Refunds & billing",a:"If a job wasn't completed to your satisfaction, contact support within 48 hours of completion and we'll review it for a partial or full refund."},
-  {t:"Trust & safety",a:"Haven verifies each pro's identity and background-check status before they can accept jobs. Additional credentials, such as professional licenses, are shown on the pro's profile when verified. If you're ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},
+  {t:"Trust & safety",a:"If you're ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},
 ];
 
 // Maintenance suggestion rules — keyed by TASKS id, used to generate simple
@@ -149,7 +167,6 @@ const BATHROOM_OPTIONS=["1","1.5","2","2.5","3","3.5","4","4.5","5+"];
 const formatLayout=h=>`${h.beds==="Studio"?"Studio":h.beds+" bed"} / ${h.baths} bath`;
  
 const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
-const PRO_REPLIES=["Got it! 👍","On it!","Thanks for the heads up!","Almost there!","Sounds good!","Will do!"];
 // Seed/default data — reused both for the initial useState value and by
 // "Reset Prototype Data". Cards only ever hold safe prototype display
 // fields (brand, last four digits, expiration, default flag) — never a
@@ -400,6 +417,7 @@ export default function App(){
   // returns all in-memory state to its clean defaults. Not a real
   // customer-facing "sign out" or data-deletion feature.
   const resetPrototypeData=()=>{
+    if(!qaTester) return;
     PERSISTED_KEYS.forEach(k=>{ try{ localStorage.removeItem(k); }catch{} });
     setJobs([]); setVjid(null);
     setAddresses(DEFAULT_ADDRESSES.map(a=>({...a})));
@@ -437,10 +455,9 @@ export default function App(){
     in_progress:proName=>({title:"Work has started",body:`${proName} has started the job.`}),
     complete:()=>({title:"Job completed",body:"Your job is complete — rate your experience or view the receipt."}),
   };
-  // Centralized job-transition notification hook — called from proAccepts()
-  // and advance() (the same two functions Demo Pro Controls already route
-  // through), so a future real Pro app triggers identical notifications
-  // without any change here.
+  // Centralized job-transition notification hook. The job poll (and real
+  // customer actions like materials approve) call this so every status
+  // change produces the same notification, regardless of who wrote it.
   const handleJobTransition=(jobId,newStatus,proName)=>{
     const gen=JOB_TRANSITION_NOTIFS[newStatus];
     if(!gen)return;
@@ -584,7 +601,10 @@ export default function App(){
   });
   // Session mirror for Profile/Settings. Job writes read the same storage keys
   // at request time (havenJobCustomerId / havenJobRestBearer), not this state.
-  const [havenAuth,setHavenAuth]=useState(()=>readHavenAuthMirror());
+  // Phase 1B A1: starts empty. Only a session that Auth restored and the
+  // server confirmed (havenConnectBackend) fills it, so a stale local mirror
+  // never opens the app.
+  const [havenAuth,setHavenAuth]=useState(null);
   // profiles.display_name for the signed-in user (receipt "Billed to" only).
   const [havenProfileDisplayName,setHavenProfileDisplayName]=useState("");
   const displayNameFromProfileRow=row=>row&&typeof row.display_name==="string"?row.display_name.trim():"";
@@ -592,47 +612,89 @@ export default function App(){
   const [authPasswordInput,setAuthPasswordInput]=useState("");
   const [authBusy,setAuthBusy]=useState(false);
   const [authNotice,setAuthNotice]=useState("");
-  const [anonModeOn,setAnonModeOn]=useState(()=>havenPrototypeAnonModeEnabled());
+  // Backend connection: connecting | retrying | ready | error. Nothing past
+  // the connection screen renders until Auth answers. There is no demo or
+  // local fallback: a failure shows the connection error with Retry.
+  const [backendStatus,setBackendStatus]=useState("connecting");
+  const [backendAttempt,setBackendAttempt]=useState(0);
+  // Phase 1B A2: server-confirmed QA tester. False by default, while the
+  // check is pending, and on any error. Never localStorage / email.
+  const [qaTester,setQaTester]=useState(false);
+  const qaSeqRef=useRef(0);
+  const clearQaTester=()=>{ qaSeqRef.current+=1; setQaTester(false); };
+  // Hidden while the check runs. A late answer for an older session is dropped.
+  const refreshQaTester=async()=>{
+    const seq=++qaSeqRef.current;
+    setQaTester(false);
+    let flag=false;
+    try{ flag=typeof havenFetchIsQaTester==="function" ? (await havenFetchIsQaTester())===true : false; }
+    catch{ flag=false; }
+    if(seq===qaSeqRef.current) setQaTester(flag);
+  };
+  const retryBackendConnection=()=>{
+    if(backendStatus==="retrying"||backendStatus==="connecting") return;
+    // supabase-js CDN missing: Retry must reload so the browser re-fetches the script.
+    if(typeof havenSupabaseCreateClient==="function" && !havenSupabaseCreateClient()){
+      if(typeof havenNavigation!=="undefined" && havenNavigation && typeof havenNavigation.reload==="function") havenNavigation.reload();
+      else try{ window.location.reload(); }catch{}
+      return;
+    }
+    setBackendStatus("retrying");
+    setBackendAttempt(n=>n+1);
+  };
   useEffect(()=>{
     let cancelled=false;
-    const client=getHavenAuthClient();
-    if(!client) return undefined;
+    let subscription=null;
     const applyView=()=>{ if(!cancelled) setHavenAuth(readHavenAuthMirror()); };
     (async()=>{
+      let result;
+      try{ result=await havenConnectBackend(); }
+      catch(err){ result={ok:false, reason:"exception"}; }
+      if(cancelled) return;
+      if(!result || !result.ok){
+        console.warn("Haven: could not connect to the backend:", result&&result.reason);
+        setHavenAuth(null);
+        clearQaTester();
+        setBackendStatus("error");
+        return;
+      }
+      const client=result.client;
+      const session=result.session;
+      if(session) applyHavenAuthSession(session, session.user);
+      else clearHavenAuthMirror();
+      applyView();
       try{
-        const {data,error}=await client.auth.getSession();
+        const {data}=client.auth.onAuthStateChange((_event, next)=>{
+          if(next) applyHavenAuthSession(next, next.user);
+          else clearHavenAuthMirror();
+          applyView();
+          if(!next) clearQaTester();
+          else if(!cancelled) void refreshQaTester();
+        });
+        subscription=data&&data.subscription?data.subscription:null;
+        if(cancelled&&subscription){ try{ subscription.unsubscribe(); }catch{} }
+      }catch(err){
+        console.warn("Haven auth listener failed:", err);
+      }
+      setBackendStatus("ready");
+      if(session&&session.user){
+        const row=await havenFetchOwnProfile(client, session.user.id);
         if(cancelled) return;
-        if(error) console.warn("Haven auth getSession:", error.message||error);
-        if(data&&data.session) applyHavenAuthSession(data.session, data.session.user);
-        else clearHavenAuthMirror();
-        applyView();
-        if(data&&data.session&&data.session.user){
-          const row=await havenFetchOwnProfile(client, data.session.user.id);
-          if(cancelled||!row) return;
+        if(row){
           havenApplyProfileRow(row);
           setHavenProfileDisplayName(displayNameFromProfileRow(row));
           applyView();
         }
-      }catch(err){
-        console.warn("Haven auth session restore failed:", err);
+        if(!cancelled) await refreshQaTester();
+      }else if(!cancelled){
+        clearQaTester();
       }
     })();
-    let subscription=null;
-    try{
-      const {data}=client.auth.onAuthStateChange((_event, session)=>{
-        if(session) applyHavenAuthSession(session, session.user);
-        else clearHavenAuthMirror();
-        applyView();
-      });
-      subscription=data&&data.subscription?data.subscription:null;
-    }catch(err){
-      console.warn("Haven auth listener failed:", err);
-    }
     return ()=>{
       cancelled=true;
       try{ if(subscription) subscription.unsubscribe(); }catch{}
     };
-  },[]);
+  },[backendAttempt]);
   const submitHavenAuth=async(mode)=>{
     if(authBusy) return;
     setAuthBusy(true);
@@ -645,6 +707,9 @@ export default function App(){
       const row=await havenFetchOwnProfile(client, result.userId);
       if(row) havenApplyProfileRow(row);
       setHavenProfileDisplayName(displayNameFromProfileRow(row));
+      await refreshQaTester();
+    }else if(!(result.ok && result.signedIn)){
+      clearQaTester();
     }
     setHavenAuth(readHavenAuthMirror());
     setAuthBusy(false);
@@ -658,6 +723,7 @@ export default function App(){
     await havenSignOut();
     setHavenAuth(null);
     setHavenProfileDisplayName("");
+    clearQaTester();
     setAuthNotice("Signed out.");
     setAuthBusy(false);
   };
@@ -1587,11 +1653,18 @@ export default function App(){
       lockedPrice:tid?effectiveTaskPrice:null, // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
       requiresDiagnosis:requiresDiagnosisLocal,
     });
-    // Supabase configured: do not save the job or open Posted until the
-    // signed-in create lands. No session stops here. No config stays local.
+    // Do not save the job or open Posted until the signed-in create lands.
+    // No session stops here. Phase 1B A1: there is no local-only job. If the
+    // backend config is somehow missing, the post fails like any other write.
     const cfg=getSupabaseConfig();
     let backendId=null;
-    if(cfg){
+    if(!cfg){
+      isPostingRef.current=false;
+      setWriteSyncNotice("Couldn't post the job — try again");
+      setTimeout(()=>setWriteSyncNotice(""),2500);
+      return;
+    }
+    {
       const isCatalog = !!nj.taskId;
       const cat      = isCatalog ? (currentTask?.c||"") : (nj.custom?.cat||"");
       const title    = isCatalog ? (currentTask?.n||"") : (nj.custom?.title||"");
@@ -1682,37 +1755,16 @@ export default function App(){
     }
   };
 
-  const proAccepts=()=>{
-    const p=PROS[Math.floor(Math.random()*PROS.length)];
-    updateJob(vjid,{pro:p,status:"en_route",msgs:[],justAccepted:true,acceptedAt:Date.now()});
-    handleJobTransition(vjid,"en_route",p.n);
-    goTo("tracking");
-    setTimeout(()=>updateJob(vjid,{justAccepted:false}),3500);
-  };
-
-  const advance=()=>{
-    if(!vj)return;
-    const i=SF.indexOf(vj.status);
-    if(i<SF.length-1){
-      const next=SF[i+1];
-      if(next==="complete"){
-        const cat=vj.taskId?(TASKS.find(t=>t.id===vj.taskId)?.c):vj.custom?.cat;
-          const price=vj.taskId?(vj.lockedPrice??(vjTask?vjTask.p:0)):(vj.custom?.price||0);
-        const {workPerformed,materials,proNotes}=getCompletionDetails(cat,price);
-        updateJob(vjid,{status:next,completedAt:Date.now(),workPerformed,materials,proNotes});
-      }else{
-        updateJob(vjid, {status:next});
-      }
-      handleJobTransition(vjid,next,vj.pro?.n||"Your pro");
-    }
-  };
+  // Phase 1B A2: the DEMO PRO CONTROLS (proAccepts / advance) are removed.
+  // They advanced job status locally, which a QA control must never do.
+  // Job status now changes only from the backend (Pro app writes -> poll).
   const cancelJobDirect=async()=>{
     const cfg=getSupabaseConfig();
-    // Configured backend: stay on this job unless the cancel write lands.
-    // No session does not send the demo customer and does not leave the screen.
-    if(cfg){
+    // Stay on this job unless the cancel write lands. No session, no config,
+    // or no backend job id does not cancel locally (Phase 1B A1: no demo path).
+    {
       const when=new Date().toISOString();
-      const ok = vj?.backendJobId
+      const ok = cfg && vj?.backendJobId
         ? await updateCanonicalJob(vj.backendJobId,{status:"cancelled",cancelled_at:when})
         : false;
       if(!ok){
@@ -1735,10 +1787,10 @@ export default function App(){
   const approveMaterials=async()=>{
     if(!vj) return;
     const cfg=getSupabaseConfig();
-    // Backend configured: fail closed. A failed or missing PATCH must not
-    // local-advance, or Pro never sees the approval.
-    if(cfg){
-      const patched = vj.backendJobId
+    // Fail closed. A failed or missing PATCH must not local-advance, or Pro
+    // never sees the approval. Phase 1B A1: no config / no backend id fails too.
+    {
+      const patched = cfg && vj.backendJobId
         ? await updateCanonicalJob(vj.backendJobId,{status:"materials_approved"})
         : false;
       if(!patched){
@@ -1757,9 +1809,9 @@ export default function App(){
     const nextStatus = isDiag ? "inspection_completed" : "materials_declined";
     const extraFields = isDiag ? {} : {convenience_fee_cents:3000};
     const cfg=getSupabaseConfig();
-    // Same bar as approve: a configured backend must accept the write first.
-    if(cfg){
-      const patched = vj.backendJobId
+    // Same bar as approve: the backend must accept the write first.
+    {
+      const patched = cfg && vj.backendJobId
         ? await updateCanonicalJob(vj.backendJobId,{status:nextStatus, ...extraFields})
         : false;
       if(!patched){
@@ -1778,14 +1830,10 @@ export default function App(){
   const sendMsg=()=>{
     if(!minput.trim()||vj?.status==="complete")return;
     const txt=minput.trim();
-    const forJobId=vjid, proName=vj?.pro?.n||"your pro";
     addMsg(vjid,{id:Date.now(),f:"cu",m:txt,t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});
-    setMinput("");setTyping(true);
-    setTimeout(()=>{
-      setTyping(false);
-      addMsg(forJobId,{id:Date.now()+1,f:"pro",m:PRO_REPLIES[Math.floor(Math.random()*PRO_REPLIES.length)],t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});
-      handleIncomingMessage(forJobId,proName);
-    },2000);
+    setMinput("");
+    // Phase 1B A2: no simulated pro reply. A fabricated incoming message is a
+    // local-only QA effect; real pro messages are not wired yet.
   };
 
   const openRating=()=>{setStars(0);setReviewTxt("");setHireAgain(null);goTo("rating");};
@@ -1897,7 +1945,7 @@ export default function App(){
           </button>
         </div>
         <div style={{display:"flex",gap:16,marginBottom:16}}>
-          {["✓ Fixed pricing","✓ Background checked","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
+          {["✓ Fixed pricing","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
         </div>
         <div onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
           <span style={{fontSize:16,color:TM}}>🔍</span>
@@ -2312,23 +2360,6 @@ export default function App(){
     </div>
   );
 
-  // Demo Pro Controls — a customer never sees this in a real deployment.
-  // Clearly separated (dashed border, distinct background, explicit label)
-  // from normal customer UI so it can never be mistaken for a real control.
-  // Every button here routes through the same centralized helpers (proAccepts,
-  // advance) a future real Pro app would call — no separate transition logic.
-  const demoProControlsPanel=(buttons)=>(
-    <div style={{margin:"0 20px 20px",background:"repeating-linear-gradient(135deg,#FFF7ED,#FFF7ED 10px,#FEF3C7 10px,#FEF3C7 20px)",border:"1.5px dashed #F59E0B",borderRadius:16,padding:14}}>
-      <div style={{fontSize:11,fontWeight:800,color:"#92400E",letterSpacing:.6,marginBottom:2}}>🛠️ DEMO — PRO CONTROLS</div>
-      <div style={{fontSize:11,color:"#92400E",opacity:.85,marginBottom:10}}>Stands in for the future Pro app. Not visible in a real customer build.</div>
-      <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
-        {buttons.map(([label,fn])=>(
-          <button key={label} onClick={fn} style={{padding:"9px 14px",borderRadius:10,border:"1.5px solid #F59E0B",background:"#FFFFFF",color:"#92400E",fontWeight:700,fontSize:12,cursor:"pointer"}}>{label}</button>
-        ))}
-      </div>
-    </div>
-  );
-
   // ── TRUST SCORE (shared small components) ───────────────────────────────────
   const trustBadge=(score,sz=13)=>(
     <span style={{background:trustBg(score),color:trustColor(score),fontWeight:800,fontSize:sz,padding:"3px 9px",borderRadius:10,display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>🛡️ {score}</span>
@@ -2391,7 +2422,7 @@ export default function App(){
       {detectedCity!==null&&selectedAddress&&detectedCity===selectedAddress.city&&(
         <div style={{marginTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontSize:11,color:SC}}>📡 Location matches this property</span>
-          <span onClick={simulateDifferentLocation} style={{fontSize:10,color:TM,textDecoration:"underline",cursor:"pointer"}}>Simulate different location (demo)</span>
+          {qaTester&&<span onClick={simulateDifferentLocation} style={{fontSize:10,color:TM,textDecoration:"underline",cursor:"pointer"}}>Simulate different location (demo)</span>}
         </div>
       )}
       {showAddressPicker&&(
@@ -2453,12 +2484,8 @@ export default function App(){
   // ── PRO PROFILE ────────────────────────────────────────────────────────────
   const proProfileScreen=()=>{
     const p=proProfilePro;
-    const metrics=[
-      ["On-time rate",`${p.onTimeRate}%`],
-      ["Would hire again",`${p.hireAgainRate}%`],
-      ["Completion rate",`${p.completionRate}%`],
-      ["Avg. response",p.responseTime],
-    ];
+    const facts=proProfileFacts(p);
+    const metrics=facts.metrics;
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         {subHeader("Pro profile",()=>backFrom("proProfile",{scr:"tracking",tab:"home"}))}
@@ -2467,17 +2494,20 @@ export default function App(){
             <div style={{width:76,height:76,borderRadius:38,background:p.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:800,fontSize:26,marginBottom:12}}>{p.i}</div>
             <div style={{fontWeight:800,fontSize:19,color:TX,marginBottom:3}}>{p.n}</div>
             <div style={{color:AM,fontSize:13,fontWeight:600,marginBottom:10}}>{p.s}</div>
-            <div style={{fontSize:12,color:TS}}>⭐ {p.r} · {p.j} completed jobs</div>
+            {facts.ratingLine&&<div style={{fontSize:12,color:TS}}>{facts.ratingLine}</div>}
           </div>
 
           {/* Trust Score — primary card */}
+          {facts.trustScore!=null&&(
           <div style={{background:"linear-gradient(135deg,#1C2B3A,#2E4359)",borderRadius:20,padding:20,marginBottom:14,textAlign:"center"}}>
             <div style={{fontSize:11,fontWeight:700,color:"rgba(255,255,255,.55)",letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Trust Score</div>
-            <div style={{fontSize:44,fontWeight:900,color:W,lineHeight:1}}>{p.trustScore}<span style={{fontSize:18,color:"rgba(255,255,255,.5)"}}>/100</span></div>
+            <div style={{fontSize:44,fontWeight:900,color:W,lineHeight:1}}>{facts.trustScore}<span style={{fontSize:18,color:"rgba(255,255,255,.5)"}}>/100</span></div>
           </div>
+          )}
 
           {/* Metric chips */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+          {metrics.length>0&&(
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
             {metrics.map(([l,v])=>(
               <div key={l} style={{background:W,borderRadius:16,padding:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                 <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:4}}>{l}</div>
@@ -2485,16 +2515,7 @@ export default function App(){
               </div>
             ))}
           </div>
-
-          {/* Badges */}
-          <div style={{background:W,borderRadius:18,padding:16,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:12}}>Verification</div>
-            <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-              {p.badges.map(b=>(
-                <span key={b} style={{fontSize:11,background:SL,color:SC,padding:"5px 11px",borderRadius:20,fontWeight:700}}>✓ {b}</span>
-              ))}
-            </div>
-          </div>
+          )}
 
           {proProfileCtx==="tracking"&&vj&&(
             <button onClick={()=>goTo("messages")} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:N,color:W,fontWeight:800,fontSize:15,cursor:"pointer"}}>💬 Message {p.n.split(" ")[0]}</button>
@@ -3077,8 +3098,6 @@ export default function App(){
     // Rating and Member since print only with a real value (real backend
     // pros have neither), and a skipped row leaves no blank line.
     let rightY=y;
-    doc.text("Verified Haven Professional",rightX,rightY); rightY+=11.5;
-    doc.text("Background Checked",rightX,rightY); rightY+=11.5;
     if(typeof jPro.r==="number"&&typeof jPro.j==="number"){
       doc.text(`${jPro.r.toFixed(2)} rating (${jPro.j} jobs)`,rightX,rightY); rightY+=11.5;
     }
@@ -3751,24 +3770,13 @@ export default function App(){
             <span style={{color:TM,fontSize:18,flexShrink:0}}>›</span>
           </button>
 
+          {qaTester&&(<>
           <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Testing</div>
-          <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:700,fontSize:15,color:TX}}>Prototype anon mode</div>
-              <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>Default is on. This switch does not change job writes. With no session, the shared job write stops.</div>
-            </div>
-            <button type="button" onClick={()=>{
-              const next=!havenPrototypeAnonModeEnabled();
-              try{ localStorage.setItem(HAVEN_PROTOTYPE_ANON_MODE_KEY, next?"1":"0"); }catch{}
-              setAnonModeOn(next);
-            }} role="switch" aria-checked={anonModeOn} aria-label="Prototype anon mode" style={{width:44,height:26,borderRadius:13,background:anonModeOn?AM:BD,border:"none",padding:0,position:"relative",cursor:"pointer",flexShrink:0}}>
-              <div style={{width:20,height:20,borderRadius:10,background:W,position:"absolute",top:3,left:anonModeOn?21:3,transition:"left .15s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
-            </button>
-          </div>
           <button onClick={()=>setShowResetConfirm(true)} style={{width:"100%",padding:16,borderRadius:18,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:700,fontSize:14,cursor:"pointer",textAlign:"left"}}>Reset Prototype Data</button>
           <div style={{fontSize:11,color:TM,lineHeight:1.5,padding:"8px 4px 0"}}>Prototype/testing utility — not a real customer-facing feature. Clears all locally saved Haven data on this device.</div>
+          </>)}
 
-          {showResetConfirm&&(
+          {qaTester&&showResetConfirm&&(
             <div className="no-print" onClick={()=>setShowResetConfirm(false)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:30}}>
               <div onClick={e=>e.stopPropagation()} style={{background:"#FFFFFF",borderRadius:"20px 20px 0 0",padding:24,width:"100%",paddingBottom:"max(24px, env(safe-area-inset-bottom))"}}>
                 <div style={{fontWeight:800,fontSize:16,color:"#1C2B3A",marginBottom:8,textAlign:"center"}}>Reset Prototype Data?</div>
@@ -4124,7 +4132,7 @@ export default function App(){
             <div style={{width:72,height:72,borderRadius:36,background:vj.emergency?"#FFF1EE":"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 16px",animation:"pulse 1.8s ease-in-out infinite"}}>{vj.emergency?"🚨":"📋"}</div>
             {vj.emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:5,background:"#FFF1EE",color:"#C2410C",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,marginBottom:10}}>Emergency priority</span>}
             <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{postedArrived?SI.arrived.label:(vj.emergency?"Prioritizing nearby available pros…":"Looking for a pro…")}</div>
-            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Verified pros near you can see your job and are deciding whether to accept.")}</div>
+            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Pros near you can see your job. This screen updates as soon as one accepts.")}</div>
           </div>
           <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{display:"flex",gap:14,alignItems:"center",paddingBottom:14,marginBottom:14,borderBottom:`1px solid ${BD}`}}>
@@ -4136,20 +4144,6 @@ export default function App(){
             ))}
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5,fontStyle:"italic"}}>"{vj.desc}"</div></div>}
           </div>
-          {postedWaiting&&(<div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:14}}>Pros near you viewing this job</div>
-            {PROS.map((p,i)=>(
-              <div key={p.i} onClick={()=>openProProfile(p,"posted")} style={{display:"flex",gap:12,alignItems:"center",marginBottom:i<PROS.length-1?12:0,cursor:"pointer"}}>
-                <div style={{width:40,height:40,borderRadius:20,background:p.col,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:13,flexShrink:0}}>{p.i}</div>
-                <div style={{flex:1}}>
-                  <div style={{fontWeight:600,fontSize:14,color:TX,marginBottom:2}}>{p.n}</div>
-                  {trustBadge(p.trustScore,11)}
-                </div>
-                <div style={{display:"flex",gap:3,alignItems:"center"}}>{[0,1,2].map(d=><div key={d} style={{width:5,height:5,borderRadius:2.5,background:AM,animation:`bounce 0.5s ${d*0.18}s infinite alternate`}}/>)}</div>
-              </div>
-            ))}
-          </div>)}
-          {postedWaiting&&demoProControlsPanel([["Accept job (start travel)",proAccepts]])}
           {postedWaiting&&(!showCancelConfirm?(
             <div style={{textAlign:"center"}}>
               <button onClick={()=>setShowCancelConfirm(true)} style={{background:"none",border:`1.5px solid #FCA5A5`,color:"#DC2626",fontSize:13,fontWeight:700,cursor:"pointer",padding:"10px 20px",borderRadius:12}}>Cancel Job</button>
@@ -4342,7 +4336,6 @@ export default function App(){
             if(!isTerminal){
               return(
                 <>
-                  {demoProControlsPanel([[{en_route:"Arrive",arrived:"Start work",in_progress:"Complete job"}[vj.status]||"Advance",advance]])}
                   {vj.cancelStatus==="requested"?(
                     <div style={{margin:"0 20px 24px",background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:16,padding:16,textAlign:"center"}}>
                       <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:4}}>Pending Cancellation</div>
@@ -4644,15 +4637,38 @@ export default function App(){
   // seamlessly with whichever screen is showing (no visible seam at the top).
   const topIsDark=["task","custom","diagnose","emergency"].includes(scr)||(scr==="home"&&tab==="home");
   // Account required. Signed-out callers never reach marketplace / jobs screens.
-  const havenSignedIn=!!(havenAuth && (havenAuth.accessToken || havenAuth.userId) && havenAuth.email);
-  const authGateScreen=()=>(
+  // Phase 1B A1: signed in only after the backend connected and Auth
+  // confirmed the session. While connecting or on error, nothing else renders.
+  const havenBackendReady=backendStatus==="ready";
+  const havenSignedIn=havenBackendReady && !!(havenAuth && (havenAuth.accessToken || havenAuth.userId) && havenAuth.email);
+  // Shared shell for the signed-out gate and the connection screens.
+  const authShell=(subtitle,children)=>(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       <div style={{padding:"48px 24px 20px",background:`linear-gradient(180deg, ${N} 0%, ${BG} 100%)`}}>
         <div style={{fontSize:13,fontWeight:800,color:"rgba(255,255,255,.72)",letterSpacing:1.2,textTransform:"uppercase",marginBottom:8}}>Haven</div>
         <div style={{fontSize:28,fontWeight:900,color:W,lineHeight:1.15,marginBottom:10}}>Home help,<br/>on your terms.</div>
-        <div style={{fontSize:13,fontWeight:500,color:"rgba(255,255,255,.78)",lineHeight:1.5}}>Create an account or sign in to book and track jobs. There is no signed-out marketplace.</div>
+        {subtitle?(<div style={{fontSize:13,fontWeight:500,color:"rgba(255,255,255,.78)",lineHeight:1.5}}>{subtitle}</div>):null}
       </div>
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        {children}
+      </div>
+    </div>
+  );
+  const backendConnectingScreen=()=>authShell("",(
+    <div role="status" aria-live="polite" style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16,fontSize:14,fontWeight:700,color:TX,textAlign:"center"}}>{HAVEN_CONNECTING_MESSAGE}</div>
+  ));
+  const backendErrorScreen=()=>authShell("",(
+    <>
+      <div role="alert" style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16,border:"1.5px solid #FCA5A5"}}>
+        <div style={{fontWeight:800,fontSize:16,color:"#B42318",marginBottom:8}}>{HAVEN_CONNECTION_ERROR_TITLE}</div>
+        <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:14}}>{HAVEN_CONNECTION_ERROR_MESSAGE}</div>
+        <button type="button" onClick={retryBackendConnection} disabled={backendStatus==="retrying"} aria-busy={backendStatus==="retrying"?"true":undefined} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:backendStatus==="retrying"?"#DDD9D2":N,color:W,fontWeight:800,fontSize:15,cursor:backendStatus==="retrying"?"default":"pointer"}}>{backendStatus==="retrying"?"Retrying…":"Retry"}</button>
+      </div>
+      <button type="button" onClick={()=>openHelp()} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:W,color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>Help &amp; Support</button>
+    </>
+  ));
+  const authGateScreen=()=>authShell("Create an account or sign in to book and track jobs.",(
+      <>
         <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16}}>
           <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:10}}>Sign in or create an account</div>
           <div style={{background:BG,borderRadius:12,padding:"12px 14px",marginBottom:10}}>
@@ -4667,9 +4683,8 @@ export default function App(){
         </div>
         <button type="button" onClick={()=>openHelp()} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:W,color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>Help &amp; Support</button>
         <div style={{fontSize:11,color:TM,lineHeight:1.5,textAlign:"center",padding:"4px 8px"}}>By continuing you agree to Haven&apos;s Terms of Service and Privacy Policy.</div>
-      </div>
-    </div>
-  );
+      </>
+  ));
 
 
   // Parameterized render switch — identical to the old inline conditional
@@ -4729,7 +4744,7 @@ export default function App(){
             const settleTransition=isSettling?"transform 280ms cubic-bezier(0.32,0.72,0,1)":"none";
             return(
               <div style={{flex:1,overflow:"hidden",position:"relative"}}>
-                {gestureActive&&edgeBackGesture.destScr&&(
+                {gestureActive&&edgeBackGesture.destScr&&havenSignedIn&&(
                   <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",transform:`translateX(${backgroundTranslateX}px)`,transition:settleTransition,zIndex:0}}>
                     {renderScreenFor(edgeBackGesture.destScr,edgeBackGesture.destTab)}
                     <div style={{position:"absolute",inset:0,background:"#000",opacity:dimOpacity,pointerEvents:"none",transition:settleTransition.replace("transform","opacity")}}/>
@@ -4737,7 +4752,9 @@ export default function App(){
                 )}
                 <div style={{position:gestureActive?"absolute":"relative",inset:0,display:"flex",flexDirection:"column",height:"100%",transform:gestureActive?`translateX(${renderedDragX}px)`:"none",transition:settleTransition,zIndex:1,background:BG,boxShadow:gestureActive&&renderedDragX>0?"-8px 0 24px rgba(0,0,0,.15)":"none"}}>
                   {!havenSignedIn
-                    ? (scr==="help" ? renderScreenFor("help", tab) : authGateScreen())
+                    ? (scr==="help"
+                        ? renderScreenFor("help", tab)
+                        : ((backendStatus==="error"||backendStatus==="retrying") ? backendErrorScreen() : (backendStatus==="ready" ? authGateScreen() : backendConnectingScreen())))
                     : renderScreenFor(scr,tab)}
                 </div>
               </div>
