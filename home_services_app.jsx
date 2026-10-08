@@ -113,7 +113,7 @@ const TOPICS=[
   {t:"Cancel or reschedule a job",a:"You can cancel a job any time before a pro accepts it for free from the Bookings tab. Once a pro is en route, cancellations may include a small fee to compensate their travel time."},
   {t:"Report an issue with a pro",a:"If you experience a problem with a pro or a completed job, contact Haven Support. Our support team can review the booking details, messages, photos, and receipt and help determine the next steps."},
   {t:"Refunds & billing",a:"If a job wasn't completed to your satisfaction, contact support within 48 hours of completion and we'll review it for a partial or full refund."},
-  {t:"Trust & safety",a:"Haven verifies each pro's identity and background-check status before they can accept jobs. Additional credentials, such as professional licenses, are shown on the pro's profile when verified. If you're ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},
+  {t:"Trust & safety",a:"If you're ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},
 ];
 
 // Maintenance suggestion rules — keyed by TASKS id, used to generate simple
@@ -1887,7 +1887,7 @@ export default function App(){
           </button>
         </div>
         <div style={{display:"flex",gap:16,marginBottom:16}}>
-          {["✓ Fixed pricing","✓ Background checked","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
+          {["✓ Fixed pricing","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
         </div>
         <div onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
           <span style={{fontSize:16,color:TM}}>🔍</span>
@@ -2450,23 +2450,13 @@ export default function App(){
           </div>
 
           {/* Metric chips */}
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:14}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}>
             {metrics.map(([l,v])=>(
               <div key={l} style={{background:W,borderRadius:16,padding:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                 <div style={{fontSize:10,color:TM,fontWeight:600,marginBottom:4}}>{l}</div>
                 <div style={{fontSize:18,fontWeight:800,color:TX}}>{v}</div>
               </div>
             ))}
-          </div>
-
-          {/* Badges */}
-          <div style={{background:W,borderRadius:18,padding:16,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:12}}>Verification</div>
-            <div style={{display:"flex",gap:7,flexWrap:"wrap"}}>
-              {p.badges.map(b=>(
-                <span key={b} style={{fontSize:11,background:SL,color:SC,padding:"5px 11px",borderRadius:20,fontWeight:700}}>✓ {b}</span>
-              ))}
-            </div>
           </div>
 
           {proProfileCtx==="tracking"&&vj&&(
@@ -3036,8 +3026,6 @@ export default function App(){
     // Rating and Member since print only with a real value (real backend
     // pros have neither), and a skipped row leaves no blank line.
     let rightY=y;
-    doc.text("Verified Haven Professional",rightX,rightY); rightY+=11.5;
-    doc.text("Background Checked",rightX,rightY); rightY+=11.5;
     if(typeof jPro.r==="number"&&typeof jPro.j==="number"){
       doc.text(`${jPro.r.toFixed(2)} rating (${jPro.j} jobs)`,rightX,rightY); rightY+=11.5;
     }
@@ -4058,7 +4046,7 @@ export default function App(){
             <div style={{width:72,height:72,borderRadius:36,background:vj.emergency?"#FFF1EE":"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 16px",animation:"pulse 1.8s ease-in-out infinite"}}>{vj.emergency?"🚨":"📋"}</div>
             {vj.emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:5,background:"#FFF1EE",color:"#C2410C",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,marginBottom:10}}>Emergency priority</span>}
             <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{postedArrived?SI.arrived.label:(vj.emergency?"Prioritizing nearby available pros…":"Looking for a pro…")}</div>
-            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Verified pros near you can see your job and are deciding whether to accept.")}</div>
+            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Pros near you can see your job. This screen updates as soon as one accepts.")}</div>
           </div>
           <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{display:"flex",gap:14,alignItems:"center",paddingBottom:14,marginBottom:14,borderBottom:`1px solid ${BD}`}}>
