@@ -7,7 +7,17 @@
   // There is no localStorage override and no user-facing connection setting.
   // A key that is not a public anon / publishable key is refused, so a
   // service_role or secret key can never be used from the client.
-  const havenSupabaseKeyIsPublic=(key)=>{
+  const havenProjectRefFromSupabaseUrl=(url)=>{
+    try{
+      const host=new URL(String(url||"")).hostname||"";
+      const parts=host.split(".");
+      if(parts.length>=3 && parts[parts.length-2]==="supabase" && parts[parts.length-1]==="co"){
+        return parts[0]||"";
+      }
+      return "";
+    }catch{ return ""; }
+  };
+  const havenSupabaseKeyIsPublic=(key, url)=>{
     const k=String(key||"").trim();
     if(!k) return false;
     if(k.startsWith("sb_publishable_")) return true;
@@ -19,7 +29,11 @@
       while(b64.length%4) b64+="=";
       const raw=typeof atob==="function" ? atob(b64) : (typeof Buffer!=="undefined" ? Buffer.from(b64,"base64").toString("utf8") : "");
       const claims=JSON.parse(raw||"{}");
-      return !!claims && claims.role==="anon";
+      if(!claims || claims.role!=="anon") return false;
+      const expectedRef=havenProjectRefFromSupabaseUrl(url);
+      if(!expectedRef) return false;
+      if(String(claims.ref||"")!==expectedRef) return false;
+      return true;
     }catch{
       return false;
     }
@@ -30,7 +44,7 @@
       const key=typeof HAVEN_PUBLIC_SUPABASE_ANON_KEY==="string" ? HAVEN_PUBLIC_SUPABASE_ANON_KEY.trim() : "";
       if(!url||!key) return null;
       if(!/^https:\/\//.test(url)) return null;
-      if(!havenSupabaseKeyIsPublic(key)) return null;
+      if(!havenSupabaseKeyIsPublic(key, url)) return null;
       while (url.endsWith('/')) url = url.slice(0, -1);
       return {url, anonKey:key};
     }catch{ return null; }

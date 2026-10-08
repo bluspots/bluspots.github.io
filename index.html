@@ -1026,7 +1026,17 @@ const HAVEN_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
   // There is no localStorage override and no user-facing connection setting.
   // A key that is not a public anon / publishable key is refused, so a
   // service_role or secret key can never be used from the client.
-  const havenSupabaseKeyIsPublic=(key)=>{
+  const havenProjectRefFromSupabaseUrl=(url)=>{
+    try{
+      const host=new URL(String(url||"")).hostname||"";
+      const parts=host.split(".");
+      if(parts.length>=3 && parts[parts.length-2]==="supabase" && parts[parts.length-1]==="co"){
+        return parts[0]||"";
+      }
+      return "";
+    }catch{ return ""; }
+  };
+  const havenSupabaseKeyIsPublic=(key, url)=>{
     const k=String(key||"").trim();
     if(!k) return false;
     if(k.startsWith("sb_publishable_")) return true;
@@ -1038,7 +1048,11 @@ const HAVEN_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
       while(b64.length%4) b64+="=";
       const raw=typeof atob==="function" ? atob(b64) : (typeof Buffer!=="undefined" ? Buffer.from(b64,"base64").toString("utf8") : "");
       const claims=JSON.parse(raw||"{}");
-      return !!claims && claims.role==="anon";
+      if(!claims || claims.role!=="anon") return false;
+      const expectedRef=havenProjectRefFromSupabaseUrl(url);
+      if(!expectedRef) return false;
+      if(String(claims.ref||"")!==expectedRef) return false;
+      return true;
     }catch{
       return false;
     }
@@ -1049,7 +1063,7 @@ const HAVEN_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
       const key=typeof HAVEN_PUBLIC_SUPABASE_ANON_KEY==="string" ? HAVEN_PUBLIC_SUPABASE_ANON_KEY.trim() : "";
       if(!url||!key) return null;
       if(!/^https:\/\//.test(url)) return null;
-      if(!havenSupabaseKeyIsPublic(key)) return null;
+      if(!havenSupabaseKeyIsPublic(key, url)) return null;
       while (url.endsWith('/')) url = url.slice(0, -1);
       return {url, anonKey:key};
     }catch{ return null; }
@@ -1371,6 +1385,11 @@ function havenAuthRedirectUrl(){
   }
 }
 
+// Indirection so Retry can reload after a CDN miss; tests stub .reload.
+const havenNavigation = {
+  reload(){ try{ window.location.reload(); }catch{} },
+};
+
 function havenSupabaseCreateClient(){
   try{
     if(typeof supabase!=="undefined" && supabase && typeof supabase.createClient==="function"){
@@ -1392,10 +1411,14 @@ let havenAuthClientKey = "";
 function getHavenAuthClient(){
   const cfg = typeof getSupabaseConfig==="function" ? getSupabaseConfig() : null;
   if(!cfg) return null;
+  const createClient = havenSupabaseCreateClient();
+  if(!createClient){
+    havenAuthClient = null;
+    havenAuthClientKey = "";
+    return null;
+  }
   const key = cfg.url+"|"+cfg.anonKey;
   if(havenAuthClient && havenAuthClientKey===key) return havenAuthClient;
-  const createClient = havenSupabaseCreateClient();
-  if(!createClient) return null;
   try{
     havenAuthClient = createClient(cfg.url, cfg.anonKey, {
       auth:{
@@ -2333,6 +2356,12 @@ function App(){
   const [backendAttempt,setBackendAttempt]=useState(0);
   const retryBackendConnection=()=>{
     if(backendStatus==="retrying"||backendStatus==="connecting") return;
+    // supabase-js CDN missing: Retry must reload so the browser re-fetches the script.
+    if(typeof havenSupabaseCreateClient==="function" && !havenSupabaseCreateClient()){
+      if(typeof havenNavigation!=="undefined" && havenNavigation && typeof havenNavigation.reload==="function") havenNavigation.reload();
+      else try{ window.location.reload(); }catch{}
+      return;
+    }
     setBackendStatus("retrying");
     setBackendAttempt(n=>n+1);
   };
@@ -6328,17 +6357,17 @@ function App(){
       <div style={{padding:"48px 24px 20px",background:`linear-gradient(180deg, ${N} 0%, ${BG} 100%)`}}>
         <div style={{fontSize:13,fontWeight:800,color:"rgba(255,255,255,.72)",letterSpacing:1.2,textTransform:"uppercase",marginBottom:8}}>Haven</div>
         <div style={{fontSize:28,fontWeight:900,color:W,lineHeight:1.15,marginBottom:10}}>Home help,<br/>on your terms.</div>
-        <div style={{fontSize:13,fontWeight:500,color:"rgba(255,255,255,.78)",lineHeight:1.5}}>{subtitle}</div>
+        {subtitle?(<div style={{fontSize:13,fontWeight:500,color:"rgba(255,255,255,.78)",lineHeight:1.5}}>{subtitle}</div>):null}
       </div>
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
         {children}
       </div>
     </div>
   );
-  const backendConnectingScreen=()=>authShell("Create an account or sign in to book and track jobs. There is no signed-out marketplace.",(
+  const backendConnectingScreen=()=>authShell("",(
     <div role="status" aria-live="polite" style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16,fontSize:14,fontWeight:700,color:TX,textAlign:"center"}}>{HAVEN_CONNECTING_MESSAGE}</div>
   ));
-  const backendErrorScreen=()=>authShell("Create an account or sign in to book and track jobs. There is no signed-out marketplace.",(
+  const backendErrorScreen=()=>authShell("",(
     <>
       <div role="alert" style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16,border:"1.5px solid #FCA5A5"}}>
         <div style={{fontWeight:800,fontSize:16,color:"#B42318",marginBottom:8}}>{HAVEN_CONNECTION_ERROR_TITLE}</div>
@@ -6348,7 +6377,7 @@ function App(){
       <button type="button" onClick={()=>openHelp()} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:W,color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>Help &amp; Support</button>
     </>
   ));
-  const authGateScreen=()=>authShell("Create an account or sign in to book and track jobs. There is no signed-out marketplace.",(
+  const authGateScreen=()=>authShell("Create an account or sign in to book and track jobs.",(
       <>
         <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16}}>
           <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:10}}>Sign in or create an account</div>

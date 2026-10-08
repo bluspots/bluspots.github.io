@@ -47,6 +47,11 @@ function havenAuthRedirectUrl(){
   }
 }
 
+// Indirection so Retry can reload after a CDN miss; tests stub .reload.
+const havenNavigation = {
+  reload(){ try{ window.location.reload(); }catch{} },
+};
+
 function havenSupabaseCreateClient(){
   try{
     if(typeof supabase!=="undefined" && supabase && typeof supabase.createClient==="function"){
@@ -68,10 +73,14 @@ let havenAuthClientKey = "";
 function getHavenAuthClient(){
   const cfg = typeof getSupabaseConfig==="function" ? getSupabaseConfig() : null;
   if(!cfg) return null;
+  const createClient = havenSupabaseCreateClient();
+  if(!createClient){
+    havenAuthClient = null;
+    havenAuthClientKey = "";
+    return null;
+  }
   const key = cfg.url+"|"+cfg.anonKey;
   if(havenAuthClient && havenAuthClientKey===key) return havenAuthClient;
-  const createClient = havenSupabaseCreateClient();
-  if(!createClient) return null;
   try{
     havenAuthClient = createClient(cfg.url, cfg.anonKey, {
       auth:{

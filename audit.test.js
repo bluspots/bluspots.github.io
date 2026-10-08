@@ -513,6 +513,9 @@ const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports16 = typeof HAVEN_PUBLIC_SUPABASE_ANON_KEY !== 'undefined' ? HAVEN_PUBLIC_SUPABASE_ANON_KEY : undefined;
   module.exports17 = typeof HAVEN_CONNECTION_ERROR_MESSAGE !== 'undefined' ? HAVEN_CONNECTION_ERROR_MESSAGE : undefined;
   module.exports18 = typeof havenPrototypeAnonModeEnabled !== 'undefined' ? havenPrototypeAnonModeEnabled : undefined;
+  module.exports19 = typeof havenSupabaseKeyIsPublic !== 'undefined' ? havenSupabaseKeyIsPublic : undefined;
+  module.exports20 = typeof havenSupabaseCreateClient !== 'undefined' ? havenSupabaseCreateClient : undefined;
+  module.exports21 = typeof havenNavigation !== 'undefined' ? havenNavigation : undefined;
 })`;
 const moduleObj = { exports: {} };
 eval(wrapped)(React, React.useState, React.useRef, React.useEffect, moduleObj);
@@ -536,6 +539,9 @@ const PUBLIC_SUPABASE_URL = moduleObj.exports15;
 const PUBLIC_SUPABASE_KEY = moduleObj.exports16;
 const CONNECTION_ERROR_MESSAGE = moduleObj.exports17;
 const legacyAnonModeHelper = moduleObj.exports18;
+const havenSupabaseKeyIsPublic = moduleObj.exports19;
+const havenSupabaseCreateClient = moduleObj.exports20;
+const havenNavigation = moduleObj.exports21;
 
 function havenTestJwt(sub){
   const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
@@ -567,6 +573,13 @@ step('0. Slice 1 profile role, shipped public config, and Slice 2 session job id
   assert(legacyAnonModeHelper === undefined, 'havenPrototypeAnonModeEnabled (demo anon mode) no longer exists');
   const shippedCfg = getSupabaseConfig();
   assert(!!shippedCfg && shippedCfg.url === PUBLIC_SUPABASE_URL && shippedCfg.anonKey === PUBLIC_SUPABASE_KEY, 'getSupabaseConfig returns the shipped public config by default');
+  assert(typeof havenSupabaseKeyIsPublic === 'function', 'havenSupabaseKeyIsPublic loaded');
+  assert(havenSupabaseKeyIsPublic(PUBLIC_SUPABASE_KEY, PUBLIC_SUPABASE_URL) === true, 'real shipped anon key is accepted for the configured URL');
+  const b64url = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
+  const mismatchedAnonJwt = `${b64url({alg:'none'})}.${b64url({role:'anon', ref:'otherprojectrefxxx'})}.sig`;
+  assert(havenSupabaseKeyIsPublic(mismatchedAnonJwt, PUBLIC_SUPABASE_URL) === false, 'anon JWT with a mismatched ref claim is rejected');
+  assert(havenSupabaseKeyIsPublic('sb_publishable_test_value', PUBLIC_SUPABASE_URL) === true, 'sb_publishable_ keys remain accepted');
+  assert(havenSupabaseKeyIsPublic('sb_secret_test_value', PUBLIC_SUPABASE_URL) === false, 'sb_secret_ keys remain rejected');
 
   clearHavenAuthTestKeys();
   assert(havenJobRestBearer() === PUBLIC_SUPABASE_KEY, 'no session read bearer stays the anon key; writes do not use it');
@@ -699,12 +712,26 @@ function decodeJwtClaims(token){
     cleanup();
     const saved = emptyStoredData();
     resetBackendMock();
+    backendMock.health = 'hang';
+    fetchLog.length = 0;
+    const connecting = await renderAppRaw();
+    await waitForCondition(() => connecting.textContent.includes('Connecting to Haven…'), { timeout: 3000, message: 'Hang never showed the connecting screen.' });
+    assert(connecting.textContent.includes('Home help,'), 'connecting screen keeps the hero headline');
+    assert(!connecting.textContent.includes('Create an account or sign in to book and track jobs.'), 'connecting screen shows no gate subtitle');
+    assert(!connecting.textContent.includes('There is no signed-out marketplace.'), 'connecting screen has no marketplace sentence');
+    const hangPending = backendMock.hangResolvers.shift();
+    hangPending.reject(new TypeError('Failed to fetch'));
+    cleanup();
+
+    resetBackendMock();
     backendMock.health = 'network';
     fetchLog.length = 0;
     const container = await renderAppRaw();
     await waitForCondition(() => container.textContent.includes("Can't connect to Haven"), { timeout: 3000, message: 'Network failure never showed the connection error.' });
     assert(CONNECTION_ERROR_MESSAGE === "We couldn't reach Haven. Check your internet connection, then tap Retry.", 'connection error copy matches the Pro app');
     assert(container.textContent.includes(CONNECTION_ERROR_MESSAGE), 'connection error shows the plain-language message');
+    assert(!container.textContent.includes('Create an account or sign in to book and track jobs.'), 'connection error screen shows no gate subtitle');
+    assert(!container.textContent.includes('There is no signed-out marketplace.'), 'connection error screen has no marketplace sentence');
     const retryBtn = () => Array.from(container.querySelectorAll('button')).find(b => /^(Retry|Retrying…)$/.test(b.textContent.trim()));
     assert(!!retryBtn() && retryBtn().textContent.trim() === 'Retry', 'connection error offers Retry');
     assert(!container.textContent.includes('Create customer account') && !container.textContent.includes('Mount TV'), 'connection error does not open the gate or the marketplace');
@@ -747,6 +774,39 @@ function decodeJwtClaims(token){
     cleanup();
     resetBackendMock();
     restoreStoredData(saved);
+  });
+
+  resetBackendMock();
+  await stepAsync('0c2. Retry after supabase-js CDN failure reloads the page', async () => {
+    cleanup();
+    const saved = emptyStoredData();
+    resetBackendMock();
+    fetchLog.length = 0;
+    const savedSupabase = global.supabase;
+    const savedWindowSupabase = window.supabase;
+    global.supabase = undefined;
+    try { delete window.supabase; } catch { window.supabase = undefined; }
+    assert(!!havenNavigation && typeof havenNavigation.reload === 'function', 'havenNavigation.reload is available to stub');
+    let reloadCalls = 0;
+    const originalReload = havenNavigation.reload;
+    havenNavigation.reload = () => { reloadCalls += 1; };
+    try {
+      const container = await renderAppRaw();
+      await waitForCondition(() => container.textContent.includes("Can't connect to Haven"), { timeout: 3000, message: 'Missing supabase-js CDN never showed the connection error.' });
+      assert(!container.textContent.includes('Create customer account') && !container.textContent.includes('Mount TV'), 'CDN failure does not open the gate or marketplace');
+      assert(typeof havenSupabaseCreateClient === 'function' && !havenSupabaseCreateClient(), 'supabase-js createClient is unavailable for the CDN-failure case');
+      const retryBtn = Array.from(container.querySelectorAll('button')).find(b => b.textContent.trim() === 'Retry');
+      assert(!!retryBtn, 'CDN failure offers Retry');
+      act(() => { fireEvent.click(retryBtn); });
+      assert(reloadCalls === 1, 'Retry after CDN failure calls window.location.reload');
+      assert(!container.textContent.includes('Retrying…'), 'CDN Retry does not enter the in-app retrying state');
+    } finally {
+      havenNavigation.reload = originalReload;
+      global.supabase = savedSupabase;
+      window.supabase = savedWindowSupabase;
+      restoreStoredData(saved);
+      cleanup();
+    }
   });
 
   resetBackendMock();
@@ -793,6 +853,9 @@ function decodeJwtClaims(token){
     const gateButtons = Array.from(gate.querySelectorAll('button')).map(b => b.textContent.trim());
     assert(gateButtons.join('|') === 'Sign in|Create customer account|Help & Support', 'signed-out gate only offers sign in, create account, and help');
     assert(gate.textContent.includes('Terms of Service') && gate.textContent.includes('Privacy Policy'), 'signed-out gate keeps the legal line');
+    const GATE_SUBTITLE = 'Create an account or sign in to book and track jobs.';
+    assert(Array.from(gate.querySelectorAll('div')).some(d => d.children.length === 0 && d.textContent === GATE_SUBTITLE), 'gate subtitle equals exactly "Create an account or sign in to book and track jobs."');
+    assert(!gate.textContent.includes('There is no signed-out marketplace.'), 'gate subtitle no longer includes the marketplace sentence');
     cleanup();
     saved = null;
   });
@@ -807,12 +870,15 @@ await stepAsync('0b. Signed-out auth gate — no marketplace without an account'
   clearHavenAuthTestKeys();
   const container = document.createElement('div');
   document.body.appendChild(container);
-  await mountApp(container);
+  const gateRoot = await mountApp(container);
   assert(existsRegex('Create customer account'), 'signed-out gate offers create account');
   assert(existsRegex('Sign in'), 'signed-out gate offers sign in');
   assert(existsRegex('Help'), 'signed-out gate offers help/support');
   assert(!existsRegex('Mount TV'), 'signed-out gate does not show marketplace catalog');
   assert(!existsRegex('need done'), 'signed-out gate does not show Home search');
+  const GATE_SUBTITLE = 'Create an account or sign in to book and track jobs.';
+  assert(Array.from(gateRoot.querySelectorAll('div')).some(d => d.children.length === 0 && d.textContent === GATE_SUBTITLE), 'signed-out gate subtitle equals exactly "Create an account or sign in to book and track jobs."');
+  assert(!gateRoot.textContent.includes('There is no signed-out marketplace.'), 'signed-out gate has no marketplace sentence');
   cleanup();
   seedSignedInCustomer();
   mainContainer = await mountApp();

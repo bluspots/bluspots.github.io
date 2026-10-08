@@ -602,6 +602,12 @@ export default function App(){
   const [backendAttempt,setBackendAttempt]=useState(0);
   const retryBackendConnection=()=>{
     if(backendStatus==="retrying"||backendStatus==="connecting") return;
+    // supabase-js CDN missing: Retry must reload so the browser re-fetches the script.
+    if(typeof havenSupabaseCreateClient==="function" && !havenSupabaseCreateClient()){
+      if(typeof havenNavigation!=="undefined" && havenNavigation && typeof havenNavigation.reload==="function") havenNavigation.reload();
+      else try{ window.location.reload(); }catch{}
+      return;
+    }
     setBackendStatus("retrying");
     setBackendAttempt(n=>n+1);
   };
@@ -4597,17 +4603,17 @@ export default function App(){
       <div style={{padding:"48px 24px 20px",background:`linear-gradient(180deg, ${N} 0%, ${BG} 100%)`}}>
         <div style={{fontSize:13,fontWeight:800,color:"rgba(255,255,255,.72)",letterSpacing:1.2,textTransform:"uppercase",marginBottom:8}}>Haven</div>
         <div style={{fontSize:28,fontWeight:900,color:W,lineHeight:1.15,marginBottom:10}}>Home help,<br/>on your terms.</div>
-        <div style={{fontSize:13,fontWeight:500,color:"rgba(255,255,255,.78)",lineHeight:1.5}}>{subtitle}</div>
+        {subtitle?(<div style={{fontSize:13,fontWeight:500,color:"rgba(255,255,255,.78)",lineHeight:1.5}}>{subtitle}</div>):null}
       </div>
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
         {children}
       </div>
     </div>
   );
-  const backendConnectingScreen=()=>authShell("Create an account or sign in to book and track jobs. There is no signed-out marketplace.",(
+  const backendConnectingScreen=()=>authShell("",(
     <div role="status" aria-live="polite" style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16,fontSize:14,fontWeight:700,color:TX,textAlign:"center"}}>{HAVEN_CONNECTING_MESSAGE}</div>
   ));
-  const backendErrorScreen=()=>authShell("Create an account or sign in to book and track jobs. There is no signed-out marketplace.",(
+  const backendErrorScreen=()=>authShell("",(
     <>
       <div role="alert" style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16,border:"1.5px solid #FCA5A5"}}>
         <div style={{fontWeight:800,fontSize:16,color:"#B42318",marginBottom:8}}>{HAVEN_CONNECTION_ERROR_TITLE}</div>
@@ -4617,7 +4623,7 @@ export default function App(){
       <button type="button" onClick={()=>openHelp()} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:W,color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>Help &amp; Support</button>
     </>
   ));
-  const authGateScreen=()=>authShell("Create an account or sign in to book and track jobs. There is no signed-out marketplace.",(
+  const authGateScreen=()=>authShell("Create an account or sign in to book and track jobs.",(
       <>
         <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16}}>
           <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:10}}>Sign in or create an account</div>
