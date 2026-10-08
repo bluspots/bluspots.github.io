@@ -2939,10 +2939,12 @@ async function runReceiptTotalsChecks(){
     });
 
     // Every surface: declined then complete shows $89 and no materials line.
-    global.fetch = async (url) => {
+    // Same #43 harness as above: jobs reads return remoteRow, everything else
+    // (Auth health, is_qa_tester RPC) goes to the shared mocked backend.
+    global.fetch = async (url, opts) => {
       const u = String(url);
-      if (u.includes('/rest/v1/jobs')) return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' };
-      return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+      if (u.includes('/rest/v1/jobs')) { fetchLog.push({ url: u, opts: opts || {} }); return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' }; }
+      return defaultBackendFetch(url, opts);
     };
     remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: 0 });
     await mountCompleted(localJob({ id: 9711 }));
