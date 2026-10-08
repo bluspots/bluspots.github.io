@@ -584,7 +584,10 @@ export default function App(){
   });
   // Session mirror for Profile/Settings. Job writes read the same storage keys
   // at request time (havenJobCustomerId / havenJobRestBearer), not this state.
-  const [havenAuth,setHavenAuth]=useState(()=>readHavenAuthMirror());
+  // Phase 1B A1: starts empty. Only a session that Auth restored and the
+  // server confirmed (havenConnectBackend) fills it, so a stale local mirror
+  // never opens the app.
+  const [havenAuth,setHavenAuth]=useState(null);
   // profiles.display_name for the signed-in user (receipt "Billed to" only).
   const [havenProfileDisplayName,setHavenProfileDisplayName]=useState("");
   const displayNameFromProfileRow=row=>row&&typeof row.display_name==="string"?row.display_name.trim():"";
@@ -592,47 +595,67 @@ export default function App(){
   const [authPasswordInput,setAuthPasswordInput]=useState("");
   const [authBusy,setAuthBusy]=useState(false);
   const [authNotice,setAuthNotice]=useState("");
-  const [anonModeOn,setAnonModeOn]=useState(()=>havenPrototypeAnonModeEnabled());
+  // Backend connection: connecting | retrying | ready | error. Nothing past
+  // the connection screen renders until Auth answers. There is no demo or
+  // local fallback: a failure shows the connection error with Retry.
+  const [backendStatus,setBackendStatus]=useState("connecting");
+  const [backendAttempt,setBackendAttempt]=useState(0);
+  const retryBackendConnection=()=>{
+    if(backendStatus==="retrying"||backendStatus==="connecting") return;
+    // supabase-js CDN missing: Retry must reload so the browser re-fetches the script.
+    if(typeof havenSupabaseCreateClient==="function" && !havenSupabaseCreateClient()){
+      if(typeof havenNavigation!=="undefined" && havenNavigation && typeof havenNavigation.reload==="function") havenNavigation.reload();
+      else try{ window.location.reload(); }catch{}
+      return;
+    }
+    setBackendStatus("retrying");
+    setBackendAttempt(n=>n+1);
+  };
   useEffect(()=>{
     let cancelled=false;
-    const client=getHavenAuthClient();
-    if(!client) return undefined;
+    let subscription=null;
     const applyView=()=>{ if(!cancelled) setHavenAuth(readHavenAuthMirror()); };
     (async()=>{
+      let result;
+      try{ result=await havenConnectBackend(); }
+      catch(err){ result={ok:false, reason:"exception"}; }
+      if(cancelled) return;
+      if(!result || !result.ok){
+        console.warn("Haven: could not connect to the backend:", result&&result.reason);
+        setHavenAuth(null);
+        setBackendStatus("error");
+        return;
+      }
+      const client=result.client;
+      const session=result.session;
+      if(session) applyHavenAuthSession(session, session.user);
+      else clearHavenAuthMirror();
+      applyView();
       try{
-        const {data,error}=await client.auth.getSession();
-        if(cancelled) return;
-        if(error) console.warn("Haven auth getSession:", error.message||error);
-        if(data&&data.session) applyHavenAuthSession(data.session, data.session.user);
-        else clearHavenAuthMirror();
-        applyView();
-        if(data&&data.session&&data.session.user){
-          const row=await havenFetchOwnProfile(client, data.session.user.id);
-          if(cancelled||!row) return;
-          havenApplyProfileRow(row);
-          setHavenProfileDisplayName(displayNameFromProfileRow(row));
+        const {data}=client.auth.onAuthStateChange((_event, next)=>{
+          if(next) applyHavenAuthSession(next, next.user);
+          else clearHavenAuthMirror();
           applyView();
-        }
+        });
+        subscription=data&&data.subscription?data.subscription:null;
+        if(cancelled&&subscription){ try{ subscription.unsubscribe(); }catch{} }
       }catch(err){
-        console.warn("Haven auth session restore failed:", err);
+        console.warn("Haven auth listener failed:", err);
+      }
+      setBackendStatus("ready");
+      if(session&&session.user){
+        const row=await havenFetchOwnProfile(client, session.user.id);
+        if(cancelled||!row) return;
+        havenApplyProfileRow(row);
+        setHavenProfileDisplayName(displayNameFromProfileRow(row));
+        applyView();
       }
     })();
-    let subscription=null;
-    try{
-      const {data}=client.auth.onAuthStateChange((_event, session)=>{
-        if(session) applyHavenAuthSession(session, session.user);
-        else clearHavenAuthMirror();
-        applyView();
-      });
-      subscription=data&&data.subscription?data.subscription:null;
-    }catch(err){
-      console.warn("Haven auth listener failed:", err);
-    }
     return ()=>{
       cancelled=true;
       try{ if(subscription) subscription.unsubscribe(); }catch{}
     };
-  },[]);
+  },[backendAttempt]);
   const submitHavenAuth=async(mode)=>{
     if(authBusy) return;
     setAuthBusy(true);
@@ -1547,11 +1570,18 @@ export default function App(){
       lockedPrice:tid?effectiveTaskPrice:null, // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
       requiresDiagnosis:requiresDiagnosisLocal,
     });
-    // Supabase configured: do not save the job or open Posted until the
-    // signed-in create lands. No session stops here. No config stays local.
+    // Do not save the job or open Posted until the signed-in create lands.
+    // No session stops here. Phase 1B A1: there is no local-only job. If the
+    // backend config is somehow missing, the post fails like any other write.
     const cfg=getSupabaseConfig();
     let backendId=null;
-    if(cfg){
+    if(!cfg){
+      isPostingRef.current=false;
+      setWriteSyncNotice("Couldn't post the job — try again");
+      setTimeout(()=>setWriteSyncNotice(""),2500);
+      return;
+    }
+    {
       const isCatalog = !!nj.taskId;
       const cat      = isCatalog ? (currentTask?.c||"") : (nj.custom?.cat||"");
       const title    = isCatalog ? (currentTask?.n||"") : (nj.custom?.title||"");
@@ -1668,11 +1698,11 @@ export default function App(){
   };
   const cancelJobDirect=async()=>{
     const cfg=getSupabaseConfig();
-    // Configured backend: stay on this job unless the cancel write lands.
-    // No session does not send the demo customer and does not leave the screen.
-    if(cfg){
+    // Stay on this job unless the cancel write lands. No session, no config,
+    // or no backend job id does not cancel locally (Phase 1B A1: no demo path).
+    {
       const when=new Date().toISOString();
-      const ok = vj?.backendJobId
+      const ok = cfg && vj?.backendJobId
         ? await updateCanonicalJob(vj.backendJobId,{status:"cancelled",cancelled_at:when})
         : false;
       if(!ok){
@@ -1695,10 +1725,10 @@ export default function App(){
   const approveMaterials=async()=>{
     if(!vj) return;
     const cfg=getSupabaseConfig();
-    // Backend configured: fail closed. A failed or missing PATCH must not
-    // local-advance, or Pro never sees the approval.
-    if(cfg){
-      const patched = vj.backendJobId
+    // Fail closed. A failed or missing PATCH must not local-advance, or Pro
+    // never sees the approval. Phase 1B A1: no config / no backend id fails too.
+    {
+      const patched = cfg && vj.backendJobId
         ? await updateCanonicalJob(vj.backendJobId,{status:"materials_approved"})
         : false;
       if(!patched){
@@ -1717,9 +1747,9 @@ export default function App(){
     const nextStatus = isDiag ? "inspection_completed" : "materials_declined";
     const extraFields = isDiag ? {} : {convenience_fee_cents:3000};
     const cfg=getSupabaseConfig();
-    // Same bar as approve: a configured backend must accept the write first.
-    if(cfg){
-      const patched = vj.backendJobId
+    // Same bar as approve: the backend must accept the write first.
+    {
+      const patched = cfg && vj.backendJobId
         ? await updateCanonicalJob(vj.backendJobId,{status:nextStatus, ...extraFields})
         : false;
       if(!patched){
@@ -3684,19 +3714,6 @@ export default function App(){
           </button>
 
           <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8,padding:"0 4px"}}>Testing</div>
-          <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:10,display:"flex",justifyContent:"space-between",alignItems:"center",gap:12}}>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:700,fontSize:15,color:TX}}>Prototype anon mode</div>
-              <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>Default is on. This switch does not change job writes. With no session, the shared job write stops.</div>
-            </div>
-            <button type="button" onClick={()=>{
-              const next=!havenPrototypeAnonModeEnabled();
-              try{ localStorage.setItem(HAVEN_PROTOTYPE_ANON_MODE_KEY, next?"1":"0"); }catch{}
-              setAnonModeOn(next);
-            }} role="switch" aria-checked={anonModeOn} aria-label="Prototype anon mode" style={{width:44,height:26,borderRadius:13,background:anonModeOn?AM:BD,border:"none",padding:0,position:"relative",cursor:"pointer",flexShrink:0}}>
-              <div style={{width:20,height:20,borderRadius:10,background:W,position:"absolute",top:3,left:anonModeOn?21:3,transition:"left .15s",boxShadow:"0 1px 3px rgba(0,0,0,.2)"}}/>
-            </button>
-          </div>
           <button onClick={()=>setShowResetConfirm(true)} style={{width:"100%",padding:16,borderRadius:18,border:"1.5px solid #FCA5A5",background:"#FEF2F2",color:"#DC2626",fontWeight:700,fontSize:14,cursor:"pointer",textAlign:"left"}}>Reset Prototype Data</button>
           <div style={{fontSize:11,color:TM,lineHeight:1.5,padding:"8px 4px 0"}}>Prototype/testing utility — not a real customer-facing feature. Clears all locally saved Haven data on this device.</div>
 
@@ -4576,15 +4593,38 @@ export default function App(){
   // seamlessly with whichever screen is showing (no visible seam at the top).
   const topIsDark=["task","custom","diagnose","emergency"].includes(scr)||(scr==="home"&&tab==="home");
   // Account required. Signed-out callers never reach marketplace / jobs screens.
-  const havenSignedIn=!!(havenAuth && (havenAuth.accessToken || havenAuth.userId) && havenAuth.email);
-  const authGateScreen=()=>(
+  // Phase 1B A1: signed in only after the backend connected and Auth
+  // confirmed the session. While connecting or on error, nothing else renders.
+  const havenBackendReady=backendStatus==="ready";
+  const havenSignedIn=havenBackendReady && !!(havenAuth && (havenAuth.accessToken || havenAuth.userId) && havenAuth.email);
+  // Shared shell for the signed-out gate and the connection screens.
+  const authShell=(subtitle,children)=>(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       <div style={{padding:"48px 24px 20px",background:`linear-gradient(180deg, ${N} 0%, ${BG} 100%)`}}>
         <div style={{fontSize:13,fontWeight:800,color:"rgba(255,255,255,.72)",letterSpacing:1.2,textTransform:"uppercase",marginBottom:8}}>Haven</div>
         <div style={{fontSize:28,fontWeight:900,color:W,lineHeight:1.15,marginBottom:10}}>Home help,<br/>on your terms.</div>
-        <div style={{fontSize:13,fontWeight:500,color:"rgba(255,255,255,.78)",lineHeight:1.5}}>Create an account or sign in to book and track jobs. There is no signed-out marketplace.</div>
+        {subtitle?(<div style={{fontSize:13,fontWeight:500,color:"rgba(255,255,255,.78)",lineHeight:1.5}}>{subtitle}</div>):null}
       </div>
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        {children}
+      </div>
+    </div>
+  );
+  const backendConnectingScreen=()=>authShell("",(
+    <div role="status" aria-live="polite" style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16,fontSize:14,fontWeight:700,color:TX,textAlign:"center"}}>{HAVEN_CONNECTING_MESSAGE}</div>
+  ));
+  const backendErrorScreen=()=>authShell("",(
+    <>
+      <div role="alert" style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16,border:"1.5px solid #FCA5A5"}}>
+        <div style={{fontWeight:800,fontSize:16,color:"#B42318",marginBottom:8}}>{HAVEN_CONNECTION_ERROR_TITLE}</div>
+        <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:14}}>{HAVEN_CONNECTION_ERROR_MESSAGE}</div>
+        <button type="button" onClick={retryBackendConnection} disabled={backendStatus==="retrying"} aria-busy={backendStatus==="retrying"?"true":undefined} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:backendStatus==="retrying"?"#DDD9D2":N,color:W,fontWeight:800,fontSize:15,cursor:backendStatus==="retrying"?"default":"pointer"}}>{backendStatus==="retrying"?"Retrying…":"Retry"}</button>
+      </div>
+      <button type="button" onClick={()=>openHelp()} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:W,color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>Help &amp; Support</button>
+    </>
+  ));
+  const authGateScreen=()=>authShell("Create an account or sign in to book and track jobs.",(
+      <>
         <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16}}>
           <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:10}}>Sign in or create an account</div>
           <div style={{background:BG,borderRadius:12,padding:"12px 14px",marginBottom:10}}>
@@ -4599,9 +4639,8 @@ export default function App(){
         </div>
         <button type="button" onClick={()=>openHelp()} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:W,color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>Help &amp; Support</button>
         <div style={{fontSize:11,color:TM,lineHeight:1.5,textAlign:"center",padding:"4px 8px"}}>By continuing you agree to Haven&apos;s Terms of Service and Privacy Policy.</div>
-      </div>
-    </div>
-  );
+      </>
+  ));
 
 
   // Parameterized render switch — identical to the old inline conditional
@@ -4661,7 +4700,7 @@ export default function App(){
             const settleTransition=isSettling?"transform 280ms cubic-bezier(0.32,0.72,0,1)":"none";
             return(
               <div style={{flex:1,overflow:"hidden",position:"relative"}}>
-                {gestureActive&&edgeBackGesture.destScr&&(
+                {gestureActive&&edgeBackGesture.destScr&&havenSignedIn&&(
                   <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",transform:`translateX(${backgroundTranslateX}px)`,transition:settleTransition,zIndex:0}}>
                     {renderScreenFor(edgeBackGesture.destScr,edgeBackGesture.destTab)}
                     <div style={{position:"absolute",inset:0,background:"#000",opacity:dimOpacity,pointerEvents:"none",transition:settleTransition.replace("transform","opacity")}}/>
@@ -4669,7 +4708,9 @@ export default function App(){
                 )}
                 <div style={{position:gestureActive?"absolute":"relative",inset:0,display:"flex",flexDirection:"column",height:"100%",transform:gestureActive?`translateX(${renderedDragX}px)`:"none",transition:settleTransition,zIndex:1,background:BG,boxShadow:gestureActive&&renderedDragX>0?"-8px 0 24px rgba(0,0,0,.15)":"none"}}>
                   {!havenSignedIn
-                    ? (scr==="help" ? renderScreenFor("help", tab) : authGateScreen())
+                    ? (scr==="help"
+                        ? renderScreenFor("help", tab)
+                        : ((backendStatus==="error"||backendStatus==="retrying") ? backendErrorScreen() : (backendStatus==="ready" ? authGateScreen() : backendConnectingScreen())))
                     : renderScreenFor(scr,tab)}
                 </div>
               </div>
