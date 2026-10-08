@@ -401,6 +401,8 @@ const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports12 = typeof postCanonicalJob !== 'undefined' ? postCanonicalJob : undefined;
   module.exports13 = typeof updateCanonicalJob !== 'undefined' ? updateCanonicalJob : undefined;
   module.exports14 = typeof fetchCanonicalJobsByIds !== 'undefined' ? fetchCanonicalJobsByIds : undefined;
+  module.exports15 = typeof havenReceiptFromBackendRow !== 'undefined' ? havenReceiptFromBackendRow : undefined;
+  module.exports16 = typeof havenReceiptPaymentState !== 'undefined' ? havenReceiptPaymentState : undefined;
 })`;
 const moduleObj = { exports: {} };
 eval(wrapped)(React, React.useState, React.useRef, React.useEffect, moduleObj);
@@ -419,6 +421,8 @@ const havenJobRestHeaders = moduleObj.exports11;
 const postCanonicalJob = moduleObj.exports12;
 const updateCanonicalJob = moduleObj.exports13;
 const fetchCanonicalJobsByIds = moduleObj.exports14;
+const havenReceiptFromBackendRow = moduleObj.exports15;
+const havenReceiptPaymentState = moduleObj.exports16;
 
 function havenTestJwt(sub){
   const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
@@ -936,15 +940,16 @@ function runTippingChecks(){
   });
 
   setTimeout(() => {
-    step('19. Tipping — confirmed tip persists, updates Receipt, prevents accidental double-tipping', () => {
+    step('19. Tipping — confirmed tip persists, prevents accidental double-tipping; a local-only tip does not change the Receipt', () => {
       assert(existsRegex('Tip sent: $12.50'), 'Tip resolved to paid and shows the confirmed amount');
       click('← Back');
       assert(existsRegex('Tip sent: $12.50') && !existsRegex('💛 Tip Pro'), 'Tracking screen reflects the paid tip instead of offering to tip again');
       click('🧾 View Receipt');
-      assert(existsRegex(/Tip to/), 'Receipt updated with a tip line item, not a separate receipt');
-      const body = document.body.textContent.replace(/\s+/g,' ');
-      const m = body.match(/PAYMENT BREAKDOWNLabor\$(\d+).*?Tip to [^$]+\$([\d.]+)Total paid\$([\d.]+)/);
-      assert(!!m && Math.abs((parseFloat(m[1])+parseFloat(m[2]))-parseFloat(m[3]))<0.01, 'Receipt total correctly includes labor plus tip');
+      // Phase 1B item B: the receipt reads backend values only. This tip is
+      // local (no backend in this mount), so it adds no line and no total.
+      assert(!existsRegex(/Tip to/), 'Receipt has no tip line from a local-only tip');
+      assert(existsRegex('Total not available yet'), 'Receipt shows no local total without backend values');
+      assert(!existsRegex(/Total paid/), 'Receipt does not claim Total paid');
       click('‹');
       click('✓ Tip sent: $12.50');
       assert(existsRegex('Tip sent: $12.50') && !existsRegex('Recognize exceptional service'), 'Reopening Tip Pro after already tipping shows the sent state, not the selection flow again');
@@ -1260,17 +1265,13 @@ function runReceiptPdfChecks(){
     assert(Array.isArray(job.materials), 'Completed job has a materials array (may legitimately be empty for some categories)');
   });
 
-  step('39. Materials are additive — receipt total includes labor plus approved materials', () => {
+  step('39. Receipt shows no local or demo amounts without backend values (Phase 1B item B)', () => {
     click('🧾 View Receipt');
-    const totalMatch = document.body.textContent.match(/TOTAL PAID\$?(\d+(?:\.\d+)?)/) || document.body.textContent.match(/Total paid\$?(\d+(?:\.\d+)?)/);
-    const jobsData = JSON.parse(storedData['haven_jobs']);
-    const job = jobsData.data[jobsData.data.length-1];
-    const materialsCost = job.materials.reduce((s,m)=>s+m.amount*(m.qty||1),0);
-    assert(!!totalMatch, 'Receipt total is findable in rendered output');
-    if(totalMatch){
-      const renderedTotal = parseFloat(totalMatch[1]);
-      assert(materialsCost<=renderedTotal, "Total materials cost never exceeds what's shown as the receipt total");
-    }
+    // Labor + approved materials from the backend is covered in the receipt
+    // totals audit. This local job has demo completion materials only.
+    assert(existsRegex('Total not available yet'), 'Local-only job: receipt says the total is not available yet');
+    assert(!/TOTAL PAID|Total paid/.test(document.body.textContent), 'Local-only job: receipt does not claim a paid total');
+    assert(existsRegex('PAYMENT PENDING') && !existsRegex(/^PAID$/), 'Local-only job: Payment pending, no PAID stamp');
   });
 
   step('40. Receipt screen reachable with real completed-job data, Share flow completes without throwing', () => {
@@ -1479,7 +1480,7 @@ function runHomeIntentArchitectureChecks(){
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 
-  runArrivedVisibilityChecks().then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => {
+  runArrivedVisibilityChecks().then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runReceiptTotalsChecks()).then(() => {
     if (fail > 0) process.exit(1);
   }).catch((e) => {
     console.error('FAIL (arrived visibility crashed):', e);
@@ -1894,10 +1895,11 @@ function runLockedPriceChecks(){
     click('🧾 View Receipt');
     const jobsData = JSON.parse(storedData['haven_jobs']);
     const job = jobsData.data[jobsData.data.length-1];
-    // In-app receipt breakdown shows Labor as the locked price
-    assert(existsRegex(new RegExp(`PAYMENT BREAKDOWN[\\s\\S]*Labor\\s*\\$${job.lockedPrice}`)), 'Receipt breakdown lists Labor at the locked price');
-    // Total paid equals locked price (no surge/priority or tip in this flow)
-    assert(existsRegex(new RegExp(`TOTAL PAID\\$?${job.lockedPrice}(?:\\.0+)?`)) || existsRegex(new RegExp(`Total paid\\$?${job.lockedPrice}(?:\\.0+)?`)), 'Receipt total equals the locked price');
+    // Phase 1B item B: the receipt never prints the local locked price. With
+    // no backend row it shows no amounts at all.
+    assert(typeof job.lockedPrice==='number' && job.lockedPrice>0, 'Job still carries its locked price for Posted/Bookings');
+    assert(existsRegex('Total not available yet'), 'Receipt shows no local total');
+    assert(!existsRegex(new RegExp(`PAYMENT BREAKDOWN[\\s\\S]*Labor\\s*\\$${job.lockedPrice}`)), 'Receipt does not list the local locked price as labor');
     click('‹');
   });
 
@@ -1910,7 +1912,8 @@ function runLockedPriceChecks(){
     click('View all service history');
     assert(existsRegex(`$${job.lockedPrice}`), 'Dedicated Service History list shows the locked price');
     click('‹'); click('Receipts');
-    assert(existsRegex(`$${job.lockedPrice}`), 'Receipts list shows the locked price');
+    assert(existsRegex('Deep Home Cleaning') || existsRegex('Standard Home Cleaning'), 'Receipts list shows the completed job');
+    assert(!existsRegex(`$${job.lockedPrice}`), 'Receipts list shows no local total without backend values');
   });
 
   // Note: Historical totals are stored on the job itself (lockedPrice), not recomputed.
@@ -2206,4 +2209,217 @@ async function runArrivedVisibilityChecks(){
     cleanup();
   }
   console.log(`\n--- Arrived visibility audit: ${pass} passing, ${fail} failing ---`);
+}
+
+// Phase 1B item B: receipt totals. The in-app receipt, the PDF and the share
+// text read stored backend job values only (labor, approved materials,
+// priority fee, tip). Local price, surge, tip and demo materials never reach
+// them. PAID and card brand/last4 need a backend payment record.
+async function runReceiptTotalsChecks(){
+  const backendId = 'bbbbbbbb-cccc-4ddd-8eee-000000000107';
+  const authUserId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const origFetch = global.fetch;
+  const origClipboard = global.navigator.clipboard;
+  const origJspdf = global.window.jspdf;
+  let remoteRow = null;
+  global.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('/rest/v1/jobs')) {
+      return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' };
+    }
+    return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
+  };
+  let copied = '';
+  global.navigator.clipboard = { writeText: (t) => { copied = String(t); return Promise.resolve(); } };
+  // Records every string the PDF draws; save() is a no-op here.
+  let pdfTexts = [];
+  const RealJsPDF = origJspdf.jsPDF;
+  // jsPDF puts text() on each instance, so wrap the instance.
+  function SpyJsPDF(...args) {
+    const doc = new RealJsPDF(...args);
+    const realText = doc.text.bind(doc);
+    doc.text = (t, ...rest) => { pdfTexts.push(Array.isArray(t) ? t.join(' ') : String(t)); return realText(t, ...rest); };
+    doc.save = () => doc;
+    return doc;
+  }
+  global.window.jspdf = { jsPDF: SpyJsPDF };
+
+  const row = (fields) => ({
+    id: backendId, status: 'complete', customer_id: authUserId, pro_id: null,
+    materials_items: [], materials_estimate_cents: 0,
+    fixed_customer_labor_price_cents: 8900, emergency_fee_cents: 0, tip_amount_cents: 0,
+    ...fields,
+  });
+  // Local fields deliberately disagree with the backend row.
+  const localJob = (fields) => ({
+    id: 9701, status: 'complete', taskId: 1, tpId: 2, backendJobId: backendId,
+    completedAt: Date.now(), acceptedAt: Date.now(),
+    pro: { i: 'MT', n: 'Marcus T.', r: 4.97, j: 543, s: 'TV Mount Pro', col: '#1E40AF', trustScore: 98 },
+    msgs: [], photos: [], desc: '',
+    lockedPrice: 250, surge: 10, emergency: true, emergencyFee: 50,
+    tipAmount: 20, tipStatus: 'paid',
+    materials: [{ description: 'Local demo part', qty: 1, amount: 99 }],
+    paymentBrand: 'Visa', paymentLast4: '4242',
+    ...fields,
+  });
+  const mountCompleted = async (job, { backend = true } = {}) => {
+    cleanup();
+    if (backend) {
+      storedData['haven_supabase_url'] = 'https://example.supabase.co';
+      storedData['haven_supabase_anon_key'] = 'test-anon-key';
+      storedData['haven_auth_access_token'] = 'signed-in-access-token';
+      storedData['haven_auth_user_id'] = authUserId;
+      storedData['haven_auth_email'] = 'qa-customer@example.com';
+      storedData['haven_auth_role'] = 'customer';
+    } else {
+      delete storedData['haven_supabase_url'];
+      delete storedData['haven_supabase_anon_key'];
+      clearHavenAuthTestKeys();
+    }
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
+    storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    await act(async () => { render(React.createElement(App), container); });
+    await act(async () => { await delay(40); });
+  };
+  const openReceiptsList = async () => {
+    forceProfileRoot();
+    click('My Home');
+    click('Receipts');
+    await act(async () => { await delay(60); });
+  };
+  const openReceipt = async () => {
+    click('View Receipt');
+    await act(async () => { await delay(60); });
+  };
+  // In-app receipt text, the share text (Copy Receipt Details), and the PDF
+  // strings (Save or Download Receipt).
+  const readSurfaces = async () => {
+    const inApp = document.body.textContent;
+    copied = '';
+    click('⬆️ Share Receipt');
+    click('📋 Copy Receipt Details');
+    await act(async () => { await delay(20); });
+    pdfTexts = [];
+    click('⬆️ Share Receipt');
+    click('⬇️ Save or Download Receipt');
+    await act(async () => { await delay(20); });
+    return { inApp, share: copied, pdf: pdfTexts.join('\n') };
+  };
+
+  try {
+    step('B1. Receipt amounts come from the backend row only', () => {
+      assert(typeof havenReceiptFromBackendRow === 'function', 'havenReceiptFromBackendRow loaded');
+      const r = havenReceiptFromBackendRow(row({ materials_estimate_cents: 1800 }));
+      assert(r && r.totalCents === 10700, '$89 labor + $18 approved materials = $107');
+      const extras = havenReceiptFromBackendRow(row({ materials_estimate_cents: 1800, emergency_fee_cents: 2500, tip_amount_cents: 1000 }));
+      assert(extras && extras.totalCents === 14200, 'tip and priority fee are added when present');
+      assert(havenReceiptFromBackendRow(row({ status: 'materials_requested', materials_estimate_cents: 1800 })).materialsCents === 0, 'a pending materials request adds nothing');
+      assert(havenReceiptFromBackendRow(row({ status: 'materials_declined', materials_estimate_cents: 1800 })).materialsCents === 0, 'declined materials add nothing');
+      assert(havenReceiptFromBackendRow(row({ status: 'in_progress', materials_estimate_cents: 1800 })).materialsCents === 1800, 'approved materials count once work resumes');
+      const noLabor = row({}); delete noLabor.fixed_customer_labor_price_cents;
+      assert(havenReceiptFromBackendRow(noLabor) === null, 'no labor column: no amounts, no guess');
+      const noTip = row({}); delete noTip.tip_amount_cents;
+      assert(havenReceiptFromBackendRow(noTip) === null, 'a row without every stored amount gives no receipt total');
+      assert(havenReceiptFromBackendRow(null) === null, 'no row: no amounts');
+      assert(r.payment === null, 'jobs rows carry no payment record');
+    });
+
+    step('B2. PAID and card brand/last4 need a backend payment record', () => {
+      assert(typeof havenReceiptPaymentState === 'function', 'havenReceiptPaymentState loaded');
+      const none = havenReceiptPaymentState(null);
+      assert(!none.paid && !none.showCard && !none.brand && !none.last4, 'no record: not paid, no card');
+      const snapshot = havenReceiptPaymentState({ brand: 'Visa', last4: '4242' });
+      assert(!snapshot.paid && !snapshot.showCard, 'a {brand,last4} snapshot is not a payment record');
+      const processing = havenReceiptPaymentState({ status: 'processing', brand: 'Visa', last4: '4242' });
+      assert(!processing.paid && !processing.showCard, 'processing is not paid and shows no card');
+      const paid = havenReceiptPaymentState({ status: 'paid', brand: 'Visa', last4: '4242' });
+      assert(paid.paid && paid.showCard && paid.brand === 'Visa' && paid.last4 === '4242', 'a paid record: PAID with its card');
+      const paidNoCard = havenReceiptPaymentState({ status: 'paid' });
+      assert(paidNoCard.paid && !paidNoCard.showCard, 'a paid record without card details: PAID, no card');
+    });
+
+    // $89 labor + $18 approved materials = $107 on every surface.
+    remoteRow = row({ materials_estimate_cents: 1800 });
+    await mountCompleted(localJob({}));
+    await openReceiptsList();
+    assert(existsRegex('$107.00'), 'Receipts list shows the backend total $107.00');
+    assert(!existsRegex('$250'), 'Receipts list does not show the local price');
+    await openReceipt();
+    let out = await readSurfaces();
+    assert(/Labor\$89\.00/.test(out.inApp) && /Approved materials\$18\.00/.test(out.inApp), 'in-app: labor $89.00 and approved materials $18.00');
+    assert(/Total\$107\.00/.test(out.inApp), 'in-app: total $107.00');
+    assert(out.share.includes('Labor: $89.00') && out.share.includes('Approved materials: $18.00'), 'share text: labor and approved materials');
+    assert(out.share.includes('Total: $107.00'), 'share text: total $107.00');
+    assert(out.pdf.includes('$89.00') && out.pdf.includes('$18.00') && out.pdf.includes('$107.00'), 'PDF: $89.00, $18.00 and $107.00');
+    assert(out.pdf.split('\n').includes('TOTAL'), 'PDF: TOTAL label');
+    // Local fields (price 250, surge 10, emergency 50, tip 20, demo part 99) never print.
+    [['in-app', out.inApp], ['share', out.share], ['PDF', out.pdf]].forEach(([name, txt]) => {
+      assert(!/\$250|\$260|\$10\.00|\$50|\$20\.00|\$99|ASAP surge|Local demo part|Tip to/.test(txt), `${name}: no local price, surge, emergency fee, tip or demo materials`);
+    });
+
+    // No backend payment record: no PAID, no card, on all three surfaces.
+    [['in-app', out.inApp], ['share', out.share], ['PDF', out.pdf]].forEach(([name, txt]) => {
+      assert(!/Total paid|TOTAL PAID/.test(txt), `${name}: no "Total paid" without a payment record`);
+      assert(!/4242|Visa/.test(txt), `${name}: no card brand or last4 without a payment record`);
+    });
+    assert(existsRegex('PAYMENT PENDING') && !existsRegex(/^PAID$/), 'in-app: Payment pending, no PAID stamp');
+    assert(!existsRegex('PAYMENT METHOD'), 'in-app: no payment method block');
+    assert(!existsRegex('This receipt confirms a completed payment'), 'in-app: no paid confirmation line');
+    assert(out.share.includes('Payment pending') && !/\bPAID\b|— Paid/.test(out.share), 'share text: Payment pending, no PAID');
+    assert(out.pdf.split('\n').includes('PAYMENT PENDING') && !out.pdf.split('\n').includes('PAID') && !/· Paid/.test(out.pdf), 'PDF: PAYMENT PENDING pill, no PAID, no paid card line');
+
+    // Tip and priority fee are included when the backend has them.
+    remoteRow = row({ materials_estimate_cents: 1800, emergency_fee_cents: 2500, tip_amount_cents: 1000 });
+    await mountCompleted(localJob({ id: 9702 }));
+    await openReceiptsList();
+    await openReceipt();
+    out = await readSurfaces();
+    assert(/Emergency priority fee\$25\.00/.test(out.inApp) && /Tip to Marcus T\.\$10\.00/.test(out.inApp) && /Total\$142\.00/.test(out.inApp), 'in-app: priority fee, tip, total $142.00');
+    assert(out.share.includes('Emergency priority fee: $25.00') && out.share.includes('Tip to Marcus T.: $10.00') && out.share.includes('Total: $142.00'), 'share text: priority fee, tip, total $142.00');
+    assert(out.pdf.includes('$25.00') && out.pdf.includes('$10.00') && out.pdf.includes('$142.00'), 'PDF: priority fee, tip, total $142.00');
+
+    // Different local state, same backend row: same receipt total.
+    remoteRow = row({ materials_estimate_cents: 1800 });
+    await mountCompleted(localJob({ id: 9703, lockedPrice: 999, surge: 0, emergency: false, emergencyFee: 0, tipAmount: 0, tipStatus: 'notAdded', materials: [] }));
+    await openReceiptsList();
+    await openReceipt();
+    out = await readSurfaces();
+    assert(/Total\$107\.00/.test(out.inApp) && out.share.includes('Total: $107.00') && out.pdf.includes('$107.00'), 'changing local price/surge/tip/materials does not change the $107.00 total');
+    assert(!/\$999/.test(out.inApp + out.share + out.pdf), 'local price 999 never prints');
+
+    // Backend returns no row: no amounts at all, and still no PAID.
+    remoteRow = null;
+    await mountCompleted(localJob({ id: 9704 }));
+    await openReceiptsList();
+    assert(!existsRegex('$250') && !existsRegex('$107'), 'Receipts list shows no total without a backend row');
+    await openReceipt();
+    out = await readSurfaces();
+    assert(out.inApp.includes('Total not available yet') && !/Labor\$/.test(out.inApp), 'in-app: Total not available yet, no line items');
+    assert(out.share.includes('Total not available yet') && !out.share.includes('Labor:'), 'share text: Total not available yet');
+    assert(out.pdf.includes('Total not available yet') && !out.pdf.split('\n').includes('TOTAL'), 'PDF: Total not available yet, no TOTAL');
+    assert(!/4242|Visa|TOTAL PAID|Total paid/.test(out.inApp + out.share + out.pdf), 'no card and no paid total without backend values');
+
+    // The receipt fetch asks for the stored amount columns (read-only select).
+    const seen = [];
+    global.fetch = async (url, opts) => { seen.push({ url: String(url), opts: opts || {} }); return { ok: true, json: async () => [], text: async () => '' }; };
+    await fetchCanonicalJobsByIds([backendId]);
+    const read = seen.find(c => c.url.includes('/rest/v1/jobs'));
+    assert(!!read && (!read.opts.method || read.opts.method === 'GET'), 'receipt amounts are a GET');
+    assert(!!read && ['fixed_customer_labor_price_cents', 'materials_estimate_cents', 'emergency_fee_cents', 'tip_amount_cents'].every(c => read.url.includes(c)), 'jobs read selects labor, materials, priority fee and tip');
+    assert(!!read && !read.url.includes('payment_snapshot'), 'jobs read does not select payment_snapshot');
+  } catch (e) {
+    fail++;
+    console.error('FAIL (receipt totals):', (e && e.stack) || e);
+  } finally {
+    global.fetch = origFetch;
+    global.navigator.clipboard = origClipboard;
+    global.window.jspdf = origJspdf;
+    delete storedData['haven_supabase_url'];
+    delete storedData['haven_supabase_anon_key'];
+    clearHavenAuthTestKeys();
+    cleanup();
+  }
+  console.log(`\n--- Receipt totals audit: ${pass} passing, ${fail} failing ---`);
 }

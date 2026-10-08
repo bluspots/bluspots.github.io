@@ -921,6 +921,24 @@ export default function App(){
   const doneCount  = allJobs.filter(j=>TERMINAL_STATUSES.has(j.status)).length;
   const hasActive  = activeCount>0;
 
+  // Receipt amounts from the backend job row, keyed by backend job id.
+  // Filled only from fetched rows. Not persisted, and never seeded from local
+  // job fields, so local state cannot change a receipt (Phase 1B item B).
+  const [backendReceipts,setBackendReceipts]=useState({});
+  const rememberBackendReceipts=(rows)=>{
+    if(!Array.isArray(rows)||rows.length===0) return;
+    setBackendReceipts(prev=>{
+      const next={...prev};
+      rows.forEach(r=>{
+        if(!r||!r.id) return;
+        const receipt=havenReceiptFromBackendRow(r);
+        if(receipt) next[String(r.id)]=receipt;
+      });
+      return next;
+    });
+  };
+  const receiptForJob=(job)=> job&&job.backendJobId ? (backendReceipts[String(job.backendJobId)]||null) : null;
+
   // Lightweight polling while Tracking, Bookings, or Posted are open and there are backend-linked active jobs
   const isTerminalStatus=(s)=>TERMINAL_STATUSES.has(s)||s==="cancelled";
   useEffect(()=>{
@@ -935,6 +953,7 @@ export default function App(){
       const rows=await fetchCanonicalJobsByIds(activeLinked.map(j=>j.backendJobId));
       if(cancelled) return;
       if(rows.length===0) return;
+      rememberBackendReceipts(rows);
       const byId=new Map(rows.map(r=>[r.id,r]));
       let proLabels={};
       try{
@@ -1075,6 +1094,7 @@ export default function App(){
     (async()=>{
       const rows=await fetchCanonicalJobsByIds(ids);
       if(cancelled) return;
+      rememberBackendReceipts(rows);
       let labels={};
       try{
         const labelIds=(rows||[]).filter(r=>r&&r.pro_id&&String(r.pro_id).toLowerCase()!==String(DEMO_PRO_ID).toLowerCase()).map(r=>r.id);
@@ -1094,6 +1114,26 @@ export default function App(){
     })();
     return ()=>{ cancelled=true; };
   },[missingProKey]);
+
+  // Receipt and Receipts list read the stored amounts fresh from the backend
+  // each time they open: the viewed job, or every completed backend job.
+  const receiptBackendKey = scr==="receipt"
+    ? (vj&&vj.backendJobId ? String(vj.backendJobId) : "")
+    : scr==="receiptList"
+      ? jobs.filter(j=>j.backendJobId&&j.status==="complete").map(j=>j.backendJobId).join(",")
+      : "";
+  useEffect(()=>{
+    if(!receiptBackendKey) return;
+    const ids=receiptBackendKey.split(",").filter(Boolean);
+    if(!ids.length) return;
+    let cancelled=false;
+    (async()=>{
+      const rows=await fetchCanonicalJobsByIds(ids);
+      if(cancelled) return;
+      rememberBackendReceipts(rows);
+    })();
+    return ()=>{ cancelled=true; };
+  },[scr,receiptBackendKey]);
 
   useEffect(()=>{
     if(scr==="messages") setTimeout(()=>msgEnd.current?.scrollIntoView({behavior:"smooth"}),60);
@@ -2831,8 +2871,7 @@ export default function App(){
           </div>
         ):completedJobs.map(j=>{
           const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
-        const basePrice=j.taskId?(j.lockedPrice??(jt?jt.p:0)):(j.custom?.price||0);
-        const jTotal=basePrice+(j.surge||0)+(j.emergencyFee||0)+(j.tipAmount>0?j.tipAmount:0);
+        const jReceipt=receiptForJob(j);
           const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
           return(
             <div key={j.id} style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
@@ -2842,7 +2881,7 @@ export default function App(){
                   <div style={{fontWeight:700,fontSize:14,color:TX}}>{jt?.n||"Custom job"}</div>
                   <div style={{fontSize:12,color:TS,marginTop:1}}>{dateStr} · {proShownForJob(j).n}</div>
                 </div>
-                <div style={{fontWeight:800,fontSize:15,color:AM}}>${jTotal}</div>
+                {jReceipt&&<div style={{fontWeight:800,fontSize:15,color:AM}}>{receiptMoney(jReceipt.totalCents)}</div>}
               </div>
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>openReceipt(j.id)} style={{flex:1,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:12,cursor:"pointer"}}>View Receipt</button>
@@ -2916,6 +2955,17 @@ export default function App(){
   // in-app receipt screen below, which is intentionally unchanged. Every
   // value drawn here is read from the job/profile/pro records passed in —
   // nothing about a specific receipt is hardcoded in this function.
+  // Receipt amounts and payment state, shared by the in-app receipt, the PDF
+  // and the share text (Phase 1B item B). Amounts: receiptForJob only, which
+  // holds the stored backend job values; null means "Total not available yet"
+  // and no amounts. PAID and card brand/last4: havenReceiptPaymentState only,
+  // which needs a backend payment record (none exists yet), so receipts read
+  // "Payment pending" and show no card.
+  const receiptMoney=(cents)=>`$${(cents/100).toFixed(2)}`;
+  const receiptPaymentForJob=(job)=>{
+    const receipt=receiptForJob(job);
+    return havenReceiptPaymentState(receipt?receipt.payment:null);
+  };
   // Receipt "Billed to" block, shared by the in-app receipt, the PDF and the
   // share text. Name: profiles.display_name, else the Edit Profile name; the
   // "Jane Doe" seed is never printed ("" means omit the row). Email: the auth
@@ -2940,11 +2990,8 @@ export default function App(){
     const jt=job.taskId?TASKS.find(t=>t.id===job.taskId):job.custom?{n:job.custom.title,p:job.custom.price,c:job.custom.cat}:null;
     const category=job.taskId?(TASKS.find(t=>t.id===job.taskId)?.c):job.custom?.cat;
     const jPro=proShownForJob(job);
-    const laborTotal=job.taskId?(job.lockedPrice??(jt?jt.p:0)):(job.custom?.price||0);
-    const materials=Array.isArray(job.materials)?job.materials:[];
-    const materialsCost=materials.reduce((s,m)=>s+m.amount*(m.qty||1),0);
-    const laborLine=laborTotal; // materials are ADDITIVE — labor remains the full service price
-    const grandTotal=laborTotal+materialsCost+(job.surge||0)+(job.emergencyFee||0)+(job.tipAmount>0?job.tipAmount:0);
+    const receipt=receiptForJob(job);
+    const payment=receiptPaymentForJob(job);
     const dateObj=new Date(job.completedAt||job.id);
     const dateStr=dateObj.toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
     const receiptId=`HVN-${String(job.id).slice(-6).toUpperCase()}`;
@@ -2985,11 +3032,18 @@ export default function App(){
     doc.setFont("helvetica","normal"); doc.setFontSize(8.5); setMuted();
     doc.text(`Receipt # ${receiptId}`,PAGE_W-MARGIN,y+25,{align:"right"});
     doc.text(`Date: ${dateStr}`,PAGE_W-MARGIN,y+37,{align:"right"});
-    const pillW=38,pillH=13;
-    doc.setFillColor(GREEN_BG[0],GREEN_BG[1],GREEN_BG[2]);
+    // PAID only with a backend payment record; otherwise a neutral
+    // PAYMENT PENDING pill, sized to its text.
+    const pillText=payment.paid?"PAID":"PAYMENT PENDING";
+    const PENDING_BG=[240,237,232];
+    doc.setFont("helvetica","bold"); doc.setFontSize(7.5);
+    const pillTextW=doc.getTextWidth(pillText)+(pillText.length-1)*0.5; // with charSpace
+    const pillW=Math.max(38,Math.ceil(pillTextW+14)),pillH=13;
+    const pillBg=payment.paid?GREEN_BG:PENDING_BG, pillInk=payment.paid?GREEN:MUTED;
+    doc.setFillColor(pillBg[0],pillBg[1],pillBg[2]);
     doc.roundedRect(PAGE_W-MARGIN-pillW,y+44,pillW,pillH,3,3,"F");
-    doc.setFont("helvetica","bold"); doc.setFontSize(7.5); doc.setTextColor(GREEN[0],GREEN[1],GREEN[2]);
-    doc.text("PAID",PAGE_W-MARGIN-pillW/2,y+44+pillH/2+2.6,{align:"center",charSpace:0.5});
+    doc.setTextColor(pillInk[0],pillInk[1],pillInk[2]);
+    doc.text(pillText,PAGE_W-MARGIN-pillW+(pillW-pillTextW)/2,y+44+pillH/2+2.6,{charSpace:0.5});
 
     y+=72; divider(y); y+=24;
 
@@ -3067,13 +3121,12 @@ export default function App(){
     doc.text("AMOUNT",amtColX,y,{align:"right"});
     y+=6; divider(y,1); y+=18;
 
-    const rows=[
-      ["Labor",jt?jt.n:(job.custom?.title||"Service"),1,laborLine],
-      ...materials.map(m=>[null,m.description,m.qty||1,m.amount*(m.qty||1)]),
-      ...(job.surge>0?[["Priority","ASAP surge",1,job.surge]]:[]),
-      ...(job.emergency?[["Priority","Emergency response fee",1,job.emergencyFee]]:[]),
-      ...(job.tipAmount>0?[["Tip",`Tip to ${jPro.n}`,1,job.tipAmount]]:[]),
-    ];
+    const rows=receipt?[
+      ["Labor",jt?jt.n:(job.custom?.title||"Service"),1,receipt.laborCents/100],
+      ...(receipt.materialsCents>0?[["Materials","Approved materials",1,receipt.materialsCents/100]]:[]),
+      ...(receipt.priorityFeeCents>0?[["Priority","Emergency response fee",1,receipt.priorityFeeCents/100]]:[]),
+      ...(receipt.tipCents>0?[["Tip",`Tip to ${jPro.n}`,1,receipt.tipCents/100]]:[]),
+    ]:[];
     doc.setFont("helvetica","normal"); doc.setFontSize(9.5);
     rows.forEach(([kicker,desc,qty,amt])=>{
       // A row with a kicker (LABOR / PRIORITY / TIP) gets 6pt more room
@@ -3089,13 +3142,22 @@ export default function App(){
       y+=18;
     });
 
+    if(!receipt){
+      ensureSpace(20);
+      doc.setFont("helvetica","normal"); doc.setFontSize(9.5); setMuted();
+      doc.text("Total not available yet",MARGIN,y);
+      y+=18;
+    }
+
     y+=4; divider(y,1); y+=24;
-    ensureSpace(30);
-    doc.setFont("helvetica","bold"); doc.setFontSize(13); setInk();
-    doc.text("TOTAL PAID",MARGIN,y);
-    doc.setFontSize(19);
-    doc.text(`$${grandTotal.toFixed(2)}`,amtColX,y,{align:"right"});
-    y+=34;
+    if(receipt){
+      ensureSpace(30);
+      doc.setFont("helvetica","bold"); doc.setFontSize(13); setInk();
+      doc.text(payment.paid?"TOTAL PAID":"TOTAL",MARGIN,y);
+      doc.setFontSize(19);
+      doc.text(receiptMoney(receipt.totalCents),amtColX,y,{align:"right"});
+      y+=34;
+    }
 
     // === WORK PERFORMED ===
     const workPerformed=Array.isArray(job.workPerformed)?job.workPerformed:[];
@@ -3139,7 +3201,7 @@ export default function App(){
     doc.text("1-800-555-0199",MARGIN,footerY+24);
     doc.text(`Receipt ID: ${receiptId}`,rightX,footerY+12);
     doc.text(`Transaction ID: ${transactionId}`,rightX,footerY+24);
-    doc.text(`${job.paymentBrand||"Card"} •••• ${job.paymentLast4||"----"} · Paid ${dateStr}`,rightX,footerY+36);
+    if(payment.showCard) doc.text(`${payment.brand} •••• ${payment.last4} · Paid ${dateStr}`,rightX,footerY+36);
 
     return { doc, receiptId };
   };
@@ -3147,24 +3209,23 @@ export default function App(){
   const buildReceiptShareText=(job)=>{
     const jt=job.taskId?TASKS.find(t=>t.id===job.taskId):job.custom?{n:job.custom.title,p:job.custom.price}:null;
     const jPro=proShownForJob(job);
-    const basePrice=job.taskId?(job.lockedPrice??(jt?jt.p:0)):(job.custom?.price||0);
-    const jTotal=basePrice+(job.surge||0)+(job.emergencyFee||0);
-    const grandTotal=jTotal+(job.tipAmount>0?job.tipAmount:0);
+    const receipt=receiptForJob(job);
+    const payment=receiptPaymentForJob(job);
     const dateStr=new Date(job.completedAt||job.id).toLocaleDateString('en-US',{month:'long',day:'numeric',year:'numeric'});
     const timeStr=new Date(job.completedAt||job.id).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
     const receiptId=`HVN-${String(job.id).slice(-6).toUpperCase()}`;
     const billedTo=receiptBilledTo(job);
-    const lineItems=[
-      ["Labor",`$${basePrice}`],
-      ...(job.surge>0?[["ASAP surge",`$${job.surge}`]]:[]),
-      ...(job.emergency?[["Emergency priority fee",`$${job.emergencyFee}`]]:[]),
-      ...(job.tipAmount>0?[[`Tip to ${jPro.n}`,`$${job.tipAmount.toFixed(2)}`]]:[]),
-    ];
+    const lineItems=receipt?[
+      ["Labor",receiptMoney(receipt.laborCents)],
+      ...(receipt.materialsCents>0?[["Approved materials",receiptMoney(receipt.materialsCents)]]:[]),
+      ...(receipt.priorityFeeCents>0?[["Emergency priority fee",receiptMoney(receipt.priorityFeeCents)]]:[]),
+      ...(receipt.tipCents>0?[[`Tip to ${jPro.n}`,receiptMoney(receipt.tipCents)]]:[]),
+    ]:[];
     return {
       receiptId,
       text:[
         "HAVEN — RECEIPT",
-        `Receipt #${receiptId}   PAID`,
+        `Receipt #${receiptId}   ${payment.paid?"PAID":"Payment pending"}`,
         `Completed ${dateStr} at ${timeStr}`,
         "",
         ...(billedTo.name?[`Billed to: ${billedTo.name}`]:[]),
@@ -3174,10 +3235,9 @@ export default function App(){
         `Service: ${jt?jt.n:"Custom job"}`,
         "",
         ...lineItems.map(([l,v])=>`${l}: ${v}`),
-        `Total paid: $${grandTotal.toFixed(2)}`,
+        receipt?`${payment.paid?"Total paid":"Total"}: ${receiptMoney(receipt.totalCents)}`:"Total not available yet",
         "",
-        `Payment method: ${job.paymentBrand||"Card"} •••• ${job.paymentLast4||"----"} — Paid`,
-        "",
+        ...(payment.showCard?[`Payment method: ${payment.brand} •••• ${payment.last4} — Paid`,""]:[]),
         "Haven Support: support@haven.app",
       ].join("\n"),
     };
@@ -3217,14 +3277,14 @@ export default function App(){
     const receiptId=`HVN-${String(vj.id).slice(-6).toUpperCase()}`;
     const billedTo=receiptBilledTo(vj);
     const serviceName=vjTask?vjTask.n:"Custom job";
-    const basePrice=vj.taskId?(vj.lockedPrice??(vjTask?vjTask.p:0)):(vj.custom?.price||0);
-    const lineItems=[
-      ["Labor",`$${basePrice}`],
-      ...(vj.surge>0?[["ASAP surge",`$${vj.surge}`]]:[]),
-      ...(vj.emergency?[["Emergency priority fee",`$${vj.emergencyFee}`]]:[]),
-      ...(vj.tipAmount>0?[[`Tip to ${vjPro.n}`,`$${vj.tipAmount.toFixed(2)}`]]:[]),
-    ];
-    const grandTotal=vjTotal+(vj.tipAmount>0?vj.tipAmount:0);
+    const receipt=receiptForJob(vj);
+    const payment=receiptPaymentForJob(vj);
+    const lineItems=receipt?[
+      ["Labor",receiptMoney(receipt.laborCents)],
+      ...(receipt.materialsCents>0?[["Approved materials",receiptMoney(receipt.materialsCents)]]:[]),
+      ...(receipt.priorityFeeCents>0?[["Emergency priority fee",receiptMoney(receipt.priorityFeeCents)]]:[]),
+      ...(receipt.tipCents>0?[[`Tip to ${vjPro.n}`,receiptMoney(receipt.tipCents)]]:[]),
+    ]:[];
     const {text:shareText}=buildReceiptShareText(vj);
     const shareReceipt=()=>{
       try{
@@ -3297,7 +3357,9 @@ export default function App(){
               <div style={{textAlign:"right"}}>
                 <div style={{fontSize:13,fontWeight:800,color:TX,letterSpacing:2}}>RECEIPT</div>
                 <div style={{fontSize:11,color:TS,marginTop:3}}>#{receiptId}</div>
-                <div style={{display:"inline-block",marginTop:5,padding:"2px 10px",borderRadius:8,background:SL,color:SC,fontSize:10,fontWeight:800,letterSpacing:.5}}>PAID</div>
+                {payment.paid
+                  ?<div style={{display:"inline-block",marginTop:5,padding:"2px 10px",borderRadius:8,background:SL,color:SC,fontSize:10,fontWeight:800,letterSpacing:.5}}>PAID</div>
+                  :<div style={{display:"inline-block",marginTop:5,padding:"2px 10px",borderRadius:8,background:BG,color:TS,fontSize:10,fontWeight:800,letterSpacing:.5}}>PAYMENT PENDING</div>}
                 <div style={{fontSize:11,color:TS,marginTop:5}}>{dateStr} · {timeStr}</div>
               </div>
             </div>
@@ -3347,20 +3409,26 @@ export default function App(){
                   <span style={{fontSize:13,color:TX,fontWeight:600}}>{v}</span>
                 </div>
               ))}
+              {receipt?(
               <div style={{borderTop:`2px solid ${TX}`,marginTop:6,paddingTop:12,display:"flex",justifyContent:"space-between",alignItems:"baseline"}}>
-                <span style={{fontSize:14,color:TX,fontWeight:800}}>Total paid</span>
-                <span style={{fontSize:20,color:TX,fontWeight:900}}>${grandTotal.toFixed(2)}</span>
+                <span style={{fontSize:14,color:TX,fontWeight:800}}>{payment.paid?"Total paid":"Total"}</span>
+                <span style={{fontSize:20,color:TX,fontWeight:900}}>{receiptMoney(receipt.totalCents)}</span>
               </div>
+              ):(
+              <div style={{fontSize:13,color:TS}}>Total not available yet</div>
+              )}
             </div>
 
-            {/* Payment method */}
+            {/* Payment method: only with a backend payment record */}
+            {payment.showCard&&(
             <div style={{background:BG,borderRadius:14,padding:14,marginBottom:20,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
               <div>
                 <div style={{fontSize:10,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:3}}>PAYMENT METHOD</div>
-                <div style={{fontSize:13,color:TX,fontWeight:700}}>{vj.paymentBrand||"Card"} •••• {vj.paymentLast4||"----"}</div>
+                <div style={{fontSize:13,color:TX,fontWeight:700}}>{payment.brand} •••• {payment.last4}</div>
               </div>
               <div style={{padding:"3px 10px",borderRadius:8,background:SL,color:SC,fontSize:11,fontWeight:800}}>Paid</div>
             </div>
+            )}
 
             <div style={{background:SL,borderRadius:14,padding:14,display:"flex",gap:10,alignItems:"center",marginBottom:20}}>
               <span style={{fontSize:16}}>✅</span>
@@ -3371,7 +3439,7 @@ export default function App(){
 
             <div style={{borderTop:`1px solid ${BD}`,paddingTop:14,textAlign:"center"}}>
               <div style={{fontSize:11,color:TM,lineHeight:1.6}}>Questions about this receipt? Contact Haven Support at support@haven.app</div>
-              <div style={{fontSize:10,color:TM,marginTop:6}}>This receipt confirms a completed payment. No balance is owed.</div>
+              {payment.paid&&<div style={{fontSize:10,color:TM,marginTop:6}}>This receipt confirms a completed payment. No balance is owed.</div>}
             </div>
           </div>
 
