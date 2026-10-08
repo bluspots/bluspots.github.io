@@ -287,6 +287,7 @@ async function checkReceipt(job, who) {
     await clickText(/^Bookings$/, 'Bookings tab');
     await clickText(/Assemble furniture/, 'job card');
     await waitFor(() => /Looking for a pro/.test(bodyText()), 'posted screen');
+    assert(bodyText().includes('Pros near you can see your job. This screen updates as soon as one accepts.'), 'posted subtitle is the approved copy');
     noClaims(bodyText(), 'posted screen');
     await clickText(/^David R\.$/, 'posted-list pro');
     assert(/Pro profile/.test(bodyText()), 'posted-list pro profile opened');
@@ -314,6 +315,9 @@ async function checkReceipt(job, who) {
     assert(!/badges\s*:/.test(seeds), 'prototype pros carry no verification badges');
     assert(!/p\.badges|\.badges\.map/.test(jsx), 'no badge rendering');
     assert(!/vetted/i.test(manifest), 'manifest description makes no "vetted" claim');
+    assert(JSON.parse(manifest).description === 'Book home service pros with upfront pricing.', 'manifest description is the approved copy');
+    const profileSrc = jsx.slice(jsx.indexOf('const proProfileScreen=()=>'), jsx.indexOf('// ── EDIT PROFILE'));
+    assert(profileSrc.includes('gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:20}}'), 'Pro profile metric grid spacing is 20');
     assert(!/pro_workspace|identityVerification|backgroundCheck|emailVerifyStatus|phoneVerifyStatus/.test(jsx), 'Customer UI reads no Pro verification field');
   });
 

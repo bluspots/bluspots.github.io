@@ -1,7 +1,7 @@
 {
   "name": "Haven",
   "short_name": "Haven",
-  "description": "Book home service pros with fixed pricing and same-day availability.",
+  "description": "Book home service pros with upfront pricing.",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
