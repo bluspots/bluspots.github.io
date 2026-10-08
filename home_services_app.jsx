@@ -1117,7 +1117,9 @@ export default function App(){
 
   // Receipt and Receipts list read the stored amounts fresh from the backend
   // each time they open: the viewed job, or every completed backend job.
-  const receiptBackendKey = scr==="receipt"
+  // Tracking / job details (Booking Summary total, Phase 1B B3) reads the
+  // viewed job too; the active-job poll skips completed jobs.
+  const receiptBackendKey = (scr==="receipt"||scr==="tracking")
     ? (vj&&vj.backendJobId ? String(vj.backendJobId) : "")
     : scr==="receiptList"
       ? jobs.filter(j=>j.backendJobId&&j.status==="complete").map(j=>j.backendJobId).join(",")
@@ -3124,7 +3126,7 @@ export default function App(){
     const rows=receipt?[
       ["Labor",jt?jt.n:(job.custom?.title||"Service"),1,receipt.laborCents/100],
       ...(receipt.materialsCents>0?[["Materials","Approved materials",1,receipt.materialsCents/100]]:[]),
-      ...(receipt.priorityFeeCents>0?[["Priority","Emergency response fee",1,receipt.priorityFeeCents/100]]:[]),
+      ...(receipt.priorityFeeCents>0?[["Priority","Emergency priority fee",1,receipt.priorityFeeCents/100]]:[]),
       ...(receipt.tipCents>0?[["Tip",`Tip to ${jPro.n}`,1,receipt.tipCents/100]]:[]),
     ]:[];
     doc.setFont("helvetica","normal"); doc.setFontSize(9.5);
@@ -4194,6 +4196,11 @@ export default function App(){
     if(!vj) return unavailableScreen("Tracking",goBookings);
     const info=SI[vj.status]||SI.en_route;
     const emBg={en_route:"#FEF3C7",arrived:"#DBEAFE",in_progress:"#FEF3C7",complete:SL}[vj.status]||"#FEF3C7";
+    // Booking Summary total (Phase 1B B3): the same backend total as the
+    // receipt (labor + approved materials + priority fee + tip, with the
+    // 0025 column-absent fallback). No backend row yet: the local total.
+    const vjReceipt=receiptForJob(vj);
+    const bookingSummaryTotal=vjReceipt?receiptMoney(vjReceipt.totalCents):`$${vjTotal}`;
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         {vj.justAccepted&&(
@@ -4332,7 +4339,7 @@ export default function App(){
             </div>
             {[["Service",vjTask?vjTask.n:"Custom job"],["Time",vjTp?vjTp.label:"—"],["Photos",vj.photos?.length>0?`${vj.photos.length} shared`:"None"],
               ...(vj.emergency?[["Emergency fee",`+$${vj.emergencyFee}`]]:[]),
-              ["Total",`$${vjTotal}`]].map(([l,v])=>(
+              ["Total",bookingSummaryTotal]].map(([l,v])=>(
               <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:l==="Total"?AM:TX}}>{v}</span></div>
             ))}
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div></div>}
