@@ -277,6 +277,34 @@
 
   // Display name for the pro on jobs this customer owns. Not a profile directory.
   // Returns {} when 0022 is not pasted yet. Never falls back to DEMO_PRO_ID.
+  // Phase 1B A2: founder-set QA tester flag. True only when the RPC
+  // returns the JSON boolean true. Pending, error, missing migration,
+  // signed-out, and any other shape all fail closed (false). Never reads
+  // localStorage or the email.
+  const havenFetchIsQaTester=async()=>{
+    const cfg=getSupabaseConfig();
+    if(!cfg) return false;
+    const token=havenSignedInAccessToken();
+    if(!token) return false;
+    try{
+      const res=await fetch(`${cfg.url}/rest/v1/rpc/is_qa_tester`,{
+        method:"POST",
+        headers:{
+          "Accept":"application/json",
+          "Content-Type":"application/json",
+          apikey:cfg.anonKey,
+          Authorization:`Bearer ${token}`,
+        },
+        body:"{}",
+      });
+      if(!res.ok) return false;
+      const body=await res.json().catch(()=>null);
+      return body===true;
+    }catch(err){
+      return false;
+    }
+  };
+
   const fetchAssignedProLabels=async(backendIds)=>{
     if(havenProLabelRpcUnavailable) return {};
     const cfg=getSupabaseConfig();
