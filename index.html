@@ -333,6 +333,15 @@ const Avatar=({photo,size,iconSize,iconColor,bg=AM,onClick,children})=>(
 const CSS=`
 .sc::-webkit-scrollbar{display:none}
 .sc{-ms-overflow-style:none;scrollbar-width:none}
+/* Screens scroll vertically only, so tell the browser it may handle vertical
+   pans and nothing else. Without this, a sideways edge swipe on a touch
+   screen can be claimed by the browser as a pan, which cancels the pointer
+   events and makes the swipe-back stop or snap back partway. Rows that
+   scroll sideways (.sc inside .sc) keep normal touch behavior. The second
+   declaration keeps pinch-to-zoom where the pinch-zoom keyword is supported;
+   browsers that don't know it (Safari) use the first. */
+.sc{touch-action:pan-y;touch-action:pan-y pinch-zoom}
+.sc .sc{touch-action:auto}
 *{box-sizing:border-box}
 button,input,textarea{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif}
 /* iOS Safari zooms the viewport on focus when a form control's computed
