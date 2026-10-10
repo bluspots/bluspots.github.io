@@ -883,15 +883,35 @@ export default function App(){
   const [proProfileId,setProProfileId]=useState(null);
   const [proProfileCtx,setProProfileCtx]=useState("view"); // "tracking" | "posted" | "view"
   const msgEnd = useRef(null);
+  // Scroll position per screen (and per tab for the tab roots). Saved at
+  // the moment of navigation by goTo/backFrom/goTab, never from scroll
+  // events: React reuses the same scroll container between screens, and
+  // the browser clamping it mid-swap used to overwrite the saved value.
+  // Back (button or edge swipe) and returning to a tab's remembered screen
+  // restore the saved spot; everything else starts at the top.
   const scrollPositions = useRef({});
-  useEffect(()=>{
-    const el = (typeof document!=="undefined") ? document.querySelector(".sc") : null;
-    if(!el) return;
-    el.scrollTop = scrollPositions.current[scr] ?? 0;
-    const onScroll = () => { scrollPositions.current[scr] = el.scrollTop; };
-    el.addEventListener("scroll", onScroll);
-    return () => el.removeEventListener("scroll", onScroll);
-  },[scr]);
+  const navIntent = useRef(null); // "back" | "restore" | "forward" | "tab"
+  const scrollKey=(s,t)=>s==="home"?`home:${t}`:s;
+  const mainScroller=()=>{
+    if(typeof document==="undefined")return null;
+    for(const el of document.querySelectorAll(".sc")){
+      const oy=getComputedStyle(el).overflowY;
+      if(oy==="auto"||oy==="scroll")return el;
+    }
+    return null;
+  };
+  const rememberScroll=()=>{
+    const el=mainScroller();
+    if(el)scrollPositions.current[scrollKey(scr,tab)]=el.scrollTop;
+  };
+  React.useLayoutEffect(()=>{
+    const intent=navIntent.current;
+    navIntent.current=null;
+    const el=mainScroller();
+    if(!el)return;
+    const restore=intent==="back"||intent==="restore";
+    el.scrollTop=restore?(scrollPositions.current[scrollKey(scr,tab)]??0):0;
+  },[scr,tab]);
 
   const tp          = ALL_TIME_PREFS.find(t=>t.id===tpid);
   const surge       = tp?.surge||0;
@@ -1244,6 +1264,8 @@ export default function App(){
   // v0.13 — the only 3 places setScr may appear: goTo, backFrom, goTab.
   const goTo=(screen,forceOrigin,forTab)=>{
     if(!SCREENS.has(screen)){console.error(`goTo: unknown screen "${screen}" — navigation blocked. Add it to SCREENS first.`);return;}
+    rememberScroll();
+    navIntent.current=navIntent.current||"forward";
     setNavFrom(f=>({...f,[screen]:forceOrigin||{scr,tab}})); // origin recorded automatically, unless explicitly preserved
     if(!TRANSIENT_FLOW_SCREENS.has(screen)){
       setTabScr(ts=>({...ts,[forTab!==undefined?forTab:tab]:screen})); // remember this as the (possibly just-switched-to) tab's last screen
@@ -1261,6 +1283,8 @@ export default function App(){
     return {scr:dest.scr,tab:destTab};
   };
   const backFrom=(screen,fallback={scr:"home",tab:"home"})=>{
+    rememberScroll();
+    navIntent.current="back";
     const dest=peekBackDestination(screen,fallback);
     setTabScr(ts=>{
       const next={...ts};
@@ -1273,6 +1297,8 @@ export default function App(){
     if(dest.scr==="home")setTab(dest.tab);
   };
   const goTab      =t=>{
+    rememberScroll();
+    navIntent.current="tab";
     if(t==="home")setQ("");
     setTabScr(ts=>{
       const next={...ts};
@@ -1285,6 +1311,9 @@ export default function App(){
   const goHome     =()=>goTab("home");
   const goBookings =()=>goTab("bookings");
   const goProfile  =()=>goTab("profile");
+  // Back arrow on Profile's sub-screens: same destination as goProfile,
+  // but it's a Back, so Profile returns to where you were scrolled.
+  const backToProfile=()=>{goTab("profile");navIntent.current="back";};
   // Interactive, reversible edge-swipe back gesture — the current screen
   // visually follows the finger with a live parallax reveal of the
   // destination screen underneath; releasing past the completion rule
@@ -1461,12 +1490,14 @@ export default function App(){
     }
     if(t==="bookings"&&hasDraft){
       const draftScreen=tid?"task":"custom";
+      navIntent.current="restore"; // back to the draft where you left it
       setTab(t);
       goTo(draftScreen,navFrom[draftScreen],t); // preserve the draft's own original back-origin; record under the tab we're switching TO
       return;
     }
     const remembered=tabScr[t];
     if(remembered&&SCREENS.has(remembered)){
+      navIntent.current="restore"; // back to that tab's screen where you left it
       setTab(t);
       goTo(remembered,navFrom[remembered],t);
     }else{
@@ -2373,7 +2404,7 @@ export default function App(){
     </div>
   );
 
-  const subHeader=(title,onBack=goProfile)=>(
+  const subHeader=(title,onBack=backToProfile)=>(
     <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",gap:14}}>
       <button onClick={onBack} style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
       <span style={{fontWeight:700,fontSize:17,color:TX}}>{title}</span>
