@@ -14,8 +14,7 @@
  * - Muted text (TM) below 4.5:1.
  *
  * The same AA check runs in light mode too: amber used as text (prices, "See
- * all") gets a deeper light-mode amber, amber buttons use navy text, the
- * Mastercard badge uses the deeper Urgent orange, and the light muted gray
+ * all") gets a deeper light-mode amber, the Mastercard badge uses the deeper Urgent orange, and the light muted gray
  * (TM) meets 4.5:1.
  *
  * jsdom has no layout engine, so elements on gradient backgrounds and
@@ -195,6 +194,11 @@ function hidden(el) {
   }
   return false;
 }
+// Founder decision (Oct 9): amber buttons keep white text (2.2:1). This is
+// the one accepted exception; everything else must meet AA.
+const FOUNDER_EXCEPTIONS = [
+  (r) => r.fg === '#FFFFFF' && r.bg === '#F59E0B',
+];
 function lowContrast() {
   const out = [];
   for (const el of document.querySelectorAll('body *')) {
@@ -212,7 +216,7 @@ function lowContrast() {
     const weight = parseInt(el.style.fontWeight || '400', 10);
     const large = size >= 24 || (size >= 18.66 && weight >= 700);
     const r = { text: own.slice(0, 40), fg: hex(fg), bg: hex(bg), ratio: Math.round(ratio(fg, bg) * 100) / 100, need: large ? 3 : 4.5 };
-    if (r.ratio < r.need) out.push(r);
+    if (r.ratio < r.need && !FOUNDER_EXCEPTIONS.some(f => f(r))) out.push(r);
   }
   return out;
 }
@@ -289,7 +293,7 @@ function styleOfText(re) {
     assert(/::placeholder\{color:#60707D/i.test(styles), 'light: placeholders use the readable muted gray');
   });
 
-  await step('Light mode: every screen is readable (prices, See all, tabs, badges, amber buttons)', async () => {
+  await step('Light mode: every screen is readable (prices, See all, tabs, badges)', async () => {
     prefersDark = false;
     await mount(false);
     await waitFor(() => /Sign in|Create an account/i.test(bodyText()), 'auth gate (light)');
@@ -315,7 +319,7 @@ function styleOfText(re) {
     checkScreen('Saved addresses');
   });
 
-  await step('Amber buttons use navy text in both modes', async () => {
+  await step('Amber buttons keep white text in both modes (founder choice)', async () => {
     for (const dark of [false, true]) {
       prefersDark = dark;
       await mount(true);
@@ -325,7 +329,7 @@ function styleOfText(re) {
       await waitFor(() => /Save changes/.test(bodyText()), 'edit profile');
       const save = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Save changes');
       assert(save && hex(parseColor(save.style.backgroundColor)) === '#F59E0B', (dark ? 'dark' : 'light') + ': Save changes keeps the amber fill');
-      assert(save && hex(parseColor(save.style.color)) === '#1C2B3A', (dark ? 'dark' : 'light') + ': Save changes text is navy (6.7:1)');
+      assert(save && hex(parseColor(save.style.color)) === '#FFFFFF', (dark ? 'dark' : 'light') + ': Save changes text is white');
     }
   });
 

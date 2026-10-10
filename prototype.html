@@ -2079,7 +2079,7 @@ class ErrorBoundary extends React.Component{
             {this.state.error?.stack&&(
               <pre style={{fontSize:10,color:"#9AAAB6",background:"#F5F2ED",borderRadius:10,padding:12,marginBottom:16,maxHeight:160,overflow:"auto",whiteSpace:"pre-wrap"}}>{this.state.error.stack}</pre>
             )}
-            <button onClick={()=>window.location.reload()} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"#F59E0B",color:"#1C2B3A",fontWeight:800,fontSize:15,cursor:"pointer"}}>Reload</button>
+            <button onClick={()=>window.location.reload()} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"#F59E0B",color:"#fff",fontWeight:800,fontSize:15,cursor:"pointer"}}>Reload</button>
           </div>
         </div>
       );
@@ -3915,7 +3915,7 @@ function App(){
         <div className="sc" style={{overflowX:"auto",padding:"16px 20px 12px",display:"flex",gap:8}}>
           {CATS.map(c=>{
             const a=!catGroup&&cat===c;
-            return <button key={c} onClick={()=>{setCatGroup(null);setCat(c);}} style={{border:"none",borderRadius:20,padding:"8px 16px",fontSize:12,cursor:"pointer",whiteSpace:"nowrap",fontWeight:a?700:500,flexShrink:0,background:a?AM:W,color:a?N:TS,boxShadow:a?`0 2px 8px rgba(245,158,11,.35)`:`0 1px 3px rgba(0,0,0,.07)`}}>{c}</button>;
+            return <button key={c} onClick={()=>{setCatGroup(null);setCat(c);}} style={{border:"none",borderRadius:20,padding:"8px 16px",fontSize:12,cursor:"pointer",whiteSpace:"nowrap",fontWeight:a?700:500,flexShrink:0,background:a?AM:W,color:a?ON:TS,boxShadow:a?`0 2px 8px rgba(245,158,11,.35)`:`0 1px 3px rgba(0,0,0,.07)`}}>{c}</button>;
           })}
         </div>
         <div style={{padding:"4px 20px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -3988,7 +3988,7 @@ function App(){
               <div style={{fontSize:48,marginBottom:12}}>🔍</div>
               <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No exact matches for "{q}"</div>
               <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:260,marginLeft:"auto",marginRight:"auto"}}>Describe what's going on and we'll match you with the right pro.</div>
-              <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:N,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
+              <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:ON,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
               <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:"none",border:"none",color:TS,fontWeight:600,cursor:"pointer",fontSize:13,textDecoration:"underline"}}>Clear filters</button>
             </div>
           )
@@ -4017,7 +4017,7 @@ function App(){
           <div style={{textAlign:"center",padding:"40px 20px"}}>
             <div style={{fontSize:48,marginBottom:12}}>🔍</div>
             <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No services found</div>
-            <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:AM,border:"none",color:N,padding:"10px 20px",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14}}>Clear filters</button>
+            <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:AM,border:"none",color:ON,padding:"10px 20px",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14}}>Clear filters</button>
           </div>
         )}
       </div>
@@ -4065,7 +4065,7 @@ function App(){
                 </div>
                 <div style={{fontWeight:800,fontSize:18,color:AMT}}>${diagResult.task.p}</div>
               </div>
-              <button onClick={bookDiagnosis} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:AM,color:N,fontWeight:800,fontSize:15,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Book this repair →</button>
+              <button onClick={bookDiagnosis} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:AM,color:ON,fontWeight:800,fontSize:15,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Book this repair →</button>
               <button onClick={()=>{setDiagInput("");setDiagResult(null);}} style={{width:"100%",padding:12,borderRadius:16,border:"none",background:"none",color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Try a different description</button>
             </div>
           )}
@@ -4292,7 +4292,7 @@ function App(){
           </div>
           <div style={{display:"flex",gap:8}}>
             <button onClick={()=>setLocationWarningDismissed(true)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"1.5px solid #FDE9CC",background:W,color:"#92400E",fontWeight:700,fontSize:12,cursor:"pointer"}}>Continue</button>
-            <button onClick={()=>{setShowAddressPicker(true);setLocationWarningDismissed(true);}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:"#F59E0B",color:N,fontWeight:700,fontSize:12,cursor:"pointer"}}>Change Address</button>
+            <button onClick={()=>{setShowAddressPicker(true);setLocationWarningDismissed(true);}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:"#F59E0B",color:ON,fontWeight:700,fontSize:12,cursor:"pointer"}}>Change Address</button>
           </div>
         </div>
       )}
@@ -4425,7 +4425,7 @@ function App(){
             style={{width:"100%",minHeight:70,border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.55,outline:"none",padding:0}}/>
           <div style={{fontSize:11,color:TM,textAlign:"right",marginTop:6,paddingTop:6,borderTop:`1px solid ${BD}`}}>{draftBio.length}/150</div>
         </div>
-        <button onClick={saveProfile} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:N,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Save changes</button>
+        <button onClick={saveProfile} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:ON,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Save changes</button>
         <button onClick={goProfile} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
       </div>
     </div>
@@ -4489,7 +4489,7 @@ function App(){
             <div style={{fontSize:36,marginBottom:12}}>🏠</div>
             <div style={{fontWeight:700,fontSize:16,color:TX,marginBottom:6}}>No property saved yet</div>
             <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:240}}>Add a property to see your home overview, service history, and maintenance suggestions.</div>
-            <button onClick={()=>openAddressForm(null)} style={{padding:"13px 24px",borderRadius:14,border:"none",background:AM,color:N,fontWeight:700,fontSize:14,cursor:"pointer"}}>+ Add a property</button>
+            <button onClick={()=>openAddressForm(null)} style={{padding:"13px 24px",borderRadius:14,border:"none",background:AM,color:ON,fontWeight:700,fontSize:14,cursor:"pointer"}}>+ Add a property</button>
           </div>
         </div>
       );
@@ -5402,7 +5402,7 @@ function App(){
               </div>
             </>
           )}
-          <button onClick={saveAddressForm} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:N,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10,marginTop:8}}>Save changes</button>
+          <button onClick={saveAddressForm} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:ON,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10,marginTop:8}}>Save changes</button>
           <button onClick={()=>backFrom("addressEdit",{scr:"myhome",tab:"home"})} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
         </div>
       </div>
@@ -5472,7 +5472,7 @@ function App(){
 
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{setAddingCard(false);setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");}} style={{flex:1,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Cancel</button>
-              <button onClick={addCard} disabled={newCardNum.length<4} style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background:newCardNum.length>=4?AM:"#DDD9D2",color:newCardNum.length>=4?N:ON,fontWeight:700,fontSize:13,cursor:newCardNum.length>=4?"pointer":"default"}}>Add card</button>
+              <button onClick={addCard} disabled={newCardNum.length<4} style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background:newCardNum.length>=4?AM:"#DDD9D2",color:ON,fontWeight:700,fontSize:13,cursor:newCardNum.length>=4?"pointer":"default"}}>Add card</button>
             </div>
           </div>
         ):(
@@ -5567,7 +5567,7 @@ function App(){
         <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:10}}>
           <input value={newJobPrefText} onChange={e=>setNewJobPrefText(e.target.value)} placeholder="e.g. Use the back entrance" maxLength={80}
             style={{flex:1,border:"none",fontSize:14,fontWeight:500,color:TX,background:"transparent",outline:"none",padding:0}}/>
-          <button onClick={()=>{addCustomJobPref(newJobPrefText);setNewJobPrefText("");}} disabled={!newJobPrefText.trim()} style={{padding:"8px 16px",borderRadius:10,border:"none",background:newJobPrefText.trim()?AM:"#DDD9D2",color:newJobPrefText.trim()?N:TM,fontWeight:700,fontSize:13,cursor:newJobPrefText.trim()?"pointer":"default"}}>Add</button>
+          <button onClick={()=>{addCustomJobPref(newJobPrefText);setNewJobPrefText("");}} disabled={!newJobPrefText.trim()} style={{padding:"8px 16px",borderRadius:10,border:"none",background:newJobPrefText.trim()?AM:"#DDD9D2",color:newJobPrefText.trim()?ON:TM,fontWeight:700,fontSize:13,cursor:newJobPrefText.trim()?"pointer":"default"}}>Add</button>
         </div>
         <div style={{fontSize:11,color:TM,lineHeight:1.5,padding:"10px 4px 0"}}>Your assigned pro will be able to see these preferences before starting the job.</div>
       </div>
@@ -5924,7 +5924,7 @@ function App(){
           </div>
         </div>
         <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
-          <button onClick={postJob} disabled={!selectedAddress||effectiveTaskPrice==null} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:(selectedAddress&&effectiveTaskPrice!=null)?AM:"#DDD9D2",color:(selectedAddress&&effectiveTaskPrice!=null)?N:TM,fontWeight:800,fontSize:17,cursor:(selectedAddress&&effectiveTaskPrice!=null)?"pointer":"default",boxShadow:(selectedAddress&&effectiveTaskPrice!=null)?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
+          <button onClick={postJob} disabled={!selectedAddress||effectiveTaskPrice==null} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:(selectedAddress&&effectiveTaskPrice!=null)?AM:"#DDD9D2",color:(selectedAddress&&effectiveTaskPrice!=null)?ON:TM,fontWeight:800,fontSize:17,cursor:(selectedAddress&&effectiveTaskPrice!=null)?"pointer":"default",boxShadow:(selectedAddress&&effectiveTaskPrice!=null)?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
             {!selectedAddress?"Add an address to continue":effectiveTaskPrice==null?"Add property details to continue":`Post Job — $${total}`}
           </button>
         </div>
@@ -5986,7 +5986,7 @@ function App(){
       </div>
       <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
         <button onClick={postJob} disabled={!canPost}
-          style={{width:"100%",padding:18,borderRadius:18,border:"none",background:canPost?AM:"#DDD9D2",color:canPost?N:TM,fontWeight:800,fontSize:17,cursor:canPost?"pointer":"default",boxShadow:canPost?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
+          style={{width:"100%",padding:18,borderRadius:18,border:"none",background:canPost?AM:"#DDD9D2",color:canPost?ON:TM,fontWeight:800,fontSize:17,cursor:canPost?"pointer":"default",boxShadow:canPost?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
           {canPost?`Post Job — $${total}`:!selectedAddress?"Add an address to continue":"Add a title & budget to continue"}
         </button>
       </div>
@@ -6146,7 +6146,7 @@ function App(){
                   </div>
                 </div>
                 <div style={{fontSize:11,color:TS,marginBottom:12,lineHeight:1.5}}>Approving authorizes the purchase only. The receipt later locks the actual total. Haven takes $0 on materials.</div>
-                <button onClick={approveMaterials} style={{width:"100%",padding:13,borderRadius:14,border:"none",background:AM,color:N,fontWeight:800,fontSize:14,cursor:"pointer",marginBottom:8}}>Approve materials</button>
+                <button onClick={approveMaterials} style={{width:"100%",padding:13,borderRadius:14,border:"none",background:AM,color:ON,fontWeight:800,fontSize:14,cursor:"pointer",marginBottom:8}}>Approve materials</button>
                 <button onClick={()=>setShowMaterialsDeclineConfirm(true)} style={{width:"100%",padding:13,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:"#DC2626",fontWeight:800,fontSize:14,cursor:"pointer"}}>Decline and end job</button>
               </div>
             );
@@ -6233,7 +6233,7 @@ function App(){
                     <div style={{margin:"0 20px 24px",background:W,borderRadius:18,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                       <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:6}}>Cancel this job?</div>
                       <div style={{fontSize:12,color:TS,lineHeight:1.5,marginBottom:14}}>A pro has already accepted. Haven Support may need to review timing, work already performed, or applicable fees before this can be cancelled.</div>
-                      <button onClick={()=>setShowCancelRequest(false)} style={{width:"100%",padding:12,borderRadius:12,border:"none",background:AM,color:N,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Continue with job</button>
+                      <button onClick={()=>setShowCancelRequest(false)} style={{width:"100%",padding:12,borderRadius:12,border:"none",background:AM,color:ON,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Continue with job</button>
                       <button onClick={requestCancellation} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Request cancellation</button>
                       <button onClick={()=>{setShowCancelRequest(false);openHelp();}} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:13,cursor:"pointer"}}>Contact Haven Support</button>
                     </div>
@@ -6245,7 +6245,7 @@ function App(){
               return(
                 <div style={{margin:"0 20px 24px"}}>
                   {!vj.rated?(
-                    <button onClick={openRating} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:N,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`,marginBottom:10}}>⭐ Rate {vjPname}</button>
+                    <button onClick={openRating} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:ON,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`,marginBottom:10}}>⭐ Rate {vjPname}</button>
                   ):(
                     <div style={{background:SL,borderRadius:18,padding:16,textAlign:"center",marginBottom:10}}>
                       <div style={{marginBottom:4}}>{starDisplay(vj.stars,22)}</div>
@@ -6359,7 +6359,7 @@ function App(){
                 </div>
               )}
 
-              <button onClick={confirmTip} disabled={!canConfirm} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:canConfirm?AM:"#DDD9D2",color:canConfirm?N:TM,fontWeight:800,fontSize:15,cursor:canConfirm?"pointer":"default",marginBottom:10,boxShadow:canConfirm?"0 6px 20px rgba(245,158,11,.3)":"none"}}>
+              <button onClick={confirmTip} disabled={!canConfirm} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:canConfirm?AM:"#DDD9D2",color:canConfirm?ON:TM,fontWeight:800,fontSize:15,cursor:canConfirm?"pointer":"default",marginBottom:10,boxShadow:canConfirm?"0 6px 20px rgba(245,158,11,.3)":"none"}}>
                 {vj.tipStatus==="processing"?"Processing…":"Confirm Tip"}
               </button>
               <button onClick={()=>backFrom("tip",{scr:"tracking",tab:"bookings"})} style={{width:"100%",padding:14,borderRadius:16,border:"none",background:"transparent",color:TS,fontWeight:600,fontSize:14,cursor:"pointer"}}>Not Now</button>
@@ -6434,7 +6434,7 @@ function App(){
               })}
             </div>
           </div>
-          <button onClick={submitRating} disabled={stars===0} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:stars>0?AM:"#DDD9D2",color:stars>0?N:TM,fontWeight:800,fontSize:17,cursor:stars>0?"pointer":"default",boxShadow:stars>0?`0 6px 20px rgba(245,158,11,.35)`:"none",marginBottom:12}}>
+          <button onClick={submitRating} disabled={stars===0} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:stars>0?AM:"#DDD9D2",color:stars>0?ON:TM,fontWeight:800,fontSize:17,cursor:stars>0?"pointer":"default",boxShadow:stars>0?`0 6px 20px rgba(245,158,11,.35)`:"none",marginBottom:12}}>
             {stars>0?"Submit review":"Select a rating first"}
           </button>
           <button onClick={goHome} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Skip for now</button>
@@ -6651,7 +6651,7 @@ function App(){
               <div style={{background:W,borderRadius:"20px 20px 0 0",padding:24,width:"100%"}}>
                 <div style={{fontWeight:800,fontSize:17,color:TX,marginBottom:6,textAlign:"center"}}>Discard draft?</div>
                 <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:18,textAlign:"center"}}>This booking hasn't been posted yet. Your progress will be lost.</div>
-                <button onClick={()=>setShowDiscardConfirm(false)} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:AM,color:N,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:10}}>Keep Editing</button>
+                <button onClick={()=>setShowDiscardConfirm(false)} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:AM,color:ON,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:10}}>Keep Editing</button>
                 <button onClick={()=>discardDraftAndGo(()=>backFrom(tid?"task":"custom",{scr:"home",tab:"home"}))} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:"#DC2626",fontWeight:700,fontSize:15,cursor:"pointer"}}>Discard Draft</button>
               </div>
             </div>
