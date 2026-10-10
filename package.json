@@ -7,7 +7,7 @@
     "build": "bash build.sh",
     "test": "node audit.test.js && node verification_claims.test.js",
     "boot-check": "node boot_check.js",
-    "verify": "npm run build && npm run boot-check && npm test"
+    "verify": "npm run build && npm run boot-check && npm test && node signout_confirmation.test.js"
   },
   "devDependencies": {
     "@babel/core": "8.0.1",
