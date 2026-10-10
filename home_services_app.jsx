@@ -1939,7 +1939,7 @@ export default function App(){
   // now a fixed flex:1 share (not content-sized), so bold-vs-regular label
   // text never changes a button's width either.
   const bottomNav=()=>(
-    <div style={{background:W,borderTop:`1px solid ${BD}`,paddingTop:10,paddingBottom:20,display:"flex",flexShrink:0}}>
+    <div style={{background:W,borderTop:`1px solid ${BD}`,paddingTop:10,paddingBottom:"max(20px, calc(env(safe-area-inset-bottom) - 14px))",display:"flex",flexShrink:0}}>
       {[["home","🏠","Home"],["bookings","📋","Bookings"],["profile",null,"Profile"]].map(([id,ic,lb])=>{
         const a=tab===id;
         const ariaLabel = id==="profile" ? `Profile${unreadCount>0?`, ${unreadCount} unread notification${unreadCount!==1?"s":""}`:""}` : lb;
@@ -4803,7 +4803,11 @@ export default function App(){
       <style>{`input::placeholder,textarea::placeholder{color:${TM};opacity:1}`}</style>
       <div className="haven-frame-outer" style={{minHeight:"100vh",background:"linear-gradient(155deg,#B8C6D1 0%,#C8BBA8 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"}}>
         <div className="haven-frame-phone" style={{width:390,height:844,background:BG,borderRadius:46,overflow:"hidden",boxShadow:"0 32px 80px rgba(28,43,58,.28),0 0 0 1px rgba(28,43,58,.09)",display:"flex",flexDirection:"column"}}>
-          <div style={{flexShrink:0,paddingTop:"env(safe-area-inset-top)",background:topIsDark?N:W}}/>
+          {/* Behind the iPhone status bar. The home-screen app uses a translucent
+              status bar, which iOS always draws in white, so this strip stays dark:
+              navy in light mode (seamless with the navy Home hero), the app's dark
+              surface in dark mode. */}
+          <div style={{flexShrink:0,paddingTop:"env(safe-area-inset-top)",background:(topIsDark||!isDark)?N:W}}/>
           {(()=>{
             const gestureVW=(typeof window!=="undefined"&&window.innerWidth)?window.innerWidth:390;
             const reducedMotion=prefersReducedMotion();
