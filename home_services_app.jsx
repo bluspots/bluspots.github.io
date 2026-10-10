@@ -215,7 +215,7 @@ class ErrorBoundary extends React.Component{
             {this.state.error?.stack&&(
               <pre style={{fontSize:10,color:"#9AAAB6",background:"#F5F2ED",borderRadius:10,padding:12,marginBottom:16,maxHeight:160,overflow:"auto",whiteSpace:"pre-wrap"}}>{this.state.error.stack}</pre>
             )}
-            <button onClick={()=>window.location.reload()} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"#F59E0B",color:"#fff",fontWeight:800,fontSize:15,cursor:"pointer"}}>Reload</button>
+            <button onClick={()=>window.location.reload()} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:"#F59E0B",color:"#1C2B3A",fontWeight:800,fontSize:15,cursor:"pointer"}}>Reload</button>
           </div>
         </div>
       );
@@ -260,7 +260,7 @@ export default function App(){
   const W  = isDark ? "#1B242E" : "#FFFFFF";
   const TX = isDark ? "#F1EFE9" : "#1C2B3A";
   const TS = isDark ? "#9FB0BC" : "#5A6B78";
-  const TM = isDark ? "#8796A1" : "#9AAAB6";
+  const TM = isDark ? "#8796A1" : "#60707D";
   const BD = isDark ? "#2A3540" : "#E5DED4";
   const SL = isDark ? "#0F2A20" : "#ECFDF5";
   // The restrained "selected/default" light-blue treatment, reused by the
@@ -275,6 +275,9 @@ export default function App(){
   const NT = isDark ? TX : N;
   // DANGER: red text on theme surfaces (Sign Out row).
   const DANGER = isDark ? "#F87171" : "#B42318";
+  // AMT: amber used as text (prices, "See all", Rate now) on theme surfaces.
+  // Bright amber is 2:1 on white, so light mode uses a deeper amber.
+  const AMT = isDark ? AM : "#AD4F08";
   const trustBg=score=>score>=97?SL:score>=90?(isDark?"#3A2E12":"#FEF3C7"):(isDark?"#3A1414":"#FEF2F2");
 
   const [tid,setTid]       = useState(null);
@@ -1980,7 +1983,7 @@ export default function App(){
           <button onClick={()=>goTo("emergency")} style={{font:"inherit",background:isDark?"#3A1A12":"#FFF1EE",border:`1.5px solid ${isDark?"#7C2D12":"#FFD4C7"}`,borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
             <div style={{fontSize:22,marginBottom:6}}>🚨</div>
             <div style={{fontWeight:700,fontSize:13,color:isDark?"#FDBA74":"#C2410C"}}>Urgent</div>
-            <div style={{fontSize:10,color:isDark?"#FDBA74":"#C2410C",opacity:.75,marginTop:1}}>Fast help</div>
+            <div style={{fontSize:10,color:isDark?"#FDBA74":"#C2410C",opacity:isDark?.75:1,marginTop:1}}>Fast help</div>
           </button>
           <button onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
             style={{font:"inherit",background:SELBG,border:`1.5px solid ${SELBORDER}`,borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
@@ -2004,14 +2007,14 @@ export default function App(){
         {/* Popular services rail */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <span style={{fontWeight:700,fontSize:15,color:TX}}>Popular services</span>
-          <span onClick={()=>openBrowse(null,"")} style={{fontSize:12,color:AM,fontWeight:700,cursor:"pointer"}}>See all →</span>
+          <span onClick={()=>openBrowse(null,"")} style={{fontSize:12,color:AMT,fontWeight:700,cursor:"pointer"}}>See all →</span>
         </div>
         <div className="sc" style={{display:"flex",gap:12,overflowX:"auto",marginBottom:4,paddingBottom:4}}>
           {popular.map(t=>(
             <div key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"14px 12px",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)",flexShrink:0,width:120}}>
               <div style={{fontSize:26,marginBottom:8}}>{t.e}</div>
               <div style={{fontWeight:700,fontSize:12,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
-              <div style={{fontWeight:800,fontSize:16,color:AM}}>${t.p}</div>
+              <div style={{fontWeight:800,fontSize:16,color:AMT}}>${t.p}</div>
             </div>
           ))}
         </div>
@@ -2048,7 +2051,7 @@ export default function App(){
         <div className="sc" style={{overflowX:"auto",padding:"16px 20px 12px",display:"flex",gap:8}}>
           {CATS.map(c=>{
             const a=!catGroup&&cat===c;
-            return <button key={c} onClick={()=>{setCatGroup(null);setCat(c);}} style={{border:"none",borderRadius:20,padding:"8px 16px",fontSize:12,cursor:"pointer",whiteSpace:"nowrap",fontWeight:a?700:500,flexShrink:0,background:a?AM:W,color:a?W:TS,boxShadow:a?`0 2px 8px rgba(245,158,11,.35)`:`0 1px 3px rgba(0,0,0,.07)`}}>{c}</button>;
+            return <button key={c} onClick={()=>{setCatGroup(null);setCat(c);}} style={{border:"none",borderRadius:20,padding:"8px 16px",fontSize:12,cursor:"pointer",whiteSpace:"nowrap",fontWeight:a?700:500,flexShrink:0,background:a?AM:W,color:a?N:TS,boxShadow:a?`0 2px 8px rgba(245,158,11,.35)`:`0 1px 3px rgba(0,0,0,.07)`}}>{c}</button>;
           })}
         </div>
         <div style={{padding:"4px 20px 12px",display:"flex",justifyContent:"space-between",alignItems:"center"}}>
@@ -2070,7 +2073,7 @@ export default function App(){
                       <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:2}}>{task.n}</div>
                       <div style={{fontSize:12,color:TS}}>{priceInfo.isEstimate?`Estimate for ${selectedAddress?.label||"your property"}`:`Matched to "${top.label}"`}</div>
                     </div>
-                    <div style={{fontWeight:800,fontSize:priceInfo.isEstimate?15:19,color:AM,flexShrink:0,textAlign:"right"}}>{priceInfo.text}</div>
+                    <div style={{fontWeight:800,fontSize:priceInfo.isEstimate?15:19,color:AMT,flexShrink:0,textAlign:"right"}}>{priceInfo.text}</div>
                   </div>
                 )}
                 <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:0}}>Not what you meant? Post a custom job instead</button>
@@ -2088,7 +2091,7 @@ export default function App(){
                     <div key={m.intentId} onClick={()=>openTask(task.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                       <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{task.e}</div>
                       <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{task.n}</div>
-                      <div style={{fontWeight:800,fontSize:task.propertyScoped?15:20,color:AM}}>{priceInfo}</div>
+                      <div style={{fontWeight:800,fontSize:task.propertyScoped?15:20,color:AMT}}>{priceInfo}</div>
                     </div>
                   );
                 })}
@@ -2121,7 +2124,7 @@ export default function App(){
               <div style={{fontSize:48,marginBottom:12}}>🔍</div>
               <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No exact matches for "{q}"</div>
               <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:260,marginLeft:"auto",marginRight:"auto"}}>Describe what's going on and we'll match you with the right pro.</div>
-              <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:ON,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
+              <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:N,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
               <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:"none",border:"none",color:TS,fontWeight:600,cursor:"pointer",fontSize:13,textDecoration:"underline"}}>Clear filters</button>
             </div>
           )
@@ -2131,10 +2134,10 @@ export default function App(){
               const priceInfo=t.propertyScoped?(()=>{const pr=calculateCleaningPrice(t,selectedAddress);return pr.price==null?"Est. varies":`Est. $${pr.price}`;})():`$${t.p}`;
               return (
               <div key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-                {t.pop&&<span style={{position:"absolute",top:10,right:10,background:isDark?"#3A2E12":"#FEF3C7",color:isDark?"#FBBF24":"#D97706",fontSize:9,fontWeight:800,padding:"2px 7px",borderRadius:10}}>POPULAR</span>}
+                {t.pop&&<span style={{position:"absolute",top:10,right:10,background:isDark?"#3A2E12":"#FEF3C7",color:isDark?"#FBBF24":"#AD4F08",fontSize:9,fontWeight:800,padding:"2px 7px",borderRadius:10}}>POPULAR</span>}
                 <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{t.e}</div>
                 <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
-                <div style={{fontWeight:800,fontSize:t.propertyScoped?15:20,color:AM}}>{priceInfo}</div>
+                <div style={{fontWeight:800,fontSize:t.propertyScoped?15:20,color:AMT}}>{priceInfo}</div>
                 <div style={{fontSize:11,color:TM,marginTop:1}}>est. {formatDurationRange(getExpectedDuration(t.t).estimatedDurationMin,getExpectedDuration(t.t).estimatedDurationMax)}</div>
               </div>
               );
@@ -2150,7 +2153,7 @@ export default function App(){
           <div style={{textAlign:"center",padding:"40px 20px"}}>
             <div style={{fontSize:48,marginBottom:12}}>🔍</div>
             <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No services found</div>
-            <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:AM,border:"none",color:ON,padding:"10px 20px",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14}}>Clear filters</button>
+            <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:AM,border:"none",color:N,padding:"10px 20px",borderRadius:12,fontWeight:600,cursor:"pointer",fontSize:14}}>Clear filters</button>
           </div>
         )}
       </div>
@@ -2196,9 +2199,9 @@ export default function App(){
                   <div style={{fontWeight:700,fontSize:14,color:TX}}>{diagResult.task.n}</div>
                   <div style={{fontSize:12,color:TS,marginTop:1}}>est. {formatDurationRange(getExpectedDuration(diagResult.task.t).estimatedDurationMin,getExpectedDuration(diagResult.task.t).estimatedDurationMax)}</div>
                 </div>
-                <div style={{fontWeight:800,fontSize:18,color:AM}}>${diagResult.task.p}</div>
+                <div style={{fontWeight:800,fontSize:18,color:AMT}}>${diagResult.task.p}</div>
               </div>
-              <button onClick={bookDiagnosis} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:AM,color:ON,fontWeight:800,fontSize:15,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Book this repair →</button>
+              <button onClick={bookDiagnosis} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:AM,color:N,fontWeight:800,fontSize:15,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Book this repair →</button>
               <button onClick={()=>{setDiagInput("");setDiagResult(null);}} style={{width:"100%",padding:12,borderRadius:16,border:"none",background:"none",color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Try a different description</button>
             </div>
           )}
@@ -2274,7 +2277,7 @@ export default function App(){
                     <span style={{fontSize:11,fontWeight:800,color:ON,background:"#DC2626",padding:"2px 8px",borderRadius:10}}>Action needed</span>
                   )}
                 {!isPending&&j.pro&&<span style={{fontSize:12,color:TS}}>Pro: {j.pro.n}</span>}
-                {isDone&&!j.rated&&<span style={{fontSize:12,color:AM,fontWeight:700}}>⭐ Rate now</span>}
+                {isDone&&!j.rated&&<span style={{fontSize:12,color:AMT,fontWeight:700}}>⭐ Rate now</span>}
                 {isDone&&j.rated&&<span style={{fontSize:12,color:SC,fontWeight:600,display:"inline-flex",alignItems:"center",gap:4}}>{starDisplay(j.stars,11)} Reviewed</span>}
               </div>
             </div>
@@ -2425,7 +2428,7 @@ export default function App(){
           </div>
           <div style={{display:"flex",gap:8}}>
             <button onClick={()=>setLocationWarningDismissed(true)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"1.5px solid #FDE9CC",background:W,color:"#92400E",fontWeight:700,fontSize:12,cursor:"pointer"}}>Continue</button>
-            <button onClick={()=>{setShowAddressPicker(true);setLocationWarningDismissed(true);}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:"#F59E0B",color:ON,fontWeight:700,fontSize:12,cursor:"pointer"}}>Change Address</button>
+            <button onClick={()=>{setShowAddressPicker(true);setLocationWarningDismissed(true);}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:"#F59E0B",color:N,fontWeight:700,fontSize:12,cursor:"pointer"}}>Change Address</button>
           </div>
         </div>
       )}
@@ -2503,7 +2506,7 @@ export default function App(){
           <div style={{display:"flex",flexDirection:"column",alignItems:"center",marginBottom:20}}>
             <div style={{width:76,height:76,borderRadius:38,background:p.col,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontWeight:800,fontSize:26,marginBottom:12}}>{p.i}</div>
             <div style={{fontWeight:800,fontSize:19,color:TX,marginBottom:3}}>{p.n}</div>
-            <div style={{color:AM,fontSize:13,fontWeight:600,marginBottom:10}}>{p.s}</div>
+            <div style={{color:AMT,fontSize:13,fontWeight:600,marginBottom:10}}>{p.s}</div>
             {facts.ratingLine&&<div style={{fontSize:12,color:TS}}>{facts.ratingLine}</div>}
           </div>
 
@@ -2558,7 +2561,7 @@ export default function App(){
             style={{width:"100%",minHeight:70,border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.55,outline:"none",padding:0}}/>
           <div style={{fontSize:11,color:TM,textAlign:"right",marginTop:6,paddingTop:6,borderTop:`1px solid ${BD}`}}>{draftBio.length}/150</div>
         </div>
-        <button onClick={saveProfile} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:ON,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Save changes</button>
+        <button onClick={saveProfile} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:N,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10}}>Save changes</button>
         <button onClick={goProfile} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
       </div>
     </div>
@@ -2622,7 +2625,7 @@ export default function App(){
             <div style={{fontSize:36,marginBottom:12}}>🏠</div>
             <div style={{fontWeight:700,fontSize:16,color:TX,marginBottom:6}}>No property saved yet</div>
             <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:240}}>Add a property to see your home overview, service history, and maintenance suggestions.</div>
-            <button onClick={()=>openAddressForm(null)} style={{padding:"13px 24px",borderRadius:14,border:"none",background:AM,color:ON,fontWeight:700,fontSize:14,cursor:"pointer"}}>+ Add a property</button>
+            <button onClick={()=>openAddressForm(null)} style={{padding:"13px 24px",borderRadius:14,border:"none",background:AM,color:N,fontWeight:700,fontSize:14,cursor:"pointer"}}>+ Add a property</button>
           </div>
         </div>
       );
@@ -2758,7 +2761,7 @@ export default function App(){
                       <div style={{fontSize:12,color:TS,marginTop:1}}>{dateStr} · {proShownForJob(j).n}</div>
                     </div>
                     <div style={{textAlign:"right"}}>
-                      <div style={{fontWeight:800,fontSize:15,color:AM}}>${jTotal}</div>
+                      <div style={{fontWeight:800,fontSize:15,color:AMT}}>${jTotal}</div>
                       <span style={{fontSize:10,fontWeight:700,color:SC,background:SL,padding:"2px 8px",borderRadius:8}}>Completed</span>
                     </div>
                   </div>
@@ -2845,7 +2848,7 @@ export default function App(){
                   <div style={{fontSize:11,color:TS,marginTop:1}}>{dateStr} · {proShownForJob(j).n}</div>
                 </div>
                 <div style={{textAlign:"right",flexShrink:0}}>
-                  <div style={{fontWeight:800,fontSize:14,color:AM}}>${jTotal}</div>
+                  <div style={{fontWeight:800,fontSize:14,color:AMT}}>${jTotal}</div>
                   {j.rated&&starDisplay(j.stars,11)}
                 </div>
               </div>
@@ -2912,7 +2915,7 @@ export default function App(){
                   <div style={{fontWeight:700,fontSize:14,color:TX}}>{jt?.n||"Custom job"}</div>
                   <div style={{fontSize:12,color:TS,marginTop:1}}>{dateStr} · {proShownForJob(j).n}</div>
                 </div>
-                {jReceipt&&<div style={{fontWeight:800,fontSize:15,color:AM}}>{receiptMoney(jReceipt.totalCents)}</div>}
+                {jReceipt&&<div style={{fontWeight:800,fontSize:15,color:AMT}}>{receiptMoney(jReceipt.totalCents)}</div>}
               </div>
               <div style={{display:"flex",gap:8}}>
                 <button onClick={()=>openReceipt(j.id)} style={{flex:1,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:12,cursor:"pointer"}}>View Receipt</button>
@@ -3535,7 +3538,7 @@ export default function App(){
               </div>
             </>
           )}
-          <button onClick={saveAddressForm} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:ON,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10,marginTop:8}}>Save changes</button>
+          <button onClick={saveAddressForm} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:N,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10,marginTop:8}}>Save changes</button>
           <button onClick={()=>backFrom("addressEdit",{scr:"myhome",tab:"home"})} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
         </div>
       </div>
@@ -3543,7 +3546,7 @@ export default function App(){
   };
 
   // ── PAYMENT METHODS ───────────────────────────────────────────────────────
-  const cardColors={Visa:N,Mastercard:"#EA580C",Card:"#5B21B6"};
+  const cardColors={Visa:N,Mastercard:"#C2410C",Card:"#5B21B6"};
   const paymentScreen=()=>(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       {subHeader("Payment methods",()=>backFrom("payment",{scr:"home",tab:"profile"}))}
@@ -3605,7 +3608,7 @@ export default function App(){
 
             <div style={{display:"flex",gap:8}}>
               <button onClick={()=>{setAddingCard(false);setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");}} style={{flex:1,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Cancel</button>
-              <button onClick={addCard} disabled={newCardNum.length<4} style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background:newCardNum.length>=4?AM:"#DDD9D2",color:ON,fontWeight:700,fontSize:13,cursor:newCardNum.length>=4?"pointer":"default"}}>Add card</button>
+              <button onClick={addCard} disabled={newCardNum.length<4} style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background:newCardNum.length>=4?AM:"#DDD9D2",color:newCardNum.length>=4?N:ON,fontWeight:700,fontSize:13,cursor:newCardNum.length>=4?"pointer":"default"}}>Add card</button>
             </div>
           </div>
         ):(
@@ -3700,7 +3703,7 @@ export default function App(){
         <div style={{background:W,borderRadius:18,padding:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:10}}>
           <input value={newJobPrefText} onChange={e=>setNewJobPrefText(e.target.value)} placeholder="e.g. Use the back entrance" maxLength={80}
             style={{flex:1,border:"none",fontSize:14,fontWeight:500,color:TX,background:"transparent",outline:"none",padding:0}}/>
-          <button onClick={()=>{addCustomJobPref(newJobPrefText);setNewJobPrefText("");}} disabled={!newJobPrefText.trim()} style={{padding:"8px 16px",borderRadius:10,border:"none",background:newJobPrefText.trim()?AM:"#DDD9D2",color:newJobPrefText.trim()?W:TM,fontWeight:700,fontSize:13,cursor:newJobPrefText.trim()?"pointer":"default"}}>Add</button>
+          <button onClick={()=>{addCustomJobPref(newJobPrefText);setNewJobPrefText("");}} disabled={!newJobPrefText.trim()} style={{padding:"8px 16px",borderRadius:10,border:"none",background:newJobPrefText.trim()?AM:"#DDD9D2",color:newJobPrefText.trim()?N:TM,fontWeight:700,fontSize:13,cursor:newJobPrefText.trim()?"pointer":"default"}}>Add</button>
         </div>
         <div style={{fontSize:11,color:TM,lineHeight:1.5,padding:"10px 4px 0"}}>Your assigned pro will be able to see these preferences before starting the job.</div>
       </div>
@@ -4057,7 +4060,7 @@ export default function App(){
           </div>
         </div>
         <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
-          <button onClick={postJob} disabled={!selectedAddress||effectiveTaskPrice==null} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:(selectedAddress&&effectiveTaskPrice!=null)?AM:"#DDD9D2",color:(selectedAddress&&effectiveTaskPrice!=null)?W:TM,fontWeight:800,fontSize:17,cursor:(selectedAddress&&effectiveTaskPrice!=null)?"pointer":"default",boxShadow:(selectedAddress&&effectiveTaskPrice!=null)?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
+          <button onClick={postJob} disabled={!selectedAddress||effectiveTaskPrice==null} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:(selectedAddress&&effectiveTaskPrice!=null)?AM:"#DDD9D2",color:(selectedAddress&&effectiveTaskPrice!=null)?N:TM,fontWeight:800,fontSize:17,cursor:(selectedAddress&&effectiveTaskPrice!=null)?"pointer":"default",boxShadow:(selectedAddress&&effectiveTaskPrice!=null)?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
             {!selectedAddress?"Add an address to continue":effectiveTaskPrice==null?"Add property details to continue":`Post Job — $${total}`}
           </button>
         </div>
@@ -4094,7 +4097,7 @@ export default function App(){
           <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Your budget</div>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
-              <span style={{fontSize:20,fontWeight:700,color:AM}}>$</span>
+              <span style={{fontSize:20,fontWeight:700,color:AMT}}>$</span>
               <input type="number" value={cprice} onChange={e=>setCprice(e.target.value)} placeholder="0"
                 style={{border:"none",fontSize:20,fontWeight:700,color:TX,background:"transparent",outline:"none",width:"100%",padding:0}}/>
             </div>
@@ -4119,7 +4122,7 @@ export default function App(){
       </div>
       <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
         <button onClick={postJob} disabled={!canPost}
-          style={{width:"100%",padding:18,borderRadius:18,border:"none",background:canPost?AM:"#DDD9D2",color:canPost?W:TM,fontWeight:800,fontSize:17,cursor:canPost?"pointer":"default",boxShadow:canPost?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
+          style={{width:"100%",padding:18,borderRadius:18,border:"none",background:canPost?AM:"#DDD9D2",color:canPost?N:TM,fontWeight:800,fontSize:17,cursor:canPost?"pointer":"default",boxShadow:canPost?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
           {canPost?`Post Job — $${total}`:!selectedAddress?"Add an address to continue":"Add a title & budget to continue"}
         </button>
       </div>
@@ -4147,7 +4150,7 @@ export default function App(){
           <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{display:"flex",gap:14,alignItems:"center",paddingBottom:14,marginBottom:14,borderBottom:`1px solid ${BD}`}}>
               <div style={{width:52,height:52,borderRadius:26,background:"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0}}>{vjTask?vjTask.e:"🔧"}</div>
-              <div><div style={{fontWeight:700,fontSize:16,color:TX}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontWeight:800,fontSize:20,color:AM,marginTop:2}}>${vjTotal}</div></div>
+              <div><div style={{fontWeight:700,fontSize:16,color:TX}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontWeight:800,fontSize:20,color:AMT,marginTop:2}}>${vjTotal}</div></div>
             </div>
             {[["When",vjTp?vjTp.label:"—"],["Window",vjTp?vjTp.sub:"—"],["Photos",vj.photos?.length>0?`${vj.photos.length} added`:"None"]].map(([l,v])=>(
               <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:TX}}>{v}</span></div>
@@ -4275,11 +4278,11 @@ export default function App(){
                   ))}
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"12px 12px",borderTop:`1px solid ${BD}`,background:W}}>
                     <div style={{fontSize:12,color:TM,fontWeight:700}}>Estimated total</div>
-                    <div style={{fontSize:16,fontWeight:900,color:AM}}>${estTotal.toFixed(2)}</div>
+                    <div style={{fontSize:16,fontWeight:900,color:AMT}}>${estTotal.toFixed(2)}</div>
                   </div>
                 </div>
                 <div style={{fontSize:11,color:TS,marginBottom:12,lineHeight:1.5}}>Approving authorizes the purchase only. The receipt later locks the actual total. Haven takes $0 on materials.</div>
-                <button onClick={approveMaterials} style={{width:"100%",padding:13,borderRadius:14,border:"none",background:AM,color:ON,fontWeight:800,fontSize:14,cursor:"pointer",marginBottom:8}}>Approve materials</button>
+                <button onClick={approveMaterials} style={{width:"100%",padding:13,borderRadius:14,border:"none",background:AM,color:N,fontWeight:800,fontSize:14,cursor:"pointer",marginBottom:8}}>Approve materials</button>
                 <button onClick={()=>setShowMaterialsDeclineConfirm(true)} style={{width:"100%",padding:13,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:"#DC2626",fontWeight:800,fontSize:14,cursor:"pointer"}}>Decline and end job</button>
               </div>
             );
@@ -4325,7 +4328,7 @@ export default function App(){
               <div style={{width:50,height:50,borderRadius:25,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontWeight:800,fontSize:16,flexShrink:0}}>{vjPro.i}</div>
               <div style={{flex:1}}>
                 <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjPro.n}</div>
-                <div style={{color:AM,fontSize:12,fontWeight:600,marginBottom:6}}>{vjPro.s}</div>
+                <div style={{color:AMT,fontSize:12,fontWeight:600,marginBottom:6}}>{vjPro.s}</div>
                 {typeof vjPro.trustScore==="number"&&trustLine(vjPro)}
                 {typeof vjPro.r==="number"&&<div style={{fontSize:11,color:TM,marginTop:4}}>⭐ {vjPro.r} · {vjPro.j} jobs</div>}
               </div>
@@ -4343,7 +4346,7 @@ export default function App(){
             {[["Service",vjTask?vjTask.n:"Custom job"],["Time",vjTp?vjTp.label:"—"],["Photos",vj.photos?.length>0?`${vj.photos.length} shared`:"None"],
               ...(vjReceipt&&vjReceipt.priorityFeeCents>0?[["Emergency fee",`+${receiptMoney(vjReceipt.priorityFeeCents)}`]]:[]),
               ...(vjReceipt?[["Total",receiptMoney(vjReceipt.totalCents)]]:[])].map(([l,v])=>(
-              <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:l==="Total"?AM:TX}}>{v}</span></div>
+              <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:l==="Total"?AMT:TX}}>{v}</span></div>
             ))}
             {!vjReceipt&&<div style={{fontSize:13,color:TS,marginBottom:9}}>Total not available yet</div>}
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div></div>}
@@ -4366,7 +4369,7 @@ export default function App(){
                     <div style={{margin:"0 20px 24px",background:W,borderRadius:18,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                       <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:6}}>Cancel this job?</div>
                       <div style={{fontSize:12,color:TS,lineHeight:1.5,marginBottom:14}}>A pro has already accepted. Haven Support may need to review timing, work already performed, or applicable fees before this can be cancelled.</div>
-                      <button onClick={()=>setShowCancelRequest(false)} style={{width:"100%",padding:12,borderRadius:12,border:"none",background:AM,color:ON,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Continue with job</button>
+                      <button onClick={()=>setShowCancelRequest(false)} style={{width:"100%",padding:12,borderRadius:12,border:"none",background:AM,color:N,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Continue with job</button>
                       <button onClick={requestCancellation} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Request cancellation</button>
                       <button onClick={()=>{setShowCancelRequest(false);openHelp();}} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:13,cursor:"pointer"}}>Contact Haven Support</button>
                     </div>
@@ -4378,7 +4381,7 @@ export default function App(){
               return(
                 <div style={{margin:"0 20px 24px"}}>
                   {!vj.rated?(
-                    <button onClick={openRating} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:ON,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`,marginBottom:10}}>⭐ Rate {vjPname}</button>
+                    <button onClick={openRating} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:N,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.35)`,marginBottom:10}}>⭐ Rate {vjPname}</button>
                   ):(
                     <div style={{background:SL,borderRadius:18,padding:16,textAlign:"center",marginBottom:10}}>
                       <div style={{marginBottom:4}}>{starDisplay(vj.stars,22)}</div>
@@ -4492,7 +4495,7 @@ export default function App(){
                 </div>
               )}
 
-              <button onClick={confirmTip} disabled={!canConfirm} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:canConfirm?AM:"#DDD9D2",color:canConfirm?W:TM,fontWeight:800,fontSize:15,cursor:canConfirm?"pointer":"default",marginBottom:10,boxShadow:canConfirm?"0 6px 20px rgba(245,158,11,.3)":"none"}}>
+              <button onClick={confirmTip} disabled={!canConfirm} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:canConfirm?AM:"#DDD9D2",color:canConfirm?N:TM,fontWeight:800,fontSize:15,cursor:canConfirm?"pointer":"default",marginBottom:10,boxShadow:canConfirm?"0 6px 20px rgba(245,158,11,.3)":"none"}}>
                 {vj.tipStatus==="processing"?"Processing…":"Confirm Tip"}
               </button>
               <button onClick={()=>backFrom("tip",{scr:"tracking",tab:"bookings"})} style={{width:"100%",padding:14,borderRadius:16,border:"none",background:"transparent",color:TS,fontWeight:600,fontSize:14,cursor:"pointer"}}>Not Now</button>
@@ -4547,7 +4550,7 @@ export default function App(){
                 );
               })}
             </div>
-            {stars>0&&<div style={{fontWeight:700,fontSize:17,color:AM}}>{stars}★ · {STAR_LABELS[Math.round(stars)]||STAR_LABELS[Math.ceil(stars)]}</div>}
+            {stars>0&&<div style={{fontWeight:700,fontSize:17,color:AMT}}>{stars}★ · {STAR_LABELS[Math.round(stars)]||STAR_LABELS[Math.ceil(stars)]}</div>}
           </div>
           <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Leave a review (optional)</div>
@@ -4567,7 +4570,7 @@ export default function App(){
               })}
             </div>
           </div>
-          <button onClick={submitRating} disabled={stars===0} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:stars>0?AM:"#DDD9D2",color:stars>0?W:TM,fontWeight:800,fontSize:17,cursor:stars>0?"pointer":"default",boxShadow:stars>0?`0 6px 20px rgba(245,158,11,.35)`:"none",marginBottom:12}}>
+          <button onClick={submitRating} disabled={stars===0} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:stars>0?AM:"#DDD9D2",color:stars>0?N:TM,fontWeight:800,fontSize:17,cursor:stars>0?"pointer":"default",boxShadow:stars>0?`0 6px 20px rgba(245,158,11,.35)`:"none",marginBottom:12}}>
             {stars>0?"Submit review":"Select a rating first"}
           </button>
           <button onClick={goHome} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Skip for now</button>
@@ -4745,7 +4748,7 @@ export default function App(){
   return(
     <>
       <style>{CSS}</style>
-      {isDark&&<style>{`input::placeholder,textarea::placeholder{color:${TM};opacity:1}`}</style>}
+      <style>{`input::placeholder,textarea::placeholder{color:${TM};opacity:1}`}</style>
       <div className="haven-frame-outer" style={{minHeight:"100vh",background:"linear-gradient(155deg,#B8C6D1 0%,#C8BBA8 100%)",display:"flex",alignItems:"center",justifyContent:"center",padding:20,fontFamily:"-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif"}}>
         <div className="haven-frame-phone" style={{width:390,height:844,background:BG,borderRadius:46,overflow:"hidden",boxShadow:"0 32px 80px rgba(28,43,58,.28),0 0 0 1px rgba(28,43,58,.09)",display:"flex",flexDirection:"column"}}>
           <div style={{flexShrink:0,paddingTop:"env(safe-area-inset-top)",background:topIsDark?N:W}}/>
@@ -4784,7 +4787,7 @@ export default function App(){
               <div style={{background:W,borderRadius:"20px 20px 0 0",padding:24,width:"100%"}}>
                 <div style={{fontWeight:800,fontSize:17,color:TX,marginBottom:6,textAlign:"center"}}>Discard draft?</div>
                 <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:18,textAlign:"center"}}>This booking hasn't been posted yet. Your progress will be lost.</div>
-                <button onClick={()=>setShowDiscardConfirm(false)} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:AM,color:ON,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:10}}>Keep Editing</button>
+                <button onClick={()=>setShowDiscardConfirm(false)} style={{width:"100%",padding:14,borderRadius:14,border:"none",background:AM,color:N,fontWeight:800,fontSize:15,cursor:"pointer",marginBottom:10}}>Keep Editing</button>
                 <button onClick={()=>discardDraftAndGo(()=>backFrom(tid?"task":"custom",{scr:"home",tab:"home"}))} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:"#DC2626",fontWeight:700,fontSize:15,cursor:"pointer"}}>Discard Draft</button>
               </div>
             </div>

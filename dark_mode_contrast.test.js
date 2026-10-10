@@ -13,12 +13,14 @@
  * - Fixed light-blue selected cards keeping light text in dark mode.
  * - Muted text (TM) below 4.5:1.
  *
- * Also checks that light mode is unchanged for the tokens this fix touches.
+ * The same AA check runs in light mode too: amber used as text (prices, "See
+ * all") gets a deeper light-mode amber, amber buttons use navy text, the
+ * Mastercard badge uses the deeper Urgent orange, and the light muted gray
+ * (TM) meets 4.5:1.
  *
  * jsdom has no layout engine, so elements on gradient backgrounds and
  * disabled controls are skipped; the headless-Chromium audit in the PR covers
- * those. Known brand-color exceptions shared with light mode are listed in
- * KNOWN_EXCEPTIONS and are product decisions, not dark-mode regressions.
+ * those.
  */
 const { JSDOM } = require('jsdom');
 global.IS_REACT_ACT_ENVIRONMENT = true;
@@ -173,7 +175,7 @@ function bgOf(el) {
     const c = parseColor(s.backgroundColor) || parseColor((s.background || '').trim());
     if (c && c.a > 0) { stack.push(c); if (c.a >= 1) break; }
   }
-  let bg = { r: 16, g: 22, b: 29, a: 1 }; // fall back to the dark page BG
+  let bg = prefersDark ? { r: 16, g: 22, b: 29, a: 1 } : { r: 245, g: 242, b: 237, a: 1 }; // page BG
   for (let i = stack.length - 1; i >= 0; i--) bg = over(stack[i], bg);
   return bg;
 }
@@ -193,12 +195,6 @@ function hidden(el) {
   }
   return false;
 }
-// Brand colors identical in light mode (white on amber buttons, orange
-// Mastercard badge). Flagged to the founder; not dark-mode regressions.
-const KNOWN_EXCEPTIONS = [
-  (r) => r.bg === '#F59E0B' && r.fg === '#FFFFFF',
-  (r) => r.bg === '#EA580C' && r.fg === '#FFFFFF',
-];
 function lowContrast() {
   const out = [];
   for (const el of document.querySelectorAll('body *')) {
@@ -216,13 +212,13 @@ function lowContrast() {
     const weight = parseInt(el.style.fontWeight || '400', 10);
     const large = size >= 24 || (size >= 18.66 && weight >= 700);
     const r = { text: own.slice(0, 40), fg: hex(fg), bg: hex(bg), ratio: Math.round(ratio(fg, bg) * 100) / 100, need: large ? 3 : 4.5 };
-    if (r.ratio < r.need && !KNOWN_EXCEPTIONS.some(f => f(r))) out.push(r);
+    if (r.ratio < r.need) out.push(r);
   }
   return out;
 }
 function checkScreen(name) {
   const bad = lowContrast();
-  assert(bad.length === 0, `${name}: every text element meets AA in dark mode` +
+  assert(bad.length === 0, `${name}: every text element meets AA in ${prefersDark ? 'dark' : 'light'} mode` +
     (bad.length ? ' — failing: ' + bad.slice(0, 8).map(b => `"${b.text}" ${b.fg} on ${b.bg} (${b.ratio}:1)`).join('; ') : ''));
 }
 function styleOfText(re) {
@@ -290,10 +286,50 @@ function styleOfText(re) {
     const so = styleOfText(/^Sign Out$/);
     assert(so && hex(parseColor(so.color)) === '#B42318', 'light: Sign Out row keeps #B42318');
     const styles = Array.from(document.querySelectorAll('style')).map(s => s.textContent).join('\n');
-    assert(!/::placeholder/.test(styles), 'light: no placeholder override (browser default kept)');
+    assert(/::placeholder\{color:#60707D/i.test(styles), 'light: placeholders use the readable muted gray');
+  });
+
+  await step('Light mode: every screen is readable (prices, See all, tabs, badges, amber buttons)', async () => {
+    prefersDark = false;
+    await mount(false);
+    await waitFor(() => /Sign in|Create an account/i.test(bodyText()), 'auth gate (light)');
+    checkScreen('Signed-out gate');
+    await mount(true);
+    await waitFor(() => /What do you/.test(bodyText()), 'home (light)');
+    checkScreen('Home');
+    await clickText(/^Profile$/, 'Profile tab');
+    await waitFor(() => /Payment Methods/.test(bodyText()), 'profile (light)');
+    checkScreen('Profile');
+    await clickText(/^Settings$/, 'Settings row');
+    await waitFor(() => /Signed in/.test(bodyText()), 'settings (light)');
+    checkScreen('Settings');
+    await clickText(/^Profile$/, 'Profile tab');
+    await clickText(/^Payment Methods$/, 'Payment Methods');
+    await waitFor(() => /Add payment method/.test(bodyText()), 'payment methods (light)');
+    checkScreen('Payment methods');
+    const mast = lastByText(/^MAST$/);
+    assert(mast && hex(parseColor(mast.style.backgroundColor)) === '#C2410C', 'Mastercard badge uses the deeper orange');
+    await clickText(/^Profile$/, 'Profile tab');
+    await clickText(/^Saved Addresses$/, 'Saved Addresses');
+    await waitFor(() => /Add address/.test(bodyText()), 'saved addresses (light)');
+    checkScreen('Saved addresses');
+  });
+
+  await step('Amber buttons use navy text in both modes', async () => {
+    for (const dark of [false, true]) {
+      prefersDark = dark;
+      await mount(true);
+      await waitFor(() => /What do you/.test(bodyText()), 'home');
+      await clickText(/^Profile$/, 'Profile tab');
+      await clickText(/^Edit ›$/, 'Edit profile');
+      await waitFor(() => /Save changes/.test(bodyText()), 'edit profile');
+      const save = Array.from(document.querySelectorAll('button')).find(b => (b.textContent || '').trim() === 'Save changes');
+      assert(save && hex(parseColor(save.style.backgroundColor)) === '#F59E0B', (dark ? 'dark' : 'light') + ': Save changes keeps the amber fill');
+      assert(save && hex(parseColor(save.style.color)) === '#1C2B3A', (dark ? 'dark' : 'light') + ': Save changes text is navy (6.7:1)');
+    }
   });
 
   cleanup();
-  console.log(`--- Dark-mode contrast: ${pass} passing, ${fail} failing ---`);
+  console.log(`--- Contrast (dark + light): ${pass} passing, ${fail} failing ---`);
   process.exit(fail ? 1 : 0);
 })();
