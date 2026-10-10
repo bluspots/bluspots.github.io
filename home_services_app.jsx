@@ -728,15 +728,36 @@ export default function App(){
     else if(result.needsEmailConfirm) setAuthNotice("Account created as customer. Confirm the email, then sign in.");
     else { setAuthPasswordInput(""); setAuthNotice("Signed in."); }
   };
+  // Sign Out (Profile row and Settings button) asks first. Cancel changes
+  // nothing; confirming runs the existing sign-out flow exactly once.
+  const [showSignOutConfirm,setShowSignOutConfirm]=useState(false);
+  const signOutInFlight=useRef(false);
   const submitHavenSignOut=async()=>{
     if(authBusy || !havenAuth) return;
+    setShowSignOutConfirm(true);
+  };
+  const cancelHavenSignOut=()=>{
+    if(signOutInFlight.current) return;
+    setShowSignOutConfirm(false);
+  };
+  const performHavenSignOut=async()=>{
+    if(signOutInFlight.current || authBusy || !havenAuth) return;
+    signOutInFlight.current=true;
     setAuthBusy(true);
-    await havenSignOut();
-    setHavenAuth(null);
-    setHavenProfileDisplayName("");
-    clearQaTester();
-    setAuthNotice("Signed out.");
-    setAuthBusy(false);
+    try{
+      await havenSignOut();
+      setHavenAuth(null);
+      setHavenProfileDisplayName("");
+      clearQaTester();
+      setAuthNotice("Signed out.");
+    }catch(err){
+      console.warn("Haven sign-out failed:", err);
+      setAuthNotice("Couldn't sign out. Please try again.");
+    }finally{
+      setAuthBusy(false);
+      setShowSignOutConfirm(false);
+      signOutInFlight.current=false;
+    }
   };
   const [draftName,setDraftName] = useState("");
   const [draftBio,setDraftBio]   = useState("");
@@ -4782,6 +4803,16 @@ export default function App(){
             );
           })()}
           {havenSignedIn && bottomNav()}
+          {showSignOutConfirm&&havenAuth&&(
+            <div onClick={cancelHavenSignOut} style={{position:"absolute",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:30}}>
+              <div role="dialog" aria-modal="true" aria-labelledby="haven-signout-title" onClick={e=>e.stopPropagation()} onKeyDown={e=>{if(e.key==="Escape")cancelHavenSignOut();}} style={{background:W,borderRadius:"20px 20px 0 0",padding:24,width:"100%",paddingBottom:"max(24px, env(safe-area-inset-bottom))"}}>
+                <div id="haven-signout-title" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:6,textAlign:"center"}}>Sign out of Haven?</div>
+                <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:18,textAlign:"center"}}>You'll need to sign in again to book and track jobs.</div>
+                <button type="button" onClick={()=>{void performHavenSignOut();}} disabled={authBusy} style={{width:"100%",padding:15,borderRadius:14,border:"none",background:authBusy?"#DDD9D2":"#B42318",color:"#FFFFFF",fontWeight:800,fontSize:15,cursor:authBusy?"default":"pointer",marginBottom:10}}>{authBusy?"Signing out…":"Sign out"}</button>
+                <button type="button" autoFocus onClick={cancelHavenSignOut} disabled={authBusy} style={{width:"100%",padding:14,borderRadius:14,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:14,cursor:authBusy?"default":"pointer"}}>Cancel</button>
+              </div>
+            </div>
+          )}
           {showDiscardConfirm&&(
             <div style={{position:"absolute",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:10}}>
               <div style={{background:W,borderRadius:"20px 20px 0 0",padding:24,width:"100%"}}>
