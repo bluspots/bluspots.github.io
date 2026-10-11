@@ -4014,7 +4014,7 @@ export default function App(){
             </div>
             <span style={{color:TM,fontSize:18}}>›</span>
           </a>
-          <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>setShowSupportChat(true)} style={{background:W,borderRadius:18,padding:16,marginBottom:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
+          <div onClick={()=>setShowSupportChat(true)} style={{background:W,borderRadius:18,padding:16,marginBottom:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
             <span style={{fontSize:22}}>💬</span>
             <div style={{flex:1}}><div style={{fontWeight:700,fontSize:14,color:TX}}>Chat with support</div><div style={{fontSize:12,color:TS,marginTop:2}}>Avg. response time: 3 minutes</div></div>
             <span style={{color:TM,fontSize:18}}>›</span>
