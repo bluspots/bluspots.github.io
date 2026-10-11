@@ -7,7 +7,7 @@
     "build": "bash build.sh",
     "test": "node audit.test.js && node verification_claims.test.js && node dark_mode_contrast.test.js",
     "boot-check": "node boot_check.js",
-    "verify": "npm run build && npm run boot-check && npm test && node signout_confirmation.test.js && node scroll_restore.test.js && node edge_swipe_touch.test.js && node fullscreen_layout.test.js && node profile_name.test.js"
+    "verify": "npm run build && npm run boot-check && npm test && node signout_confirmation.test.js && node scroll_restore.test.js && node edge_swipe_touch.test.js && node fullscreen_layout.test.js && node tappable_a11y.test.js && node profile_name.test.js"
   },
   "devDependencies": {
     "@babel/core": "8.0.1",
