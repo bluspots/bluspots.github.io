@@ -6443,13 +6443,31 @@ function App(){
       </div>
     );
   };
+  // Star value (0.5 steps) under an x position on the stars row: the left
+  // half of a star is a half star. null when the row has no layout (tests).
+  const starValueAt=(row,clientX)=>{
+    const kids=Array.from(row.children);
+    for(let i=0;i<kids.length;i++){
+      const r=kids[i].getBoundingClientRect();
+      if(!r.width) return null;
+      if(clientX<=r.right) return i+(clientX<r.left+r.width/2?0.5:1);
+    }
+    return kids.length?5:null;
+  };
+  // Keyboard / VoiceOver: arrows change the rating by half a star.
+  const onStarKey=e=>{
+    const step={ArrowRight:0.5,ArrowUp:0.5,ArrowLeft:-0.5,ArrowDown:-0.5}[e.key];
+    if(step!=null){ e.preventDefault(); setStars(v=>Math.max(0.5,Math.min(5,(v||0)+step))); }
+    else if(e.key==="Home"){ e.preventDefault(); setStars(0.5); }
+    else if(e.key==="End"){ e.preventDefault(); setStars(5); }
+  };
   const ratingScreen=()=>{
     if(!vj) return unavailableScreen("Rate your experience",goBookings);
     const HIRE=[["yes","Yes, definitely! 👍"],["maybe","Maybe"],["no","No"]];
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
-          <button onClick={()=>goTo("tracking")} style={{background:"none",border:"none",color:NT,fontSize:14,fontWeight:700,cursor:"pointer",padding:0}}>← Back</button>
+          <button onClick={()=>backFrom("rating",{scr:"tracking",tab:"bookings"})} style={{background:"none",border:"none",color:NT,fontSize:14,fontWeight:700,cursor:"pointer",padding:0}}>← Back</button>
         </div>
         <div className="sc" style={{flex:1,overflowY:"auto",padding:"28px 22px"}}>
           <div style={{textAlign:"center",marginBottom:28}}>
@@ -6461,8 +6479,25 @@ function App(){
             <div style={{fontSize:13,fontWeight:600,color:TS,marginBottom:14}}>How was your experience?</div>
             <div
               data-no-edge-swipe
-              onPointerDown={()=>setStarDragging(true)}
+              role="slider"
+              tabIndex={0}
+              aria-label="Your rating"
+              aria-valuemin={0.5}
+              aria-valuemax={5}
+              aria-valuenow={stars||undefined}
+              aria-valuetext={stars>0?`${stars} star${stars===1?"":"s"}, ${STAR_LABELS[Math.round(stars)]||STAR_LABELS[Math.ceil(stars)]}`:"Not rated"}
+              onKeyDown={onStarKey}
+              onPointerDown={e=>{
+                // Follow the finger: a touch is captured by the row, so the
+                // per-star targets below never hear a drag on a phone. The
+                // value comes from where the pointer is over the row instead.
+                try{ e.currentTarget.setPointerCapture(e.pointerId); }catch{}
+                setStarDragging(true);
+                const v=starValueAt(e.currentTarget,e.clientX); if(v) setStars(v);
+              }}
+              onPointerMove={e=>{ if(starDragging){ const v=starValueAt(e.currentTarget,e.clientX); if(v) setStars(v); } }}
               onPointerUp={()=>setStarDragging(false)}
+              onPointerCancel={()=>setStarDragging(false)}
               onPointerLeave={()=>setStarDragging(false)}
               style={{position:"relative",display:"inline-flex",gap:4,justifyContent:"center",marginBottom:10,touchAction:"none",userSelect:"none"}}
             >
