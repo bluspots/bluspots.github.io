@@ -164,7 +164,13 @@ const YEAR_OPTIONS=(()=>{
 })();
 const BEDROOM_OPTIONS=["Studio","1","2","3","4","5","6+"];
 const BATHROOM_OPTIONS=["1","1.5","2","2.5","3","3.5","4","4.5","5+"];
-const formatLayout=h=>`${h.beds==="Studio"?"Studio":h.beds+" bed"} / ${h.baths} bath`;
+// "2 bed / 1 bath"; an unset half reads "— bed"; both unset reads "Not set"
+// (it used to print "bed / bath").
+const formatLayout=h=>{
+  if(!h||(!h.beds&&!h.baths)) return "Not set";
+  const beds=h.beds==="Studio"?"Studio":`${h.beds||"—"} bed`;
+  return `${beds} / ${h.baths||"—"} bath`;
+};
  
 const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
 // Seed/default data — reused both for the initial useState value and by
@@ -1002,6 +1008,11 @@ export default function App(){
     return "📍";
   };
   const primaryHome = addresses.find(a=>a.isPrimary) || addresses[0];
+  // My Home can show any saved property (each address keeps its own home
+  // details). null = the primary home; a deleted property falls back to it.
+  const [myHomeId,setMyHomeId] = useState(null);
+  const viewedHome = (myHomeId!=null&&addresses.find(a=>a.id===myHomeId)) || primaryHome;
+  const selectNewHomeRef = useRef(false); // "+ Add property" on My Home shows the new one once saved
   const sortedAddresses = addresses.slice().sort((a,b)=>(b.isPrimary?1:0)-(a.isPrimary?1:0));
   const sortedCards = cards.slice().sort((a,b)=>(b.isDefault?1:0)-(a.isDefault?1:0));
   const selectedAddress = addresses.find(a=>a.id===selectedAddressId) || primaryHome;
@@ -1589,8 +1600,8 @@ export default function App(){
   // native control for two values at once, so it gets a small absolutely-
   // positioned popover that can never affect the grid's own sizing.
   const saveInlineField=(fieldKey,value)=>{
-    if(!primaryHome)return;
-    setAddresses(as=>as.map(a=>a.id===primaryHome.id?{...a,[fieldKey]:value}:a));
+    if(!viewedHome)return;
+    setAddresses(as=>as.map(a=>a.id===viewedHome.id?{...a,[fieldKey]:value}:a));
   };
   const [sqftDraft,setSqftDraft]=useState(null); // null when not focused; string while actively editing
   const commitSqftDraft=()=>{
@@ -1615,7 +1626,8 @@ export default function App(){
     document.addEventListener("pointerdown",onDocPointerDown);
     return ()=>document.removeEventListener("pointerdown",onDocPointerDown);
   },[layoutPopoverOpen]);
-  const openAddressForm=(addr,targetField=null)=>{
+  const openAddressForm=(addr,targetField=null,fromMyHome=false)=>{
+    selectNewHomeRef.current=!addr&&fromMyHome;
     setEditingAddressId(addr?addr.id:null);
     setDraftAddress(addr?{...addr}:{...emptyDraftAddress});
     setAddressFormError("");
@@ -1630,7 +1642,9 @@ export default function App(){
     if(editingAddressId){
       setAddresses(as=>as.map(a=>a.id===editingAddressId?{...a,...draftAddress,label:draftAddress.label.trim()||a.label}:a));
     }else{
-      setAddresses(as=>[...as,{...draftAddress,id:Date.now(),isPrimary:as.length===0,label:draftAddress.label.trim()||"Address"}]);
+      const newId=Date.now();
+      setAddresses(as=>[...as,{...draftAddress,id:newId,isPrimary:as.length===0,label:draftAddress.label.trim()||"Address"}]);
+      if(selectNewHomeRef.current) setMyHomeId(newId);
     }
     backFrom("addressEdit",{scr:"myhome",tab:"home"});
   };
@@ -2634,11 +2648,15 @@ export default function App(){
 
   // ── MY HOME ────────────────────────────────────────────────────────────────
   const completedJobs = jobs.filter(j=>j.status==="complete").slice().sort((a,b)=>(b.completedAt||b.id)-(a.completedAt||a.id));
-  const primaryAddressText = formatAddress(primaryHome);
-  const primaryCompletedJobs = completedJobs.filter(j=>!j.addressText||j.addressText===primaryAddressText);
+  // Completed jobs for the property shown on My Home. Jobs without a saved
+  // address belong to the primary home
+  const homeAddressText = formatAddress(viewedHome);
+  // ("—" is makeJob's no-address placeholder.)
+  const jobHasAddress=j=>!!j.addressText&&j.addressText!=="—";
+  const homeCompletedJobs = completedJobs.filter(j=>jobHasAddress(j)?j.addressText===homeAddressText:viewedHome===primaryHome);
   const maintSuggestions = (()=>{
     const seen=new Set(); const out=[];
-    primaryCompletedJobs.forEach(j=>{
+    homeCompletedJobs.forEach(j=>{
       const rule=j.taskId&&MAINT_RULES[j.taskId];
       if(rule&&!seen.has(j.taskId)){
         seen.add(j.taskId);
@@ -2682,7 +2700,7 @@ export default function App(){
   );
 
   const myhomeScreen=()=>{
-    if(!primaryHome){
+    if(!viewedHome){
       return(
         <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
           {subHeader("My Home")}
@@ -2700,15 +2718,30 @@ export default function App(){
       {subHeader("My Home")}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:"20px 20px 32px"}}>
 
+        {/* Property switcher: every saved address, plus adding another. */}
+        <div role="group" aria-label="Your properties" style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:16}}>
+          {sortedAddresses.map(a=>{
+            const on=a.id===viewedHome.id;
+            return(
+              <button key={a.id} onClick={()=>{setMyHomeId(a.id);setLayoutPopoverOpen(false);setSqftDraft(null);}} aria-pressed={on}
+                style={{padding:"8px 14px",borderRadius:20,border:`1.5px solid ${on?N:BD}`,background:on?N:W,color:on?ON:TS,fontWeight:on?700:600,fontSize:13,cursor:"pointer"}}>
+                {a.label}{a.isPrimary?" · Primary":""}
+              </button>
+            );
+          })}
+          <button onClick={()=>openAddressForm(null,null,true)}
+            style={{padding:"8px 14px",borderRadius:20,border:`1.5px dashed ${BD}`,background:"transparent",color:NT,fontWeight:700,fontSize:13,cursor:"pointer"}}>+ Add property</button>
+        </div>
+
         {/* Home Overview */}
         <div style={{background:W,borderRadius:20,padding:20,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Home overview</div>
-            <span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openAddressForm(primaryHome)} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
+            <span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openAddressForm(viewedHome)} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
-            <div style={{fontWeight:700,fontSize:15,color:TX,lineHeight:1.4}}>📍 {formatAddress(primaryHome)}</div>
-            {primaryCompletedJobs.length>=TRUSTED_HOME_THRESHOLD&&(
+            <div style={{fontWeight:700,fontSize:15,color:TX,lineHeight:1.4}}>📍 {formatAddress(viewedHome)}</div>
+            {homeCompletedJobs.length>=TRUSTED_HOME_THRESHOLD&&(
               <span aria-label="Trusted Home — this property has an established repair history through Haven" style={{fontSize:11,fontWeight:700,color:SC,background:SL,padding:"3px 9px",borderRadius:10,whiteSpace:"nowrap"}}>🏡 Trusted Home</span>
             )}
           </div>
@@ -2729,7 +2762,7 @@ export default function App(){
               // straight through via saveInlineField, no draft/mode).
               const overlaySelect=(fieldKey,options,ariaLabel)=>(
                 <select
-                  value={primaryHome[fieldKey]||""}
+                  value={viewedHome[fieldKey]||""}
                   onChange={e=>saveInlineField(fieldKey,e.target.value)}
                   aria-label={ariaLabel}
                   style={{position:"absolute",inset:0,width:"100%",height:"100%",opacity:0,cursor:"pointer",border:"none",margin:0,padding:0,appearance:"none",WebkitAppearance:"none"}}
@@ -2742,13 +2775,13 @@ export default function App(){
                 <>
                   <div style={tileStyle}>
                     {labelRow("Home type")}
-                    <div style={{fontSize:13,fontWeight:700,color:TX}}>{primaryHome.propertyType||"Not set"}</div>
+                    <div style={{fontSize:13,fontWeight:700,color:TX}}>{viewedHome.propertyType||"Not set"}</div>
                     {overlaySelect("propertyType",HOME_TYPES,"Home type")}
                   </div>
 
                   <div style={tileStyle}>
                     {labelRow("Year built")}
-                    <div style={{fontSize:13,fontWeight:700,color:TX}}>{primaryHome.yearBuilt||"Not set"}</div>
+                    <div style={{fontSize:13,fontWeight:700,color:TX}}>{viewedHome.yearBuilt||"Not set"}</div>
                     {overlaySelect("yearBuilt",YEAR_OPTIONS,"Year built")}
                   </div>
 
@@ -2756,8 +2789,8 @@ export default function App(){
                     {labelRow("Square footage")}
                     <div style={{display:"flex",alignItems:"baseline",gap:4}}>
                       <input
-                        value={sqftDraft??(primaryHome.sqft||"")}
-                        onFocus={()=>setSqftDraft(primaryHome.sqft||"")}
+                        value={sqftDraft??(viewedHome.sqft||"")}
+                        onFocus={()=>setSqftDraft(viewedHome.sqft||"")}
                         onChange={e=>setSqftDraft(e.target.value.replace(/[^\d]/g,""))}
                         onBlur={commitSqftDraft}
                         onKeyDown={e=>{if(e.key==="Enter")e.currentTarget.blur();}}
@@ -2766,28 +2799,28 @@ export default function App(){
                         placeholder="Not set"
                         style={{width:56,border:"none",background:"transparent",fontSize:13,fontWeight:700,color:TX,padding:0,outline:"none",minWidth:0}}
                       />
-                      {(sqftDraft??primaryHome.sqft)&&<span style={{fontSize:13,fontWeight:700,color:TX,flexShrink:0}}>sqft</span>}
+                      {(sqftDraft??viewedHome.sqft)&&<span style={{fontSize:13,fontWeight:700,color:TX,flexShrink:0}}>sqft</span>}
                     </div>
                   </div>
 
                   <div style={tileStyle} ref={layoutTileRef}>
-                    <button onClick={()=>setLayoutPopoverOpen(v=>!v)} aria-label={`Layout: ${formatLayout(primaryHome)}. Tap to edit.`} style={{all:"unset",display:"block",width:"100%",cursor:"pointer",boxSizing:"border-box"}}>
+                    <button onClick={()=>setLayoutPopoverOpen(v=>!v)} aria-label={`Layout: ${formatLayout(viewedHome)}. Tap to edit.`} style={{all:"unset",display:"block",width:"100%",cursor:"pointer",boxSizing:"border-box"}}>
                       {labelRow("Layout")}
-                      <div style={{fontSize:13,fontWeight:700,color:TX}}>{formatLayout(primaryHome)}</div>
+                      <div style={{fontSize:13,fontWeight:700,color:TX}}>{formatLayout(viewedHome)}</div>
                     </button>
                     {layoutPopoverOpen&&(
                       <div style={{position:"absolute",top:"calc(100% + 6px)",left:0,right:0,background:W,borderRadius:12,padding:12,boxShadow:"0 8px 24px rgba(28,43,58,.18)",zIndex:20,border:`1px solid ${BD}`}}>
                         <div style={{display:"flex",gap:8}}>
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:9,color:TM,fontWeight:600,marginBottom:3}}>Bedrooms</div>
-                            <select value={primaryHome.beds||""} onChange={e=>saveInlineField("beds",e.target.value)} aria-label="Bedrooms" style={{width:"100%",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 6px",fontSize:16,fontWeight:600,color:TX,background:BG,outline:"none",appearance:"none",WebkitAppearance:"none"}}>
+                            <select value={viewedHome.beds||""} onChange={e=>saveInlineField("beds",e.target.value)} aria-label="Bedrooms" style={{width:"100%",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 6px",fontSize:16,fontWeight:600,color:TX,background:BG,outline:"none",appearance:"none",WebkitAppearance:"none"}}>
                               <option value="">Not set</option>
                               {BEDROOM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
                             </select>
                           </div>
                           <div style={{flex:1,minWidth:0}}>
                             <div style={{fontSize:9,color:TM,fontWeight:600,marginBottom:3}}>Bathrooms</div>
-                            <select value={primaryHome.baths||""} onChange={e=>saveInlineField("baths",e.target.value)} aria-label="Bathrooms" style={{width:"100%",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 6px",fontSize:16,fontWeight:600,color:TX,background:BG,outline:"none",appearance:"none",WebkitAppearance:"none"}}>
+                            <select value={viewedHome.baths||""} onChange={e=>saveInlineField("baths",e.target.value)} aria-label="Bathrooms" style={{width:"100%",border:`1px solid ${BD}`,borderRadius:8,padding:"8px 6px",fontSize:16,fontWeight:600,color:TX,background:BG,outline:"none",appearance:"none",WebkitAppearance:"none"}}>
                               <option value="">Not set</option>
                               {BATHROOM_OPTIONS.map(o=><option key={o} value={o}>{o}</option>)}
                             </select>
@@ -2805,9 +2838,9 @@ export default function App(){
         {/* Service History — compact preview only */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <span style={{fontWeight:700,fontSize:15,color:TX}}>Service history</span>
-          <span style={{fontSize:12,color:TM}}>{primaryCompletedJobs.length} completed</span>
+          <span style={{fontSize:12,color:TM}}>{homeCompletedJobs.length} completed</span>
         </div>
-        {primaryCompletedJobs.length===0?(
+        {homeCompletedJobs.length===0?(
           <div style={{background:W,borderRadius:18,padding:20,marginBottom:12,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:28,marginBottom:8}}>🗂️</div>
             <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:4}}>No completed jobs yet.</div>
@@ -2815,7 +2848,7 @@ export default function App(){
           </div>
         ):(
           <div style={{marginBottom:12}}>
-            {primaryCompletedJobs.slice(0,2).map(j=>{
+            {homeCompletedJobs.slice(0,2).map(j=>{
               const {jt,jTotal,dateStr}=jobDisplayInfo(j);
               return(
                 <div key={j.id} style={{background:W,borderRadius:18,padding:16,marginBottom:10,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
@@ -2872,7 +2905,7 @@ export default function App(){
           <div style={{width:44,height:44,borderRadius:22,background:SL,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontSize:22}}>🧾</span></div>
           <div style={{flex:1}}>
             <div style={{fontWeight:700,fontSize:14,color:TX}}>Receipts</div>
-            <div style={{fontSize:12,fontWeight:600,color:SC,marginTop:2}}>{completedJobs.length} saved</div>
+            <div style={{fontSize:12,fontWeight:600,color:SC,marginTop:2}}>{homeCompletedJobs.length} saved</div>
           </div>
           <span style={{color:TM,fontSize:20}}>›</span>
         </div>
@@ -2893,16 +2926,16 @@ export default function App(){
   // ── DEDICATED SERVICE HISTORY SCREEN ─────────────────────────────────────
   const serviceHistoryScreen=()=>(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
-      {subHeader("Service History",()=>goTo("myhome"))}
+      {subHeader("Service History",()=>backFrom("serviceHistory",{scr:"myhome",tab:"home"}))}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-        <div style={{fontSize:12,color:TS,marginBottom:16}}>📍 {primaryHome?.label||"Property"} · {primaryAddressText}</div>
-        {primaryCompletedJobs.length===0?(
+        <div style={{fontSize:12,color:TS,marginBottom:16}}>📍 {viewedHome?.label||"Property"} · {homeAddressText}</div>
+        {homeCompletedJobs.length===0?(
           <div style={{background:W,borderRadius:18,padding:24,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:32,marginBottom:10}}>🗂️</div>
             <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:6}}>No completed jobs yet.</div>
             <div style={{fontSize:13,color:TS,lineHeight:1.5}}>Completed repairs will automatically appear here.</div>
           </div>
-        ):primaryCompletedJobs.map(j=>{
+        ):homeCompletedJobs.map(j=>{
           const {jt,jTotal,dateStr}=jobDisplayInfo(j);
           return(
             <div key={j.id} style={{background:W,borderRadius:16,padding:14,marginBottom:10,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
@@ -2960,15 +2993,16 @@ export default function App(){
   // ── RECEIPTS ───────────────────────────────────────────────────────────────
   const receiptListScreen=()=>(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG,position:"relative"}}>
-      {subHeader("Receipts",()=>goTo("myhome"))}
+      {subHeader("Receipts",()=>backFrom("receiptList",{scr:"myhome",tab:"home"}))}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-        {completedJobs.length===0?(
+        {addresses.length>1&&<div style={{fontSize:12,color:TS,marginBottom:16}}>📍 {viewedHome?.label||"Property"} · {homeAddressText}</div>}
+        {homeCompletedJobs.length===0?(
           <div style={{background:W,borderRadius:18,padding:24,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:32,marginBottom:10}}>🧾</div>
             <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:6}}>No receipts yet.</div>
             <div style={{fontSize:13,color:TS,lineHeight:1.5}}>Completed jobs automatically generate professional receipts.</div>
           </div>
-        ):completedJobs.map(j=>{
+        ):homeCompletedJobs.map(j=>{
           const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
         const jReceipt=receiptForJob(j);
           const dateStr=new Date(j.completedAt||j.id).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
@@ -3574,9 +3608,12 @@ export default function App(){
   );
   const addressEditScreen=()=>{
     const isPrimaryEdit = editingAddressId===primaryHome?.id;
+    // The property's home details (year, size, layout) are editable for
+    // whichever home My Home is showing, not only the primary one.
+    const showHomeDetails = isPrimaryEdit || (editingAddressId!=null && editingAddressId===viewedHome?.id);
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
-        {subHeader(isPrimaryEdit?"Edit home details":editingAddressId?"Edit address":"Add address",()=>backFrom("addressEdit",{scr:"myhome",tab:"home"}))}
+        {subHeader(showHomeDetails?"Edit home details":editingAddressId?"Edit address":"Add address",()=>backFrom("addressEdit",{scr:"myhome",tab:"home"}))}
         <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
           {addressFormError&&(
             <div style={{background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:14,padding:"12px 14px",marginBottom:16}}>
@@ -3593,7 +3630,7 @@ export default function App(){
           {homeFieldCard("ZIP code",addressInput("zip","ZIP code",{inputMode:"numeric"}))}
           {homeFieldCard("Access notes (optional)",addressInput("accessNotes","Gate code, parking notes, etc."))}
           {homeFieldCard("Property type",addressSelect("propertyType",HOME_TYPES),"propertyType")}
-          {isPrimaryEdit&&(
+          {showHomeDetails&&(
             <>
               {homeFieldCard("Year built", addressSelect("yearBuilt",YEAR_OPTIONS),"yearBuilt")}
               {homeFieldCard("Square footage",addressInput("sqft","e.g. 1,150",{inputMode:"numeric"}),"sqft")}
