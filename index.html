@@ -2186,13 +2186,19 @@ function App(){
   // The restrained "selected/default" light-blue treatment, reused by the
   // address/card pickers and now the Notification Center's unread state.
   const SELBG = isDark ? "#1E3A5F" : "#EFF6FF";
-  const SELBORDER = isDark ? "#3B6EA8" : "#BFDBFE";
+  const SELBORDER = isDark ? "#3D71AB" : "#BFDBFE"; // dark: 3:1 against cards (was #3B6EA8, 2.98:1)
   // Dark-mode contrast tokens. Light-mode values are unchanged.
   // ON: text on brand/colored fills (navy headers, red/amber/blue buttons). W was
   // used for this, but W is the card surface and turns dark in dark mode.
   const ON = "#FFFFFF";
   // NT: navy-as-text (links, back arrows, active tab) on theme surfaces.
   const NT = isDark ? TX : N;
+  // Selected option chips. Light mode keeps the solid navy fill; in dark mode
+  // navy is almost the same color as the card behind it, so selected chips
+  // use the same blue the app already uses for a selected address or card.
+  const CHIP_ON = isDark ? SELBG : N;
+  const CHIP_ON_EDGE = isDark ? SELBORDER : N;
+  const CHIP_ON_RING = isDark ? `inset 0 0 0 1.5px ${SELBORDER}` : null;
   // DANGER: red text on theme surfaces (Sign Out row).
   const DANGER = isDark ? "#F87171" : "#B42318";
   // AMT: amber used as text (prices, "See all", Rate now) on theme surfaces.
@@ -4237,7 +4243,7 @@ function App(){
         <div style={{display:"flex",gap:8,marginBottom:18}}>
           {[["all",`All (${allJobs.length})`],["active",`Active (${activeCount})`],["done",`Done (${doneCount})`]].map(([id,lb])=>{
             const a=bFilter===id;
-            return <button key={id} onClick={()=>setBFilter(id)} style={{flex:1,padding:"9px 0",borderRadius:12,border:"none",fontWeight:a?700:500,background:a?N:W,color:a?ON:TS,fontSize:13,cursor:"pointer",boxShadow:a?`0 2px 8px rgba(28,43,58,.18)`:`0 1px 3px rgba(0,0,0,.06)`}}>{lb}</button>;
+            return <button key={id} aria-pressed={a} onClick={()=>setBFilter(id)} style={{flex:1,padding:"9px 0",borderRadius:12,border:"none",fontWeight:a?700:500,background:a?CHIP_ON:W,color:a?ON:TS,fontSize:13,cursor:"pointer",boxShadow:a?(CHIP_ON_RING||`0 2px 8px rgba(28,43,58,.18)`):`0 1px 3px rgba(0,0,0,.06)`}}>{lb}</button>;
           })}
         </div>
         {shownJobs.length===0?(
@@ -4412,7 +4418,7 @@ function App(){
           {list.map(p=>{
             const a=tpid===p.id;
             return(
-              <button key={p.id} onClick={()=>setTpid(p.id)} style={{border:`1.5px solid ${a?N:BD}`,borderRadius:14,padding:"9px 14px",cursor:"pointer",background:a?N:W,display:"flex",alignItems:"center",gap:6}}>
+              <button key={p.id} aria-pressed={a} onClick={()=>setTpid(p.id)} style={{border:`1.5px solid ${a?CHIP_ON_EDGE:BD}`,borderRadius:14,padding:"9px 14px",cursor:"pointer",background:a?CHIP_ON:W,display:"flex",alignItems:"center",gap:6}}>
                 <span style={{fontWeight:700,fontSize:13,color:a?ON:TX}}>{p.label}</span>
                 {p.surge>0&&<span style={{fontSize:10,fontWeight:700,color:a?"#FFE8B0":"#D97706"}}>+${p.surge}</span>}
               </button>
@@ -6107,7 +6113,7 @@ function App(){
             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
               {JOB_CATS.map(c=>{
                 const a=ccat===c;
-                return <button key={c} onClick={()=>setCcat(c)} style={{border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:a?700:500,background:a?N:BG,color:a?ON:TS}}>{c}</button>;
+                return <button key={c} aria-pressed={a} onClick={()=>setCcat(c)} style={{border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:a?700:500,background:a?CHIP_ON:BG,color:a?ON:TS,...(a&&CHIP_ON_RING?{boxShadow:CHIP_ON_RING}:{})}}>{c}</button>;
               })}
             </div>
           </div>
@@ -6615,7 +6621,7 @@ function App(){
               {HIRE.map(([val,lbl])=>{
                 const a=hireAgain===val;
                 return(
-                  <button key={val} onClick={()=>setHireAgain(a?null:val)} style={{flex:1,padding:"10px 4px",borderRadius:12,border:`1.5px solid ${a?N:BD}`,background:a?N:BG,color:a?ON:TS,fontWeight:a?700:500,fontSize:12,cursor:"pointer",lineHeight:1.3}}>{lbl}</button>
+                  <button key={val} aria-pressed={a} onClick={()=>setHireAgain(a?null:val)} style={{flex:1,padding:"10px 4px",borderRadius:12,border:`1.5px solid ${a?CHIP_ON_EDGE:BD}`,background:a?CHIP_ON:BG,color:a?ON:TS,fontWeight:a?700:500,fontSize:12,cursor:"pointer",lineHeight:1.3}}>{lbl}</button>
                 );
               })}
             </div>
