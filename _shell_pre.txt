@@ -18,13 +18,27 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
 <meta name="apple-mobile-web-app-title" content="Haven"/>
 
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/4.2.1/jspdf.umd.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/dist/umd/supabase.js"></script>
+
+<!-- Opening splash: drawn by the browser right away, before the app's
+     scripts arrive (it used to be a blank gray screen for 1-2 s). The app
+     fades it out once it has drawn its first screen. -->
+<style>
+#haven-splash{position:fixed;inset:0;z-index:9999;background:#1C2B3A;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s ease}
+#haven-splash.hs-out{opacity:0;pointer-events:none}
+#haven-splash .hs-mark{color:#FFFFFF;font:800 22px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;letter-spacing:.42em;padding-left:.42em;opacity:0;animation:hsIn .7s ease .05s forwards}
+#haven-splash .hs-line{width:28px;height:3px;border-radius:2px;background:#F59E0B;margin-top:14px;transform:scaleX(0);animation:hsLine .8s cubic-bezier(.2,.7,.2,1) .3s forwards}
+@keyframes hsIn{from{opacity:0;transform:translateY(4px)}to{opacity:1;transform:none}}
+@keyframes hsLine{to{transform:scaleX(1)}}
+@media (prefers-reduced-motion:reduce){#haven-splash .hs-mark,#haven-splash .hs-line{animation:none;opacity:1;transform:none}#haven-splash{transition:none}}
+</style>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/react/18.3.1/umd/react.production.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.26.4/babel.min.js"></script>
+<script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/4.2.1/jspdf.umd.min.js"></script>
+<script defer src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.1/dist/umd/supabase.js"></script>
 </head>
 <body style="margin:0;background:#888">
+<div id="haven-splash" aria-hidden="true"><div class="hs-mark">HAVEN</div><div class="hs-line"></div></div>
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useRef, useEffect } = React;
