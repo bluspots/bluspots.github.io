@@ -641,17 +641,13 @@ export default function App(){
   // local fallback: a failure shows the connection error with Retry.
   const [backendStatus,setBackendStatus]=useState("connecting");
   const [backendAttempt,setBackendAttempt]=useState(0);
-  // Opening splash: hide it on the frame after the first real screen is
-  // drawn (Home, the sign-in gate or the connection error), not the brief
-  // "Connecting" screen in between, so the splash hands straight over to
-  // Home. If connecting takes over 4 s, hand over to the Connecting screen
-  // so the wait is visible. No minimum time.
+  // Opening splash = the loading screen. It stays up, however slow the
+  // connection, until the first real screen is drawn (Home, the sign-in
+  // gate or the connection error with Retry), never the "Connecting"
+  // screen in between, then hides on the next frame. No minimum time.
   useEffect(()=>{
-    const nextFrame=typeof requestAnimationFrame==="function"?requestAnimationFrame:setTimeout;
-    if(backendStatus!=="connecting"){ nextFrame(hideOpeningSplash); return undefined; }
-    const t=setTimeout(hideOpeningSplash,4000);
-    if(t&&typeof t.unref==="function") t.unref();
-    return ()=>clearTimeout(t);
+    if(backendStatus==="connecting") return;
+    (typeof requestAnimationFrame==="function"?requestAnimationFrame:setTimeout)(hideOpeningSplash);
   },[backendStatus]);
   // Phase 1B A2: server-confirmed QA tester. False by default, while the
   // check is pending, and on any error. Never localStorage / email.
