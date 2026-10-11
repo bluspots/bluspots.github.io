@@ -20,10 +20,11 @@
 
 
 <!-- Opening splash: drawn by the browser right away, before the app's
-     scripts arrive (it used to be a blank gray screen for 1-2 s). The app
-     fades it out once it has drawn its first screen. -->
+     scripts arrive (it used to be a blank gray screen for 1-2 s). It stays
+     only until the app has drawn its first screen, then cross-fades away.
+     No minimum time: a fast launch shows it briefly or not at all. -->
 <style>
-#haven-splash{position:fixed;inset:0;z-index:9999;background:#1C2B3A;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .4s ease}
+#haven-splash{position:fixed;inset:0;z-index:9999;background:#1C2B3A;display:flex;flex-direction:column;align-items:center;justify-content:center;transition:opacity .3s ease}
 #haven-splash.hs-out{opacity:0;pointer-events:none}
 #haven-splash .hs-mark{color:#FFFFFF;font:800 22px -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;letter-spacing:.42em;padding-left:.42em;opacity:0;animation:hsIn .7s ease .05s forwards}
 #haven-splash .hs-line{width:28px;height:3px;border-radius:2px;background:#F59E0B;margin-top:14px;transform:scaleX(0);animation:hsLine .8s cubic-bezier(.2,.7,.2,1) .3s forwards}
@@ -39,6 +40,27 @@
 </head>
 <body style="margin:0;background:#888">
 <div id="haven-splash" aria-hidden="true"><div class="hs-mark">HAVEN</div><div class="hs-line"></div></div>
+<script>
+/* Hides the splash. Called by the app right after its first screen is
+   drawn (and by its error screen). The app is usable at once: the splash
+   stops taking touches the moment the fade starts, and is removed after it.
+   Reduce Motion: no fade, it is removed at once. */
+(function(){
+  var done=false;
+  function hide(){
+    var el=document.getElementById("haven-splash");
+    if(done||!el) return; done=true;
+    try{ performance.mark("haven-splash-hide"); }catch(e){}
+    var still=false; try{ still=window.matchMedia("(prefers-reduced-motion: reduce)").matches; }catch(e){}
+    el.classList.add("hs-out");
+    setTimeout(function(){ if(el.parentNode) el.parentNode.removeChild(el); try{ performance.mark("haven-splash-removed"); }catch(e){} }, still?0:320);
+  }
+  window.havenHideSplash=hide;
+  // Safety net only: if the app can't start at all (offline, scripts
+  // blocked), don't leave the splash up forever.
+  setTimeout(hide,12000);
+})();
+</script>
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useRef, useEffect } = React;

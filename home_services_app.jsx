@@ -201,30 +201,16 @@ const DEFAULT_ADDRESSES=[
 // blank screen. Only catches render-phase errors (React limitation) — errors
 // thrown inside event handlers still go to the console, which is why goTo()
 // logs-and-refuses on an unknown screen rather than throwing.
-// Fades out the opening splash (drawn by the HTML shell before the app's
-// scripts load). It stays at least ~0.8 s after launch so it reads as a calm
-// opening, not a flash. Safe to call more than once; no-op without a splash.
-function havenHideSplash(){
-  if(typeof document==="undefined") return;
-  const el=document.getElementById("haven-splash");
-  if(!el||el.dataset.hiding) return;
-  el.dataset.hiding="1";
-  const since=(typeof performance!=="undefined"&&performance.now)?performance.now():1000;
-  setTimeout(()=>{
-    el.classList.add("hs-out");
-    setTimeout(()=>{ try{ el.remove(); }catch(_){} },450);
-  },Math.max(0,800-since));
-}
-if(typeof window!=="undefined"){
-  window.havenHideSplash=havenHideSplash;
-  // Fallback: never leave the splash up (e.g. if the app fails to start).
-  const t=setTimeout(havenHideSplash,6000);
-  if(t&&typeof t.unref==="function") t.unref();
+// Opening splash: the HTML shell draws it and defines window.havenHideSplash
+// (named differently here so this global function never replaces it).
+// The app hides it right after its first screen is drawn (no minimum time).
+function hideOpeningSplash(){
+  try{ if(typeof window!=="undefined"&&typeof window.havenHideSplash==="function") window.havenHideSplash(); }catch(_){}
 }
 class ErrorBoundary extends React.Component{
   constructor(props){ super(props); this.state={error:null}; }
   static getDerivedStateFromError(error){ return {error}; }
-  componentDidCatch(){ havenHideSplash(); }
+  componentDidCatch(){ hideOpeningSplash(); }
   render(){
     if(this.state.error){
       return (
@@ -246,7 +232,8 @@ class ErrorBoundary extends React.Component{
 }
 
 export default function App(){
-  useEffect(()=>{ havenHideSplash(); },[]);
+  // First screen is committed; hide the splash on the next frame, once it has painted.
+  useEffect(()=>{ (typeof requestAnimationFrame==="function"?requestAnimationFrame:setTimeout)(hideOpeningSplash); },[]);
   // (polling moved below after jobs state + TERMINAL_STATUSES)
   // Appearance — System / Light / Dark. Persisted so it survives reopening
   // the installed PWA. "Tokens, not per-screen styles": every screen in this
