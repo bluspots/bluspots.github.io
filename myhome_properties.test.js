@@ -121,7 +121,7 @@ function seedExtra() {
   storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [
     { ...base, id: now - 5000, completedAt: now - 5000, addressText: '1 Oak St, Orlando, FL 32801', addressLabel: 'Home' },
     { ...base, id: now - 4000, completedAt: now - 4000, addressText: '9 Pine Ave, Winter Garden, FL 34787', addressLabel: 'Rental' },
-    { ...base, id: now - 3000, completedAt: now - 3000 },  // older job with no address saved: belongs to the primary home
+    { ...base, id: now - 3000, completedAt: now - 3000 },  // older job with no address saved: belongs to no property (stays in Bookings)
   ] });
 }
 function seed() {
@@ -162,22 +162,33 @@ function scroller() { return Array.from(document.querySelectorAll('.sc')).pop();
   await mount();
   await tap(screen.getAllByText('Profile').pop(), 'Profile');
   await tap(btn(/^🏡\s*My Home/), 'My Home');
-  // (1)
-  const home = btn(/^Home · Primary$/), rental = btn(/^Rental$/);
-  assert(home && rental && btn(/^\+ Add property$/), 'My Home lists both properties and "+ Add property"');
-  assert(home.getAttribute('aria-pressed') === 'true' && rental.getAttribute('aria-pressed') === 'false', 'the primary home is selected first');
-  assert(/1 Oak St, Orlando, FL 32801/.test(bodyText()), 'shows the primary home address');
-  assert(/2 completed/.test(bodyText()), 'primary home: 2 completed jobs (its own + the older job with no address)');
-  assert(/2 saved/.test(bodyText()), 'primary home: Receipts says 2 saved');
-  // (2)(3)(6)
-  await tap(rental, 'Rental');
-  assert(btn(/^Rental$/).getAttribute('aria-pressed') === 'true', 'Rental is now selected');
+  // (1) compact row for the selected property
+  const picker = () => document.querySelector('button[aria-haspopup="dialog"]');
+  assert(picker() && /Home/.test(picker().textContent) && /Primary/.test(picker().textContent) && /1 Oak St, Orlando, FL 32801/.test(picker().textContent), 'My Home shows the primary home in one compact row (name, Primary badge, address)');
+  assert(/2 homes/.test(picker().textContent), 'the row says how many homes are saved');
+  assert(/1 completed/.test(bodyText()) && /1 saved/.test(bodyText()), 'primary home: only its own job (a job with no saved address is not added to any home)');
+  const addrSpan = Array.from(picker().querySelectorAll('span')).find(e => e.textContent === '1 Oak St, Orlando, FL 32801');
+  assert(addrSpan && /ellipsis/.test(addrSpan.getAttribute('style') || '') && /nowrap/.test(addrSpan.getAttribute('style') || ''), 'long addresses are cut with an ellipsis on one line');
+  // (2) the list
+  await tap(picker(), 'picker');
+  const dialog = () => document.querySelector('[role="dialog"][aria-labelledby="haven-property-sheet-title"]');
+  assert(dialog() && /Your properties/.test(dialog().textContent), 'tapping the row opens "Your properties"');
+  const row = re => Array.from(dialog().querySelectorAll('button[aria-pressed]')).find(b => re.test(b.textContent));
+  assert(row(/^🏠Home/) && row(/Rental/) && row(/^🏠Home/).getAttribute('aria-pressed') === 'true' && row(/Rental/).getAttribute('aria-pressed') === 'false', 'every property is listed; the selected one is marked');
+  assert(/Primary/.test(row(/^🏠Home/).textContent) && !/Primary/.test(row(/Rental/).textContent), 'the primary home is labelled Primary');
+  assert(/1 job/.test(row(/^🏠Home/).textContent) && /1 job/.test(row(/Rental/).textContent), 'each property shows its own job count');
+  assert(btn(/^\+ Add property$/) && btn(/^Manage properties and primary home/) && /saved on this device only/.test(dialog().textContent), 'Add property, Manage properties and the device-only note are in the list');
+  const scrollArea = dialog().querySelector('.sc');
+  assert(scrollArea && /overflow-y: auto/.test(scrollArea.getAttribute('style') || ''), 'the list scrolls when there are many homes');
+  // (3)(6) switch
+  await tap(row(/Rental/), 'Rental');
+  assert(!dialog(), 'choosing a property closes the list');
+  assert(/Rental/.test(picker().textContent) && /9 Pine Ave/.test(picker().textContent), 'the row now shows the rental');
   assert(/9 Pine Ave, Winter Garden, FL 34787/.test(bodyText()) && !/1 Oak St/.test(bodyText()), 'shows the rental address only');
-  assert(/1 completed/.test(bodyText()) && /1 saved/.test(bodyText()), 'rental: 1 completed job, Receipts says 1 saved (it counted all 3 before)');
+  assert(/1 completed/.test(bodyText()) && /1 saved/.test(bodyText()), 'rental: 1 completed job, Receipts says 1 saved');
   assert(/Layout/.test(bodyText()) && !/bed \/ bath/.test(bodyText()), 'an unset layout reads "Not set", not "bed / bath"');
   await tap(Array.from(document.querySelectorAll('[role="button"],div,span')).filter(e => e.textContent.trim() === 'Receipts').pop(), 'Receipts');
-  assert(/9 Pine Ave/.test(bodyText()) && document.querySelectorAll('button').length >= 1, 'Receipts screen is labelled with the rental');
-  const receiptCards = (bodyText().match(/View receipt|Share|Print/g) || []).length;
+  assert(/9 Pine Ave/.test(bodyText()), 'Receipts screen is labelled with the rental');
   await tap(Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === '‹'), 'back');
   // (4)
   const typeSelect = document.querySelector('select[aria-label="Home type"]');
@@ -186,7 +197,8 @@ function scroller() { return Array.from(document.querySelectorAll('.sc')).pop();
   await tap(Array.from(document.querySelectorAll('[role="button"],span')).find(e => e.textContent.trim() === 'Edit ›'), 'Edit');
   assert(/Edit home details/.test(bodyText()) && /Year built/i.test(bodyText()) && /9 Pine Ave/.test(document.body.innerHTML), '"Edit ›" opens the rental with its home details (year built etc.)');
   await tap(Array.from(document.querySelectorAll('button')).find(b => b.textContent.trim() === '‹'), 'back');
-  // (5)
+  // (5) add from the list
+  await tap(picker(), 'picker');
   await tap(btn(/^\+ Add property$/), 'add');
   const inputs = Array.from(document.querySelectorAll('input'));
   const byPh = ph => inputs.find(i => (i.placeholder || '') === ph);
@@ -198,10 +210,19 @@ function scroller() { return Array.from(document.querySelectorAll('.sc')).pop();
   if (st) await act(async () => { fireEvent.change(st, { target: { value: 'FL' } }); });
   await settle(30);
   await tap(Array.from(document.querySelectorAll('button')).find(b => /^Save/.test(b.textContent.trim())), 'save');
-  await waitFor(() => !!btn(/^Lake house$/), 'new property chip');
-  assert(btn(/^Lake house$/).getAttribute('aria-pressed') === 'true' && /5 Lake Rd/.test(bodyText()), '"+ Add property" saves it and shows it on My Home');
+  await waitFor(() => picker() && /Lake house/.test(picker().textContent), 'new property selected');
+  assert(/5 Lake Rd/.test(picker().textContent) && /3 homes/.test(picker().textContent), '"+ Add property" saves it and shows it on My Home');
+  // (8) change the primary home
+  const setPrimary = Array.from(document.querySelectorAll('[role="button"]')).find(e => e.textContent.trim() === 'Set as primary');
+  assert(!!setPrimary, 'a non-primary home offers "Set as primary"');
+  await tap(setPrimary, 'set primary');
+  assert(addresses().find(a => a.label === 'Lake house').isPrimary && !addresses().find(a => a.id === 1).isPrimary && addresses().filter(a => a.isPrimary).length === 1, 'Set as primary makes it the only primary home');
+  assert(/Primary/.test(picker().textContent) && !Array.from(document.querySelectorAll('[role="button"]')).some(e => e.textContent.trim() === 'Set as primary'), 'the row shows Primary and the link goes away');
+  assert(/0 completed|No jobs yet/.test(bodyText()) || /0 saved/.test(bodyText()), 'the new primary home has no history (records do not move with Primary)');
+  await tap(picker(), 'picker');
+  await tap(Array.from(dialog().querySelectorAll('button[aria-pressed]')).find(b => /^🏠Home/.test(b.textContent)), 'Home');
+  assert(/1 completed/.test(bodyText()), 'the old primary keeps exactly its own history');
   // (7)
-  await tap(btn(/^Home · Primary$/), 'Home');
   scroller().scrollTop = 420;
   await tap(Array.from(document.querySelectorAll('[role="button"],div')).filter(e => /^View all service history/.test(e.textContent.trim())).pop(), 'history');
   assert(/Service History/.test(bodyText()) && /1 Oak St/.test(bodyText()), 'Service History shows the selected property');

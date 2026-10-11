@@ -2886,6 +2886,7 @@ function App(){
   const [myHomeId,setMyHomeId] = useState(null);
   const viewedHome = (myHomeId!=null&&addresses.find(a=>a.id===myHomeId)) || primaryHome;
   const selectNewHomeRef = useRef(false); // "+ Add property" on My Home shows the new one once saved
+  const [propertySheetOpen,setPropertySheetOpen] = useState(false);
   const sortedAddresses = addresses.slice().sort((a,b)=>(b.isPrimary?1:0)-(a.isPrimary?1:0));
   const sortedCards = cards.slice().sort((a,b)=>(b.isDefault?1:0)-(a.isDefault?1:0));
   const selectedAddress = addresses.find(a=>a.id===selectedAddressId) || primaryHome;
@@ -4521,12 +4522,15 @@ function App(){
 
   // ── MY HOME ────────────────────────────────────────────────────────────────
   const completedJobs = jobs.filter(j=>j.status==="complete").slice().sort((a,b)=>(b.completedAt||b.id)-(a.completedAt||a.id));
-  // Completed jobs for the property shown on My Home. Jobs without a saved
-  // address belong to the primary home
+  // Completed jobs for the property shown on My Home, matched by the
+  // address saved on the job. Jobs with no saved address belong to no
+  // property (they stay in Bookings), so records never mix between homes,
+  // even when the primary home changes. ("—" is makeJob's placeholder.)
   const homeAddressText = formatAddress(viewedHome);
-  // ("—" is makeJob's no-address placeholder.)
   const jobHasAddress=j=>!!j.addressText&&j.addressText!=="—";
-  const homeCompletedJobs = completedJobs.filter(j=>jobHasAddress(j)?j.addressText===homeAddressText:viewedHome===primaryHome);
+  const jobsAt=a=>completedJobs.filter(j=>jobHasAddress(j)&&j.addressText===formatAddress(a));
+  const homeCompletedJobs = viewedHome?jobsAt(viewedHome):[];
+  const selectMyHome=id=>{ setMyHomeId(id); setLayoutPopoverOpen(false); setSqftDraft(null); setPropertySheetOpen(false); };
   const maintSuggestions = (()=>{
     const seen=new Set(); const out=[];
     homeCompletedJobs.forEach(j=>{
@@ -4572,6 +4576,62 @@ function App(){
     </span>
   );
 
+  // ── My Home property selector ──────────────────────────────────────────
+  const jobCountText=n=>n===0?"No jobs yet":`${n} job${n===1?"":"s"}`;
+  const primaryBadge=<span style={{fontSize:10,fontWeight:700,color:isDark?"#BFDBFE":N,background:isDark?"#1E3A5F":"#DBEAFE",padding:"2px 7px",borderRadius:8,whiteSpace:"nowrap"}}>Primary</span>;
+  // The selected property at the top of My Home; tap it for the list (sheet).
+  const propertyPickerButton=()=>(
+    <button type="button" onClick={()=>setPropertySheetOpen(true)} aria-haspopup="dialog"
+      aria-label={`Property: ${viewedHome.label}${viewedHome.isPrimary?", primary":""}, ${formatAddress(viewedHome)}. Change property`}
+      style={{all:"unset",boxSizing:"border-box",width:"100%",display:"flex",alignItems:"center",gap:12,background:W,borderRadius:16,padding:"12px 14px",marginBottom:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer"}}>
+      <span style={{fontSize:22,flexShrink:0}}>{addressIcon(viewedHome)}</span>
+      <span style={{flex:1,minWidth:0}}>
+        <span style={{display:"flex",alignItems:"center",gap:6}}>
+          <span style={{fontWeight:800,fontSize:15,color:TX,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{viewedHome.label}</span>
+          {viewedHome.isPrimary&&primaryBadge}
+        </span>
+        <span style={{display:"block",fontSize:12,color:TS,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{formatAddress(viewedHome)}</span>
+      </span>
+      {addresses.length>1&&<span style={{fontSize:11,fontWeight:700,color:TM,flexShrink:0}}>{addresses.length} homes</span>}
+      <span aria-hidden="true" style={{fontSize:14,color:NT,fontWeight:800,flexShrink:0}}>▾</span>
+    </button>
+  );
+  const propertySheet=()=>(
+    <div onClick={()=>setPropertySheetOpen(false)} style={{position:"absolute",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:30}}>
+      <div role="dialog" aria-modal="true" aria-labelledby="haven-property-sheet-title" onClick={e=>e.stopPropagation()} onKeyDown={e=>{if(e.key==="Escape")setPropertySheetOpen(false);}}
+        style={{background:W,borderRadius:"20px 20px 0 0",width:"100%",maxHeight:"78%",display:"flex",flexDirection:"column",paddingBottom:"max(12px, env(safe-area-inset-bottom))"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"18px 20px 10px"}}>
+          <div id="haven-property-sheet-title" style={{fontWeight:800,fontSize:17,color:TX}}>Your properties</div>
+          <button type="button" autoFocus onClick={()=>setPropertySheetOpen(false)} style={{background:"none",border:"none",color:NT,fontWeight:700,fontSize:14,cursor:"pointer",padding:"10px 4px",margin:"-10px -4px"}}>Done</button>
+        </div>
+        <div className="sc" style={{overflowY:"auto",padding:"0 12px"}}>
+          {sortedAddresses.map(a=>{
+            const on=a.id===viewedHome.id;
+            return(
+              <button key={a.id} type="button" onClick={()=>selectMyHome(a.id)} aria-pressed={on}
+                style={{all:"unset",boxSizing:"border-box",width:"100%",display:"flex",alignItems:"center",gap:12,padding:"12px 10px",borderRadius:14,background:on?SELBG:"transparent",border:`1.5px solid ${on?SELBORDER:"transparent"}`,marginBottom:4,cursor:"pointer"}}>
+                <span style={{fontSize:20,flexShrink:0}}>{addressIcon(a)}</span>
+                <span style={{flex:1,minWidth:0}}>
+                  <span style={{display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{fontWeight:700,fontSize:14,color:TX,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{a.label}</span>
+                    {a.isPrimary&&primaryBadge}
+                  </span>
+                  <span style={{display:"block",fontSize:12,color:TS,marginTop:2,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{formatAddress(a)}</span>
+                </span>
+                <span style={{fontSize:11,color:TM,flexShrink:0}}>{jobCountText(jobsAt(a).length)}</span>
+                <span aria-hidden="true" style={{width:18,fontSize:15,fontWeight:800,color:NT,flexShrink:0,textAlign:"right"}}>{on?"✓":""}</span>
+              </button>
+            );
+          })}
+        </div>
+        <div style={{padding:"10px 20px 0",borderTop:`1px solid ${BD}`,marginTop:6}}>
+          <button type="button" onClick={()=>{ setPropertySheetOpen(false); openAddressForm(null,null,true); }} style={{width:"100%",padding:13,borderRadius:14,border:`1.5px dashed ${BD}`,background:"transparent",color:NT,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:8}}>+ Add property</button>
+          <button type="button" onClick={()=>{ setPropertySheetOpen(false); goTo("addresses"); }} style={{width:"100%",padding:10,border:"none",background:"transparent",color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Manage properties and primary home ›</button>
+          <div style={{fontSize:11,color:TM,textAlign:"center",lineHeight:1.4,marginTop:2}}>Properties are saved on this device only for now.</div>
+        </div>
+      </div>
+    </div>
+  );
   const myhomeScreen=()=>{
     if(!viewedHome){
       return(
@@ -4591,26 +4651,16 @@ function App(){
       {subHeader("My Home")}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:"20px 20px 32px"}}>
 
-        {/* Property switcher: every saved address, plus adding another. */}
-        <div role="group" aria-label="Your properties" style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:16}}>
-          {sortedAddresses.map(a=>{
-            const on=a.id===viewedHome.id;
-            return(
-              <button key={a.id} onClick={()=>{setMyHomeId(a.id);setLayoutPopoverOpen(false);setSqftDraft(null);}} aria-pressed={on}
-                style={{padding:"8px 14px",borderRadius:20,border:`1.5px solid ${on?N:BD}`,background:on?N:W,color:on?ON:TS,fontWeight:on?700:600,fontSize:13,cursor:"pointer"}}>
-                {a.label}{a.isPrimary?" · Primary":""}
-              </button>
-            );
-          })}
-          <button onClick={()=>openAddressForm(null,null,true)}
-            style={{padding:"8px 14px",borderRadius:20,border:`1.5px dashed ${BD}`,background:"transparent",color:NT,fontWeight:700,fontSize:13,cursor:"pointer"}}>+ Add property</button>
-        </div>
+        {propertyPickerButton()}
 
         {/* Home Overview */}
         <div style={{background:W,borderRadius:20,padding:20,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Home overview</div>
-            <span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openAddressForm(viewedHome)} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
+            <span style={{display:"flex",gap:14,alignItems:"center"}}>
+              {!viewedHome.isPrimary&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>setPrimaryAddress(viewedHome.id)} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Set as primary</span>}
+              <span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openAddressForm(viewedHome)} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
+            </span>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
             <div style={{fontWeight:700,fontSize:15,color:TX,lineHeight:1.4}}>📍 {formatAddress(viewedHome)}</div>
@@ -6761,6 +6811,7 @@ function App(){
             );
           })()}
           {havenSignedIn && bottomNav()}
+          {propertySheetOpen&&scr==="myhome"&&viewedHome&&propertySheet()}
           {showSignOutConfirm&&havenAuth&&(
             <div onClick={cancelHavenSignOut} style={{position:"absolute",inset:0,background:"rgba(0,0,0,.4)",display:"flex",alignItems:"flex-end",zIndex:30}}>
               <div role="dialog" aria-modal="true" aria-labelledby="haven-signout-title" onClick={e=>e.stopPropagation()} onKeyDown={e=>{if(e.key==="Escape")cancelHavenSignOut();}} style={{background:W,borderRadius:"20px 20px 0 0",padding:24,width:"100%",paddingBottom:"max(24px, env(safe-area-inset-bottom))"}}>
