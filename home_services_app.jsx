@@ -217,9 +217,16 @@ const DEFAULT_ADDRESSES=[
 // blank screen. Only catches render-phase errors (React limitation) — errors
 // thrown inside event handlers still go to the console, which is why goTo()
 // logs-and-refuses on an unknown screen rather than throwing.
+// Opening splash: the HTML shell draws it and defines window.havenHideSplash
+// (named differently here so this global function never replaces it).
+// The app hides it right after its first screen is drawn (no minimum time).
+function hideOpeningSplash(){
+  try{ if(typeof window!=="undefined"&&typeof window.havenHideSplash==="function") window.havenHideSplash(); }catch(_){}
+}
 class ErrorBoundary extends React.Component{
   constructor(props){ super(props); this.state={error:null}; }
   static getDerivedStateFromError(error){ return {error}; }
+  componentDidCatch(){ hideOpeningSplash(); }
   render(){
     if(this.state.error){
       return (
@@ -282,13 +289,19 @@ export default function App(){
   // The restrained "selected/default" light-blue treatment, reused by the
   // address/card pickers and now the Notification Center's unread state.
   const SELBG = isDark ? "#1E3A5F" : "#EFF6FF";
-  const SELBORDER = isDark ? "#3B6EA8" : "#BFDBFE";
+  const SELBORDER = isDark ? "#3D71AB" : "#BFDBFE"; // dark: 3:1 against cards (was #3B6EA8, 2.98:1)
   // Dark-mode contrast tokens. Light-mode values are unchanged.
   // ON: text on brand/colored fills (navy headers, red/amber/blue buttons). W was
   // used for this, but W is the card surface and turns dark in dark mode.
   const ON = "#FFFFFF";
   // NT: navy-as-text (links, back arrows, active tab) on theme surfaces.
   const NT = isDark ? TX : N;
+  // Selected option chips. Light mode keeps the solid navy fill; in dark mode
+  // navy is almost the same color as the card behind it, so selected chips
+  // use the same blue the app already uses for a selected address or card.
+  const CHIP_ON = isDark ? SELBG : N;
+  const CHIP_ON_EDGE = isDark ? SELBORDER : N;
+  const CHIP_ON_RING = isDark ? `inset 0 0 0 1.5px ${SELBORDER}` : null;
   // DANGER: red text on theme surfaces (Sign Out row).
   const DANGER = isDark ? "#F87171" : "#B42318";
   // AMT: amber used as text (prices, "See all", Rate now) on theme surfaces.
@@ -647,6 +660,14 @@ export default function App(){
   // local fallback: a failure shows the connection error with Retry.
   const [backendStatus,setBackendStatus]=useState("connecting");
   const [backendAttempt,setBackendAttempt]=useState(0);
+  // Opening splash = the loading screen. It stays up, however slow the
+  // connection, until the first real screen is drawn (Home, the sign-in
+  // gate or the connection error with Retry), never the "Connecting"
+  // screen in between, then hides on the next frame. No minimum time.
+  useEffect(()=>{
+    if(backendStatus==="connecting") return;
+    (typeof requestAnimationFrame==="function"?requestAnimationFrame:setTimeout)(hideOpeningSplash);
+  },[backendStatus]);
   // Phase 1B A2: server-confirmed QA tester. False by default, while the
   // check is pending, and on any error. Never localStorage / email.
   const [qaTester,setQaTester]=useState(false);
@@ -919,6 +940,39 @@ export default function App(){
     }
     return null;
   };
+  // Tap the status bar to scroll to the top. iOS scrolls the page (not our
+  // inner scroll areas) to the top when the status bar is tapped. The page
+  // is kept scrolled down by its one spare pixel; when it lands at 0 (the
+  // tap), the current screen scrolls to the top and the pixel is re-armed.
+  // Never while typing (iOS also scrolls the page to show the keyboard).
+  useEffect(()=>{
+    if(typeof window==="undefined"||typeof document==="undefined")return;
+    let armed=false, timer=null;
+    const se=()=>document.scrollingElement||document.documentElement;
+    const arm=()=>{
+      const canScroll=se().scrollHeight>window.innerHeight;
+      if(canScroll&&window.scrollY<1) window.scrollTo(0,1);
+      armed=canScroll&&window.scrollY>=1;
+    };
+    const typing=()=>{ const a=document.activeElement; return !!a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"||a.tagName==="SELECT"); };
+    const onScroll=()=>{
+      if(armed&&window.scrollY<=0){
+        armed=false;
+        if(!typing()){
+          const el=mainScroller();
+          if(el&&el.scrollTop>0){
+            try{ el.scrollTo({top:0,behavior:prefersReducedMotion()?"auto":"smooth"}); }catch{ el.scrollTop=0; }
+          }
+        }
+        clearTimeout(timer); timer=setTimeout(arm,400);
+      }
+    };
+    const t0=setTimeout(arm,600);
+    window.addEventListener("scroll",onScroll,{passive:true});
+    window.addEventListener("resize",arm);
+    return ()=>{ clearTimeout(t0); clearTimeout(timer); window.removeEventListener("scroll",onScroll); window.removeEventListener("resize",arm); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
   const rememberScroll=()=>{
     const el=mainScroller();
     if(el)scrollPositions.current[scrollKey(scr,tab)]=el.scrollTop;
@@ -961,31 +1015,6 @@ export default function App(){
     : vj.status
   ):null;
   const vjSIdx= vj?SF.indexOf(progressStatus):-1;
-  // Progressively-tightening arrival estimate — deterministic, anchored to
-  // real elapsed time since the pro accepted (not random), so it always
-  // counts down smoothly and believably rather than jumping around.
-  const [etaTick,setEtaTick]=useState(0);
-  useEffect(()=>{
-    if(scr!=="tracking"||vj?.status!=="en_route")return;
-    const interval=setInterval(()=>setEtaTick(t=>t+1),3000);
-    if (interval && typeof interval === "object" && typeof interval.unref === "function") { try { interval.unref(); } catch(_) {} }
-    return ()=>clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[scr,vj?.status,vj?.id]);
-  const getArrivalSim=(job)=>{
-    if(!job?.acceptedAt)return null;
-    const elapsedSec=(Date.now()-job.acceptedAt)/1000;
-    const minutesAway=Math.max(1,Math.round(18-elapsedSec/8));
-    const milesAway=Math.max(0.1,Math.round(minutesAway*0.22*10)/10);
-    const etaTime=new Date(Date.now()+minutesAway*60000).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-    const fmt=(mins)=>new Date(Date.now()+mins*60000).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-    let stage,windowLabel;
-    if(elapsedSec<15){ stage="broad"; windowLabel=`${fmt(Math.max(0,minutesAway-30))} – ${fmt(minutesAway+90)}`; }
-    else if(elapsedSec<35){ stage="medium"; windowLabel=`${fmt(Math.max(0,minutesAway-10))} – ${fmt(minutesAway+10)}`; }
-    else{ stage="tight"; windowLabel=null; }
-    return {minutesAway,milesAway,etaTime,stage,windowLabel};
-  };
-  const vjArrivalSim=vj?.status==="en_route"?getArrivalSim(vj):null;
   const vjMsgs= vj?.msgs||[];
   const proProfilePro = PROS.find(p=>p.i===proProfileId) || (vjPro&&vjPro.real&&vjPro.i===proProfileId?vjPro:PROS[0]);
   const formatAddress=a=>a?`${a.street}${a.unit?", "+a.unit:""}, ${a.city}, ${a.state} ${a.zip}`:"";
@@ -996,6 +1025,12 @@ export default function App(){
   // string rather than requiring per-task field additions to the catalog.
   const getExpectedDuration=(t)=>{
     if(!t||t==="Varies")return {estimatedDurationMin:60,estimatedDurationMax:180,durationConfidence:"low",mayRequireInspection:true};
+    // Ranges straight from the catalog ("2-3 hrs", "4-6 hrs") are used as-is.
+    const r=/^(\d+)\s*[-–]\s*(\d+)\s*(min|hr|hrs|hour|hours)$/i.exec(t.trim());
+    if(r){
+      const k=/hr|hour/i.test(r[3])?60:1;
+      return {estimatedDurationMin:parseInt(r[1])*k,estimatedDurationMax:parseInt(r[2])*k,durationConfidence:"high",mayRequireInspection:false};
+    }
     const m=/^(\d+)\s*(min|hr|hrs|hour|hours)$/i.exec(t.trim());
     if(m){
       const n=parseInt(m[1]);
@@ -1008,6 +1043,12 @@ export default function App(){
     const fmt=(mins)=>mins<60?`${mins} min`:(mins%60===0?`${mins/60} hr${mins/60>1?"s":""}`:`${Math.floor(mins/60)}h ${mins%60}m`);
     if(Math.abs(maxM-minM)<15)return fmt(Math.round((minM+maxM)/2));
     return `${fmt(minM)}–${fmt(maxM)}`;
+  };
+  // What to show for a task's expected time. The catalog has no time for
+  // "Varies" and custom jobs, so no number is shown for them.
+  const durationText=(t)=>{
+    const d=getExpectedDuration(t);
+    return d.durationConfidence==="low"?"Varies by job":formatDurationRange(d.estimatedDurationMin,d.estimatedDurationMax);
   };
   // A property's icon is determined ONLY by its own label/type — never by
   // whether it's currently Primary. Primary is communicated separately via
@@ -2037,9 +2078,9 @@ export default function App(){
         <div style={{display:"flex",gap:16,marginBottom:16}}>
           {["✓ Fixed pricing","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
         </div>
-        <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+        <div role="button" tabIndex={0} aria-label="Search 50+ services" onKeyDown={keyActivate} onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
           <span style={{fontSize:16,color:TM}}>🔍</span>
-          <input value={q} onChange={e=>setQ(e.target.value)} onFocus={()=>openBrowse(null,"")} placeholder="Search 50+ services..." style={{border:"none",flex:1,fontSize:15,color:TX,background:"transparent",outline:"none"}} readOnly/>
+          <input value={q} onChange={e=>setQ(e.target.value)} onFocus={()=>openBrowse(null,"")} placeholder="Search 50+ services..." tabIndex={-1} aria-hidden="true" style={{border:"none",flex:1,fontSize:15,color:TX,background:"transparent",outline:"none",pointerEvents:"none"}} readOnly/>
         </div>
       </div>
 
@@ -2104,10 +2145,10 @@ export default function App(){
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div style={{background:W,padding:"12px 20px 12px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
-          <button onClick={goHome} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+          <button onClick={goHome} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:"10px 18px",margin:"-10px -18px",lineHeight:1,fontWeight:300}}>‹</button>
           <div style={{flex:1,background:BG,borderRadius:12,padding:"9px 14px",display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:14,color:TM}}>🔍</span>
-            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search services..."
+            <input value={q} onChange={e=>setQ(e.target.value)} aria-label="Search services" placeholder="Search services..."
               style={{border:"none",flex:1,fontSize:14,color:TX,background:"transparent",outline:"none"}}/>
             {q&&<button onClick={()=>setQ("")} style={{background:"none",border:"none",cursor:"pointer",color:TM,fontSize:13,padding:0}}>✕</button>}
           </div>
@@ -2215,7 +2256,7 @@ export default function App(){
                 <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{t.e}</div>
                 <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
                 <div style={{fontWeight:800,fontSize:t.propertyScoped?15:20,color:AMT}}>{priceInfo}</div>
-                <div style={{fontSize:11,color:TM,marginTop:1}}>est. {formatDurationRange(getExpectedDuration(t.t).estimatedDurationMin,getExpectedDuration(t.t).estimatedDurationMax)}</div>
+                <div style={{fontSize:11,color:TM,marginTop:1}}>{getExpectedDuration(t.t).durationConfidence==="low"?"Time varies":`est. ${durationText(t.t)}`}</div>
               </div>
               );
             })}
@@ -2252,6 +2293,7 @@ export default function App(){
         <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,padding:"20px 20px 16px",position:"relative",zIndex:1}}>
           <div style={{background:W,borderRadius:18,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <textarea value={diagInput} onChange={e=>{setDiagInput(e.target.value);setDiagResult(null);}} maxLength={300}
+              aria-label="Describe the problem"
               placeholder={`e.g. "My garbage disposal is humming but not spinning" or "There's a small leak under my kitchen sink"`}
               style={{width:"100%",minHeight:90,border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.55,outline:"none",padding:0}}/>
             <div style={{fontSize:11,color:TM,textAlign:"right",marginTop:6,paddingTop:6,borderTop:`1px solid ${BD}`}}>{diagInput.length}/300</div>
@@ -2274,7 +2316,7 @@ export default function App(){
                 <div style={{fontSize:28}}>{diagResult.task.e}</div>
                 <div style={{flex:1}}>
                   <div style={{fontWeight:700,fontSize:14,color:TX}}>{diagResult.task.n}</div>
-                  <div style={{fontSize:12,color:TS,marginTop:1}}>est. {formatDurationRange(getExpectedDuration(diagResult.task.t).estimatedDurationMin,getExpectedDuration(diagResult.task.t).estimatedDurationMax)}</div>
+                  <div style={{fontSize:12,color:TS,marginTop:1}}>{getExpectedDuration(diagResult.task.t).durationConfidence==="low"?"Time varies":`est. ${durationText(diagResult.task.t)}`}</div>
                 </div>
                 <div style={{fontWeight:800,fontSize:18,color:AMT}}>${diagResult.task.p}</div>
               </div>
@@ -2303,7 +2345,7 @@ export default function App(){
         <div style={{display:"flex",gap:8,marginBottom:18}}>
           {[["all",`All (${allJobs.length})`],["active",`Active (${activeCount})`],["done",`Done (${doneCount})`]].map(([id,lb])=>{
             const a=bFilter===id;
-            return <button key={id} onClick={()=>setBFilter(id)} style={{flex:1,padding:"9px 0",borderRadius:12,border:"none",fontWeight:a?700:500,background:a?N:W,color:a?W:TS,fontSize:13,cursor:"pointer",boxShadow:a?`0 2px 8px rgba(28,43,58,.18)`:`0 1px 3px rgba(0,0,0,.06)`}}>{lb}</button>;
+            return <button key={id} aria-pressed={a} onClick={()=>setBFilter(id)} style={{flex:1,padding:"9px 0",borderRadius:12,border:"none",fontWeight:a?700:500,background:a?CHIP_ON:W,color:a?ON:TS,fontSize:13,cursor:"pointer",boxShadow:a?(CHIP_ON_RING||`0 2px 8px rgba(28,43,58,.18)`):`0 1px 3px rgba(0,0,0,.06)`}}>{lb}</button>;
           })}
         </div>
         {shownJobs.length===0?(
@@ -2438,7 +2480,7 @@ export default function App(){
   };
   const subHeader=(title,onBack=backToProfile)=>(
     <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",gap:14}}>
-      <button onClick={onBack} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+      <button onClick={onBack} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:"10px 18px",margin:"-10px -18px",lineHeight:1,fontWeight:300}}>‹</button>
       <span style={{fontWeight:700,fontSize:17,color:TX}}>{title}</span>
     </div>
   );
@@ -2479,8 +2521,8 @@ export default function App(){
           {list.map(p=>{
             const a=tpid===p.id;
             return(
-              <button key={p.id} onClick={()=>setTpid(p.id)} style={{border:`1.5px solid ${a?N:BD}`,borderRadius:14,padding:"9px 14px",cursor:"pointer",background:a?N:W,display:"flex",alignItems:"center",gap:6}}>
-                <span style={{fontWeight:700,fontSize:13,color:a?W:TX}}>{p.label}</span>
+              <button key={p.id} aria-pressed={a} onClick={()=>setTpid(p.id)} style={{border:`1.5px solid ${a?CHIP_ON_EDGE:BD}`,borderRadius:14,padding:"9px 14px",cursor:"pointer",background:a?CHIP_ON:W,display:"flex",alignItems:"center",gap:6}}>
+                <span style={{fontWeight:700,fontSize:13,color:a?ON:TX}}>{p.label}</span>
                 {p.surge>0&&<span style={{fontSize:10,fontWeight:700,color:a?"#FFE8B0":"#D97706"}}>+${p.surge}</span>}
               </button>
             );
@@ -3918,7 +3960,7 @@ export default function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG,position:"relative"}}>
         <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between",gap:14}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <button onClick={()=>backFrom("notifCenter",{scr:"home",tab:"profile"})} aria-label="Back" style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+            <button onClick={()=>backFrom("notifCenter",{scr:"home",tab:"profile"})} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:"10px 18px",margin:"-10px -18px",lineHeight:1,fontWeight:300}}>‹</button>
             <span style={{fontWeight:700,fontSize:17,color:TX}}>Notifications</span>
           </div>
           {unreadCount>0&&<button onClick={markAllNotifsRead} aria-label="Mark all notifications as read" style={{background:"none",border:"none",color:N,fontSize:13,fontWeight:700,cursor:"pointer",padding:0}}>Mark all as read</button>}
@@ -4123,7 +4165,7 @@ export default function App(){
                   <span style={{fontSize:20,flexShrink:0}}>⏱️</span>
                   <div>
                     <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:3}}>Expected time</div>
-                    <div style={{fontWeight:700,fontSize:15,color:TX}}>{formatDurationRange(dur.estimatedDurationMin,dur.estimatedDurationMax)}</div>
+                    <div style={{fontWeight:700,fontSize:15,color:TX}}>{durationText(browsedTask.t)}</div>
                     {dur.mayRequireInspection&&<div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.4}}>Could take longer if hidden damage or additional materials are discovered.</div>}
                   </div>
                 </div>
@@ -4169,12 +4211,12 @@ export default function App(){
 
           <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>What needs to be done?</div>
-            <input value={ctitle} onChange={e=>setCtitle(e.target.value)} placeholder="e.g. Pressure wash my driveway"
+            <input value={ctitle} onChange={e=>setCtitle(e.target.value)} aria-label="What needs to be done?" placeholder="e.g. Pressure wash my driveway"
               style={{width:"100%",border:"none",fontSize:16,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0,marginBottom:10}}/>
             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
               {JOB_CATS.map(c=>{
                 const a=ccat===c;
-                return <button key={c} onClick={()=>setCcat(c)} style={{border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:a?700:500,background:a?N:BG,color:a?W:TS}}>{c}</button>;
+                return <button key={c} aria-pressed={a} onClick={()=>setCcat(c)} style={{border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:a?700:500,background:a?CHIP_ON:BG,color:a?ON:TS,...(a&&CHIP_ON_RING?{boxShadow:CHIP_ON_RING}:{})}}>{c}</button>;
               })}
             </div>
           </div>
@@ -4183,7 +4225,7 @@ export default function App(){
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Your budget</div>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
               <span style={{fontSize:20,fontWeight:700,color:AMT}}>$</span>
-              <input type="number" value={cprice} onChange={e=>setCprice(e.target.value)} placeholder="0"
+              <input type="number" value={cprice} onChange={e=>setCprice(e.target.value)} aria-label="Your budget in dollars" placeholder="0"
                 style={{border:"none",fontSize:20,fontWeight:700,color:TX,background:"transparent",outline:"none",width:"100%",padding:0}}/>
             </div>
             {emergency&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,color:"#C2410C",fontWeight:600}}>🚨 Emergency priority fee</span><span style={{fontSize:12,color:"#C2410C",fontWeight:700}}>+${EMERGENCY_FEE}</span></div>}
@@ -4275,7 +4317,7 @@ export default function App(){
         {vjSIdx<3&&<><circle cx={240} cy={83} r="18" fill={W} stroke={N} strokeWidth="2.5"/><text x="240" y="88" textAnchor="middle" fontSize="14">🏠</text></>}
         {vjSIdx===3&&<><circle cx={240} cy={83} r="22" fill={SL}/><circle cx={240} cy={83} r="16" fill={SC}/><text x="240" y="89" textAnchor="middle" fontSize="14" fill={W} fontWeight="900">✓</text></>}
         {showCar&&<><circle cx={px} cy={83} r="20" fill={N} opacity="0.12"/><circle cx={px} cy={83} r="14" fill={N}/><text x={px} y="88" textAnchor="middle" fontSize="13">🚗</text></>}
-        {vj?.status==="en_route"&&<><rect x={px-2} y="50" width="90" height="21" rx="10" fill={AM}/><text x={px+43} y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">{vjArrivalSim?`${vjArrivalSim.minutesAway} min away`:"On the way"}</text></>}
+        {vj?.status==="en_route"&&<><rect x={px-2} y="50" width="90" height="21" rx="10" fill={AM}/><text x={px+43} y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">On the way</text></>}
         {vj?.status==="arrived"&&<><rect x="138" y="50" width="104" height="21" rx="10" fill={SC}/><text x="190" y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">{vjPname} is here!</text></>}
       </svg>
     );
@@ -4383,31 +4425,28 @@ export default function App(){
               </div>
             );
           })()}
-          {vjArrivalSim&&(
-            <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-              {vjArrivalSim.stage!=="tight"?(
-                <>
-                  <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:4}}>Arriving</div>
-                  <div aria-live="polite" style={{fontWeight:800,fontSize:20,color:TX}}>{vjArrivalSim.windowLabel}</div>
-                </>
-              ):(
-                <>
-                  <div aria-live="polite" style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
-                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Time remaining</span>
-                    <span style={{fontWeight:800,fontSize:18,color:TX}}>{vjArrivalSim.minutesAway} min away</span>
+          {vj.status==="en_route"&&(()=>{
+            // Honest arrival card. There is no live Pro location yet, so no
+            // minutes or miles are shown (they used to count down from a
+            // timer, not from where the Pro is). Arrival and job length are
+            // shown as two different things.
+            // Only a time the catalog actually gives; nothing for "Varies"/custom.
+            const durOk=vjTask&&getExpectedDuration(vjTask.t).durationConfidence!=="low";
+            const acceptedAt=vj.acceptedAt?new Date(vj.acceptedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):null;
+            return(
+              <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:4}}>Arrival</div>
+                <div aria-live="polite" style={{fontWeight:800,fontSize:18,color:TX}}>{vjPname} is on the way</div>
+                <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>{acceptedAt?`Accepted at ${acceptedAt}. `:""}A live arrival time will show here once location sharing is available.</div>
+                {durOk&&(
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
+                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Typical job length (estimate)</span>
+                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{durationText(vjTask.t)}</span>
                   </div>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,paddingTop:10,borderTop:`1px solid ${BD}`}}>
-                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Distance remaining</span>
-                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{typeof vjArrivalSim.milesAway==="number"?vjArrivalSim.milesAway.toFixed(1):vjArrivalSim.milesAway} miles</span>
-                  </div>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",paddingTop:10,borderTop:`1px solid ${BD}`}}>
-                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Estimated arrival</span>
-                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{vjArrivalSim.etaTime}</span>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            );
+          })()}
           <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div onClick={()=>{ if(!vjPro.real) openProProfile(vjPro,"tracking"); }} style={{display:"flex",gap:14,alignItems:"center",marginBottom:14,cursor:vjPro.real?"default":"pointer"}}>
               <div style={{width:50,height:50,borderRadius:25,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontWeight:800,fontSize:16,flexShrink:0}}>{vjPro.i}</div>
@@ -4590,13 +4629,31 @@ export default function App(){
       </div>
     );
   };
+  // Star value (0.5 steps) under an x position on the stars row: the left
+  // half of a star is a half star. null when the row has no layout (tests).
+  const starValueAt=(row,clientX)=>{
+    const kids=Array.from(row.children);
+    for(let i=0;i<kids.length;i++){
+      const r=kids[i].getBoundingClientRect();
+      if(!r.width) return null;
+      if(clientX<=r.right) return i+(clientX<r.left+r.width/2?0.5:1);
+    }
+    return kids.length?5:null;
+  };
+  // Keyboard / VoiceOver: arrows change the rating by half a star.
+  const onStarKey=e=>{
+    const step={ArrowRight:0.5,ArrowUp:0.5,ArrowLeft:-0.5,ArrowDown:-0.5}[e.key];
+    if(step!=null){ e.preventDefault(); setStars(v=>Math.max(0.5,Math.min(5,(v||0)+step))); }
+    else if(e.key==="Home"){ e.preventDefault(); setStars(0.5); }
+    else if(e.key==="End"){ e.preventDefault(); setStars(5); }
+  };
   const ratingScreen=()=>{
     if(!vj) return unavailableScreen("Rate your experience",goBookings);
     const HIRE=[["yes","Yes, definitely! 👍"],["maybe","Maybe"],["no","No"]];
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
-          <button onClick={()=>goTo("tracking")} style={{background:"none",border:"none",color:NT,fontSize:14,fontWeight:700,cursor:"pointer",padding:0}}>← Back</button>
+          <button onClick={()=>backFrom("rating",{scr:"tracking",tab:"bookings"})} style={{background:"none",border:"none",color:NT,fontSize:14,fontWeight:700,cursor:"pointer",padding:0}}>← Back</button>
         </div>
         <div className="sc" style={{flex:1,overflowY:"auto",padding:"28px 22px"}}>
           <div style={{textAlign:"center",marginBottom:28}}>
@@ -4608,8 +4665,25 @@ export default function App(){
             <div style={{fontSize:13,fontWeight:600,color:TS,marginBottom:14}}>How was your experience?</div>
             <div
               data-no-edge-swipe
-              onPointerDown={()=>setStarDragging(true)}
+              role="slider"
+              tabIndex={0}
+              aria-label="Your rating"
+              aria-valuemin={0.5}
+              aria-valuemax={5}
+              aria-valuenow={stars||undefined}
+              aria-valuetext={stars>0?`${stars} star${stars===1?"":"s"}, ${STAR_LABELS[Math.round(stars)]||STAR_LABELS[Math.ceil(stars)]}`:"Not rated"}
+              onKeyDown={onStarKey}
+              onPointerDown={e=>{
+                // Follow the finger: a touch is captured by the row, so the
+                // per-star targets below never hear a drag on a phone. The
+                // value comes from where the pointer is over the row instead.
+                try{ e.currentTarget.setPointerCapture(e.pointerId); }catch{}
+                setStarDragging(true);
+                const v=starValueAt(e.currentTarget,e.clientX); if(v) setStars(v);
+              }}
+              onPointerMove={e=>{ if(starDragging){ const v=starValueAt(e.currentTarget,e.clientX); if(v) setStars(v); } }}
               onPointerUp={()=>setStarDragging(false)}
+              onPointerCancel={()=>setStarDragging(false)}
               onPointerLeave={()=>setStarDragging(false)}
               style={{position:"relative",display:"inline-flex",gap:4,justifyContent:"center",marginBottom:10,touchAction:"none",userSelect:"none"}}
             >
@@ -4650,7 +4724,7 @@ export default function App(){
               {HIRE.map(([val,lbl])=>{
                 const a=hireAgain===val;
                 return(
-                  <button key={val} onClick={()=>setHireAgain(a?null:val)} style={{flex:1,padding:"10px 4px",borderRadius:12,border:`1.5px solid ${a?N:BD}`,background:a?N:BG,color:a?W:TS,fontWeight:a?700:500,fontSize:12,cursor:"pointer",lineHeight:1.3}}>{lbl}</button>
+                  <button key={val} aria-pressed={a} onClick={()=>setHireAgain(a?null:val)} style={{flex:1,padding:"10px 4px",borderRadius:12,border:`1.5px solid ${a?CHIP_ON_EDGE:BD}`,background:a?CHIP_ON:BG,color:a?ON:TS,fontWeight:a?700:500,fontSize:12,cursor:"pointer",lineHeight:1.3}}>{lbl}</button>
                 );
               })}
             </div>
@@ -4672,7 +4746,7 @@ export default function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div style={{background:W,padding:"12px 20px 14px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <button onClick={()=>goTo("tracking")} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+            <button onClick={()=>backFrom("messages",{scr:"tracking",tab:"bookings"})} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:"10px 18px",margin:"-10px -18px",lineHeight:1,fontWeight:300}}>‹</button>
             <div style={{width:38,height:38,borderRadius:19,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontWeight:800,fontSize:14,flexShrink:0}}>{vjPro.i}</div>
             <div>
               <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjPro.n}</div>
