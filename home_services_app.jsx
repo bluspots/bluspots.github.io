@@ -93,6 +93,22 @@ const EMERGENCY_TIME_PREFS=[
   {id:103,label:"Within 6 hours",  sub:"Response within 6 hours",surge:0},
 ];
 const ALL_TIME_PREFS=[...TIME_PREFS,...EMERGENCY_TIME_PREFS];
+// Today's windows end at these hours (local time). Each is offered until an
+// hour before it ends, so the app never offers (or pre-selects) a window
+// that's already over: at 9 PM "This morning" used to be the default.
+const TODAY_WINDOW_END_HOUR={2:12,3:17,4:21};
+const TIME_WINDOW_MIN_LEAD_MIN=60;
+const timePrefOpen=(id,nowMs=Date.now())=>{
+  const end=TODAY_WINDOW_END_HOUR[id];
+  if(end==null) return true;
+  const d=new Date(nowMs);
+  return d.getHours()*60+d.getMinutes() <= end*60-TIME_WINDOW_MIN_LEAD_MIN;
+};
+// First no-surge window still open today, else Tomorrow AM.
+const defaultTimePrefId=(nowMs=Date.now())=>{
+  const open=TIME_PREFS.filter(p=>p.surge===0&&timePrefOpen(p.id,nowMs));
+  return open.length?open[0].id:5;
+};
 
 const JOB_CATS=[...CATS.filter(c=>c!=="All"),"Other"];
 
@@ -282,6 +298,9 @@ export default function App(){
 
   const [tid,setTid]       = useState(null);
   const [tpid,setTpid]     = useState(null);
+  useEffect(()=>{
+    if(tpid!=null&&!timePrefOpen(tpid)) setTpid(defaultTimePrefId());
+  });
   const [photos,setPhotos] = useState([]);
   const [desc,setDesc]     = useState("");
   const [emergency,setEmergency] = useState(false);
@@ -1528,7 +1547,7 @@ export default function App(){
     setLocationPermission("never_requested");setDetectedCity(null);setLocationWarningDismissed(false);
     isPostingRef.current=false; // re-arm the double-submission guard for this fresh draft
   };
-  const openTask   =(id)=>{setTid(id);setTpid(2);setDesc("");setEmergency(false);resetBookingSelections();goTo("task");};
+  const openTask   =(id)=>{setTid(id);setTpid(defaultTimePrefId());setDesc("");setEmergency(false);resetBookingSelections();goTo("task");};
   const photoInputRef = useRef(null);
   const isPostingRef = useRef(false); // synchronous guard against rapid-double-tap creating duplicate jobs
   const addPhoto   =()=>{ photoInputRef.current?.click(); };
@@ -1692,7 +1711,7 @@ export default function App(){
   };
   const bookDiagnosis=()=>{
     if(!diagResult)return;
-    setTid(diagResult.task.id);setTpid(2);setDesc(diagInput);setEmergency(false);resetBookingSelections();goTo("task");
+    setTid(diagResult.task.id);setTpid(defaultTimePrefId());setDesc(diagInput);setEmergency(false);resetBookingSelections();goTo("task");
   };
 
   const postJob=async()=>{
@@ -2043,7 +2062,7 @@ export default function App(){
             <div style={{fontWeight:700,fontSize:13,color:isDark?"#FDBA74":"#C2410C"}}>Urgent</div>
             <div style={{fontSize:10,color:isDark?"#FDBA74":"#C2410C",opacity:isDark?.75:1,marginTop:1}}>Fast help</div>
           </button>
-          <button onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+          <button onClick={()=>{setTid(null);setTpid(defaultTimePrefId());setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
             style={{font:"inherit",background:SELBG,border:`1.5px solid ${SELBORDER}`,borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
             <div style={{fontSize:22,marginBottom:6}}>✏️</div>
             <div style={{fontWeight:700,fontSize:13,color:NT}}>Not Listed?</div>
@@ -2134,7 +2153,7 @@ export default function App(){
                     <div style={{fontWeight:800,fontSize:priceInfo.isEstimate?15:19,color:AMT,flexShrink:0,textAlign:"right"}}>{priceInfo.text}</div>
                   </div>
                 )}
-                <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:0}}>Not what you meant? Post a custom job instead</button>
+                <button onClick={()=>{setTid(null);setTpid(defaultTimePrefId());setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:0}}>Not what you meant? Post a custom job instead</button>
               </div>
             );
           })():intentResult.tier==="medium"?(
@@ -2153,7 +2172,7 @@ export default function App(){
                     </div>
                   );
                 })}
-                <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+                <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(defaultTimePrefId());setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
                   style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
                   <div style={{fontSize:28,marginBottom:8}}>✏️</div>
                   <div style={{fontWeight:700,fontSize:13,color:ON,lineHeight:1.3,marginBottom:4}}>Post a custom job</div>
@@ -2172,7 +2191,7 @@ export default function App(){
                       const task=intent&&TASKS.find(t=>t.id===intent.taskId);
                       if(task){ openTask(task.id); return; }
                     }
-                    setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");
+                    setTid(null);setTpid(defaultTimePrefId());setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");
                   }} style={{width:"100%",textAlign:"left",padding:"13px 16px",borderRadius:12,border:`1px solid ${BD}`,background:BG,color:TX,fontWeight:600,fontSize:14,cursor:"pointer",marginBottom:8}}>{opt.label}</button>
                 ))}
               </div>
@@ -2182,7 +2201,7 @@ export default function App(){
               <div style={{fontSize:48,marginBottom:12}}>🔍</div>
               <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No exact matches for "{q}"</div>
               <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:260,marginLeft:"auto",marginRight:"auto"}}>Describe what's going on and we'll match you with the right pro.</div>
-              <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:ON,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
+              <button onClick={()=>{setTid(null);setTpid(defaultTimePrefId());setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:ON,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
               <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:"none",border:"none",color:TS,fontWeight:600,cursor:"pointer",fontSize:13,textDecoration:"underline"}}>Clear filters</button>
             </div>
           )
@@ -2200,7 +2219,7 @@ export default function App(){
               </div>
               );
             })}
-            <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+            <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(defaultTimePrefId());setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
               style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
               <div style={{fontSize:28,marginBottom:8}}>✏️</div>
               <div style={{fontWeight:700,fontSize:13,color:ON,lineHeight:1.3,marginBottom:4}}>Post a custom job</div>
@@ -2451,7 +2470,8 @@ export default function App(){
 
   // ── BOOKING FLOW — SHARED COMPACT COMPONENTS ────────────────────────────────
   // Compact chip-style time selector (replaces the old stacked full-width cards)
-  const timeChips=(list,isEmergency)=>{
+  const timeChips=(allPrefs,isEmergency)=>{
+    const list=allPrefs.filter(p=>timePrefOpen(p.id));
     const selected=list.find(p=>p.id===tpid);
     return(
       <div style={{marginBottom:16}}>
