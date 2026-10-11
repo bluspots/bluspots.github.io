@@ -1556,7 +1556,7 @@ export default function App(){
 
   // Profile edit
   const profilePhotoInputRef = useRef(null);
-  const openEditProfile=()=>{setDraftName(profile.name);setDraftBio(profile.bio);setDraftPhoto(profile.photo);goTo("editProfile");};
+  const openEditProfile=()=>{setDraftName(profileShownName);setDraftBio(profile.bio);setDraftPhoto(profile.photo);goTo("editProfile");};
   const handleProfilePhoto=(e)=>{
     const file=e.target.files?.[0]; if(!file) return;
     const reader=new FileReader();
@@ -1564,6 +1564,12 @@ export default function App(){
     reader.readAsDataURL(file);
     e.target.value="";
   };
+  // Name shown on Profile and pre-filled in Edit profile: the name typed in
+  // Edit profile, else the account's name (profiles.display_name), never the
+  // "Jane Doe" seed. "" when there's neither (Profile then says "Add your
+  // name"). Edit profile still saves on this device only, as before.
+  const profileEditedName=typeof profile.name==="string"&&profile.name.trim()!==DEFAULT_PROFILE.name?profile.name.trim():"";
+  const profileShownName=profileEditedName||(havenAuth?havenProfileDisplayName:"");
   const saveProfile=()=>{setProfile(p=>({...p,name:draftName.trim()||"Jane Doe",bio:draftBio.trim(),photo:draftPhoto}));goProfile();};
 
   // My Home / Addresses — one canonical model, one edit form for both contexts
@@ -1995,7 +2001,7 @@ export default function App(){
           </div>
           <div style={{display:"flex",flexDirection:"column",gap:10}}>
             {EMERGENCY_OPTIONS.map(opt=>(
-              <div key={opt.key} onClick={()=>startEmergency(opt)} style={{background:W,borderRadius:16,padding:"15px 16px",display:"flex",alignItems:"center",gap:14,cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.06)"}}>
+              <div role="button" tabIndex={0} onKeyDown={keyActivate} key={opt.key} onClick={()=>startEmergency(opt)} style={{background:W,borderRadius:16,padding:"15px 16px",display:"flex",alignItems:"center",gap:14,cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.06)"}}>
                 <div style={{width:42,height:42,borderRadius:21,background:"#FFF1EE",display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,flexShrink:0}}>{opt.e}</div>
                 <span style={{flex:1,fontWeight:600,fontSize:14,color:TX}}>{opt.label}</span>
                 <span style={{color:TM,fontSize:18}}>›</span>
@@ -2016,7 +2022,7 @@ export default function App(){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
           <div>
             <div style={{color:AM,fontSize:11,fontWeight:800,letterSpacing:2.5,marginBottom:6}}>HAVEN</div>
-            <div onClick={()=>goTo("addresses")} aria-label={primaryHome?`Current location: ${primaryHome.city}, ${primaryHome.state}. Tap to manage addresses.`:"No address saved. Tap to add one."} style={{color:"rgba(255,255,255,.5)",fontSize:11,marginBottom:2,cursor:"pointer"}}>📍 {primaryHome?`${primaryHome.city}, ${primaryHome.state}`:"Add an address"}</div>
+            <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>goTo("addresses")} aria-label={primaryHome?`Current location: ${primaryHome.city}, ${primaryHome.state}. Tap to manage addresses.`:"No address saved. Tap to add one."} style={{color:"rgba(255,255,255,.5)",fontSize:11,marginBottom:2,cursor:"pointer"}}>📍 {primaryHome?`${primaryHome.city}, ${primaryHome.state}`:"Add an address"}</div>
             <div style={{color:ON,fontSize:22,fontWeight:800,lineHeight:1.25}}>What do you<br/>need done?</div>
           </div>
           <button onClick={goProfile} aria-label="Profile" style={{width:40,height:40,borderRadius:20,border:"none",background:"none",padding:0,cursor:"pointer",flexShrink:0}}>
@@ -2026,7 +2032,7 @@ export default function App(){
         <div style={{display:"flex",gap:16,marginBottom:16}}>
           {["✓ Fixed pricing","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
         </div>
-        <div onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+        <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
           <span style={{fontSize:16,color:TM}}>🔍</span>
           <input value={q} onChange={e=>setQ(e.target.value)} onFocus={()=>openBrowse(null,"")} placeholder="Search 50+ services..." style={{border:"none",flex:1,fontSize:15,color:TX,background:"transparent",outline:"none"}} readOnly/>
         </div>
@@ -2063,7 +2069,7 @@ export default function App(){
         <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:12}}>What do you need?</div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10,marginBottom:22}}>
           {ENTRY_GROUPS.map(g=>(
-            <div key={g.key} onClick={()=>openBrowse(g.cats,g.label)} style={{background:W,borderRadius:16,padding:"14px 8px",textAlign:"center",cursor:"pointer",boxShadow:"0 2px 8px rgba(28,43,58,.06)"}}>
+            <div role="button" tabIndex={0} onKeyDown={keyActivate} key={g.key} onClick={()=>openBrowse(g.cats,g.label)} style={{background:W,borderRadius:16,padding:"14px 8px",textAlign:"center",cursor:"pointer",boxShadow:"0 2px 8px rgba(28,43,58,.06)"}}>
               <div style={{fontSize:24,marginBottom:6}}>{g.e}</div>
               <div style={{fontSize:11,fontWeight:600,color:TX,lineHeight:1.3}}>{g.label}</div>
             </div>
@@ -2073,11 +2079,11 @@ export default function App(){
         {/* Popular services rail */}
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:12}}>
           <span style={{fontWeight:700,fontSize:15,color:TX}}>Popular services</span>
-          <span onClick={()=>openBrowse(null,"")} style={{fontSize:12,color:AMT,fontWeight:700,cursor:"pointer"}}>See all →</span>
+          <span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openBrowse(null,"")} style={{fontSize:12,color:AMT,fontWeight:700,cursor:"pointer"}}>See all →</span>
         </div>
         <div className="sc" style={{display:"flex",gap:12,overflowX:"auto",marginBottom:4,paddingBottom:4}}>
           {popular.map(t=>(
-            <div key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"14px 12px",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)",flexShrink:0,width:120}}>
+            <div role="button" tabIndex={0} onKeyDown={keyActivate} key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"14px 12px",cursor:"pointer",boxShadow:"0 2px 10px rgba(28,43,58,.07)",flexShrink:0,width:120}}>
               <div style={{fontSize:26,marginBottom:8}}>{t.e}</div>
               <div style={{fontWeight:700,fontSize:12,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
               <div style={{fontWeight:800,fontSize:16,color:AMT}}>${t.p}</div>
@@ -2093,7 +2099,7 @@ export default function App(){
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div style={{background:W,padding:"12px 20px 12px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
-          <button onClick={goHome} style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+          <button onClick={goHome} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
           <div style={{flex:1,background:BG,borderRadius:12,padding:"9px 14px",display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:14,color:TM}}>🔍</span>
             <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search services..."
@@ -2133,7 +2139,7 @@ export default function App(){
               <div style={{padding:"0 20px 24px"}}>
                 <div style={{fontSize:11,fontWeight:700,color:TS,letterSpacing:.4,textTransform:"uppercase",marginBottom:10}}>Recommended for you</div>
                 {task&&(
-                  <div onClick={()=>openTask(task.id)} style={{background:W,borderRadius:20,padding:18,cursor:"pointer",boxShadow:"0 4px 16px rgba(28,43,58,.1)",border:`2px solid ${AM}`,marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
+                  <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openTask(task.id)} style={{background:W,borderRadius:20,padding:18,cursor:"pointer",boxShadow:"0 4px 16px rgba(28,43,58,.1)",border:`2px solid ${AM}`,marginBottom:14,display:"flex",alignItems:"center",gap:14}}>
                     <div style={{fontSize:38,lineHeight:1,flexShrink:0}}>{task.e}</div>
                     <div style={{flex:1,minWidth:0}}>
                       <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:2}}>{task.n}</div>
@@ -2154,14 +2160,14 @@ export default function App(){
                   if(!task)return null;
                   const priceInfo=task.propertyScoped?(()=>{const pr=calculateCleaningPrice(task,selectedAddress);return pr.price==null?"Est. varies":`Est. $${pr.price}`;})():`$${task.p}`;
                   return (
-                    <div key={m.intentId} onClick={()=>openTask(task.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                    <div role="button" tabIndex={0} onKeyDown={keyActivate} key={m.intentId} onClick={()=>openTask(task.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                       <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{task.e}</div>
                       <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{task.n}</div>
                       <div style={{fontWeight:800,fontSize:task.propertyScoped?15:20,color:AMT}}>{priceInfo}</div>
                     </div>
                   );
                 })}
-                <div onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+                <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
                   style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
                   <div style={{fontSize:28,marginBottom:8}}>✏️</div>
                   <div style={{fontWeight:700,fontSize:13,color:ON,lineHeight:1.3,marginBottom:4}}>Post a custom job</div>
@@ -2199,7 +2205,7 @@ export default function App(){
             {items.map(t=>{
               const priceInfo=t.propertyScoped?(()=>{const pr=calculateCleaningPrice(t,selectedAddress);return pr.price==null?"Est. varies":`Est. $${pr.price}`;})():`$${t.p}`;
               return (
-              <div key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+              <div role="button" tabIndex={0} onKeyDown={keyActivate} key={t.id} onClick={()=>openTask(t.id)} style={{background:W,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",position:"relative",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                 {t.pop&&<span style={{position:"absolute",top:10,right:10,background:isDark?"#3A2E12":"#FEF3C7",color:isDark?"#FBBF24":"#AD4F08",fontSize:9,fontWeight:800,padding:"2px 7px",borderRadius:10}}>POPULAR</span>}
                 <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{t.e}</div>
                 <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
@@ -2208,7 +2214,7 @@ export default function App(){
               </div>
               );
             })}
-            <div onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+            <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
               style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
               <div style={{fontSize:28,marginBottom:8}}>✏️</div>
               <div style={{fontWeight:700,fontSize:13,color:ON,lineHeight:1.3,marginBottom:4}}>Post a custom job</div>
@@ -2324,7 +2330,7 @@ export default function App(){
             : isDone?SL
             : "#EEF2FF";
           return(
-            <div key={j.id} onClick={()=>{setVjid(j.id);setShowCancelConfirm(false);setShowCancelRequest(false);goTo(isPending?"posted":"tracking");}} style={{background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:12,cursor:"pointer"}}>
+            <div role="button" tabIndex={0} onKeyDown={keyActivate} key={j.id} onClick={()=>{setVjid(j.id);setShowCancelConfirm(false);setShowCancelRequest(false);goTo(isPending?"posted":"tracking");}} style={{background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:12,cursor:"pointer"}}>
               <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:12}}>
                 <div style={{width:50,height:50,borderRadius:25,background:"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{jt?.e||"🔧"}</div>
                 <div style={{flex:1}}>
@@ -2360,7 +2366,7 @@ export default function App(){
       <button onClick={openEditProfile} style={{width:"100%",textAlign:"left",font:"inherit",background:N,border:"none",borderRadius:20,padding:20,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer"}}>
         <Avatar photo={profile.photo} size={52} iconSize={30} iconColor={W}/>
         <div style={{flex:1}}>
-          <div style={{fontWeight:700,fontSize:16,color:ON}}>{profile.name}</div>
+          <div style={{fontWeight:700,fontSize:16,color:ON}}>{profileShownName||"Add your name"}</div>
           <div style={{color:"rgba(255,255,255,.55)",fontSize:13,marginTop:2}}>{profile.bio||`Member since ${new Date(profile.accountCreatedAt).getFullYear()}`}</div>
           {havenAuth&&havenAuth.email?(
             <div style={{color:"rgba(255,255,255,.72)",fontSize:12,marginTop:4}}>{havenAuth.email} · {havenAuth.role||"customer"}</div>
@@ -2399,7 +2405,7 @@ export default function App(){
           ["Settings",()=>goTo("settings"),false,null],
           ["Help & Support",()=>openHelp(),false,null],
         ].map(([item,fn,disabledItem,badge],i,arr)=>(
-          <div key={item} onClick={disabledItem?undefined:fn} aria-label={badge?`${item}, ${badge} unread`:item} style={{padding:"16px 20px",borderBottom:`1px solid ${BD}`,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:disabledItem?"default":"pointer"}}>
+          <div role={disabledItem?undefined:"button"} tabIndex={disabledItem?undefined:0} onKeyDown={disabledItem?undefined:keyActivate} key={item} onClick={disabledItem?undefined:fn} aria-label={badge?`${item}, ${badge} unread`:item} style={{padding:"16px 20px",borderBottom:`1px solid ${BD}`,display:"flex",justifyContent:"space-between",alignItems:"center",cursor:disabledItem?"default":"pointer"}}>
             <span style={{fontWeight:500,fontSize:15,color:disabledItem?TM:TX}}>{item}</span>
             <div style={{display:"flex",alignItems:"center",gap:8}}>
               {badge&&<span style={{fontSize:11,fontWeight:800,color:ON,background:"#DC2626",padding:"1px 7px",borderRadius:10,minWidth:18,textAlign:"center"}}>{badge}</span>}
@@ -2407,7 +2413,7 @@ export default function App(){
             </div>
           </div>
         ))}
-        <div onClick={havenAuth?()=>{void submitHavenSignOut();}:undefined} role={havenAuth?"button":undefined} aria-disabled={havenAuth?undefined:"true"} style={{padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:havenAuth?"pointer":"default"}}>
+        <div onClick={havenAuth?()=>{void submitHavenSignOut();}:undefined} role={havenAuth?"button":undefined} tabIndex={havenAuth?0:undefined} onKeyDown={havenAuth?keyActivate:undefined} aria-disabled={havenAuth?undefined:"true"} style={{padding:"16px 20px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:havenAuth?"pointer":"default"}}>
           <span style={{fontWeight:500,fontSize:15,color:havenAuth?DANGER:TM}}>Sign Out</span>
         </div>
       </div>
@@ -2418,9 +2424,16 @@ export default function App(){
     </div>
   );
 
+  // Tappable rows and tiles that aren't <button>s (kept as-is so they look
+  // exactly the same) get role="button", keyboard focus, and this: Enter or
+  // Space activates them, like a real button. Only when the row itself has
+  // focus, so typing in a field inside one is never hijacked.
+  const keyActivate=e=>{
+    if((e.key==="Enter"||e.key===" ")&&e.target===e.currentTarget){ e.preventDefault(); e.currentTarget.click(); }
+  };
   const subHeader=(title,onBack=backToProfile)=>(
     <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",gap:14}}>
-      <button onClick={onBack} style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+      <button onClick={onBack} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
       <span style={{fontWeight:700,fontSize:17,color:TX}}>{title}</span>
     </div>
   );
@@ -2479,10 +2492,10 @@ export default function App(){
           <span style={{fontSize:16,flexShrink:0}}>📍</span>
           <span style={{fontSize:13,color:selectedAddress?TX:NT,fontWeight:600,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",cursor:selectedAddress?"default":"pointer"}} onClick={selectedAddress?undefined:()=>openAddressForm(null)}>{selectedAddress?formatAddress(selectedAddress):"No address saved — tap to add one"}</span>
         </div>
-        {addresses.length>1&&<span onClick={()=>{setShowAddressPicker(v=>!v);setShowCardPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10}}>Change</span>}
+        {addresses.length>1&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setShowAddressPicker(v=>!v);setShowCardPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10}}>Change</span>}
       </div>
       {locationPermission==="never_requested"&&(
-        <div onClick={requestLocation} style={{marginTop:10,fontSize:11,color:TM,cursor:"pointer"}}>📡 Check my location to help prevent mistakes</div>
+        <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={requestLocation} style={{marginTop:10,fontSize:11,color:TM,cursor:"pointer"}}>📡 Check my location to help prevent mistakes</div>
       )}
       {locationPermission==="requesting"&&(
         <div style={{marginTop:10,fontSize:11,color:TM}}>📡 Checking your location…</div>
@@ -2501,13 +2514,13 @@ export default function App(){
       {detectedCity!==null&&selectedAddress&&detectedCity===selectedAddress.city&&(
         <div style={{marginTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <span style={{fontSize:11,color:SC}}>📡 Location matches this property</span>
-          {qaTester&&<span onClick={simulateDifferentLocation} style={{fontSize:10,color:TM,textDecoration:"underline",cursor:"pointer"}}>Simulate different location (demo)</span>}
+          {qaTester&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={simulateDifferentLocation} style={{fontSize:10,color:TM,textDecoration:"underline",cursor:"pointer"}}>Simulate different location (demo)</span>}
         </div>
       )}
       {showAddressPicker&&(
         <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
           {sortedAddresses.map(a=>(
-            <div key={a.id} onClick={()=>{setSelectedAddressId(a.id);setShowAddressPicker(false);}}
+            <div role="button" tabIndex={0} onKeyDown={keyActivate} key={a.id} onClick={()=>{setSelectedAddressId(a.id);setShowAddressPicker(false);}}
               style={{padding:"9px 10px",borderRadius:10,marginBottom:6,cursor:"pointer",background:a.id===selectedAddressId?SELBG:BG,border:`1.5px solid ${a.id===selectedAddressId?SELBORDER:"transparent"}`}}>
               <div style={{fontSize:12,fontWeight:700,color:TX}}>{a.label}{a.isPrimary?" · Primary":""}</div>
               <div style={{fontSize:11,color:TS,marginTop:1}}>{formatAddress(a)}</div>
@@ -2521,12 +2534,12 @@ export default function App(){
           <span style={{fontSize:16}}>💳</span>
           <span style={{fontSize:13,color:TX,fontWeight:600}}>{selectedCard?`${selectedCard.brand} •••• ${selectedCard.last4}`:"No card saved"}</span>
         </div>
-        {cards.length>1&&<span onClick={()=>{setShowCardPicker(v=>!v);setShowAddressPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Change</span>}
+        {cards.length>1&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setShowCardPicker(v=>!v);setShowAddressPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Change</span>}
       </div>
       {showCardPicker&&(
         <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
           {cards.map(c=>(
-            <div key={c.id} onClick={()=>{setSelectedCardId(c.id);setShowCardPicker(false);}}
+            <div role="button" tabIndex={0} onKeyDown={keyActivate} key={c.id} onClick={()=>{setSelectedCardId(c.id);setShowCardPicker(false);}}
               style={{padding:"9px 10px",borderRadius:10,marginBottom:6,cursor:"pointer",background:c.id===selectedCardId?SELBG:BG,border:`1.5px solid ${c.id===selectedCardId?SELBORDER:"transparent"}`,display:"flex",justifyContent:"space-between"}}>
               <span style={{fontSize:12,fontWeight:700,color:TX}}>{c.brand} •••• {c.last4}</span>
               {c.isDefault&&<span style={{fontSize:10,color:TM}}>Default</span>}
@@ -2552,7 +2565,7 @@ export default function App(){
           </div>
         ))}
         {photos.length<4&&(
-          <div onClick={addPhoto} style={{width:64,height:64,borderRadius:12,background:BG,border:`1.5px dashed ${BD}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}>
+          <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={addPhoto} style={{width:64,height:64,borderRadius:12,background:BG,border:`1.5px dashed ${BD}`,display:"flex",alignItems:"center",justifyContent:"center",cursor:"pointer",flexShrink:0}}>
             <span style={{fontSize:20,color:TM}}>📷</span>
           </div>
         )}
@@ -2614,7 +2627,7 @@ export default function App(){
           <Avatar photo={draftPhoto} size={88} iconSize={40} iconColor={W} onClick={()=>profilePhotoInputRef.current?.click()}>
             <div style={{position:"absolute",bottom:0,left:0,right:0,background:"rgba(0,0,0,.45)",color:ON,fontSize:10,fontWeight:700,textAlign:"center",padding:"4px 0"}}>Change</div>
           </Avatar>
-          <span onClick={()=>profilePhotoInputRef.current?.click()} style={{fontSize:12,color:NT,fontWeight:600,cursor:"pointer",marginTop:10}}>Tap to change photo</span>
+          <span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>profilePhotoInputRef.current?.click()} style={{fontSize:12,color:NT,fontWeight:600,cursor:"pointer",marginTop:10}}>Tap to change photo</span>
         </div>
         <div style={{background:W,borderRadius:18,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
           <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Name</div>
@@ -2724,7 +2737,7 @@ export default function App(){
         <div style={{background:W,borderRadius:20,padding:20,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:14}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Home overview</div>
-            <span onClick={()=>openAddressForm(viewedHome)} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
+            <span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openAddressForm(viewedHome)} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Edit ›</span>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:14,flexWrap:"wrap"}}>
             <div style={{fontWeight:700,fontSize:15,color:TX,lineHeight:1.4}}>📍 {formatAddress(viewedHome)}</div>
@@ -2859,7 +2872,7 @@ export default function App(){
             })}
           </div>
         )}
-        <div onClick={()=>goTo("serviceHistory")} style={{background:W,borderRadius:16,padding:14,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer",display:"flex",justifyContent:"center",alignItems:"center",gap:6}}>
+        <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>goTo("serviceHistory")} style={{background:W,borderRadius:16,padding:14,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer",display:"flex",justifyContent:"center",alignItems:"center",gap:6}}>
           <span style={{fontSize:13,fontWeight:700,color:NT}}>View all service history</span>
           <span style={{color:NT,fontSize:16}}>›</span>
         </div>
@@ -2887,7 +2900,7 @@ export default function App(){
 
         {/* Documents */}
         <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:12}}>Documents</div>
-        <div onClick={()=>goTo("receiptList")}
+        <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>goTo("receiptList")}
           style={{background:W,borderRadius:18,padding:16,marginBottom:20,boxShadow:"0 2px 10px rgba(28,43,58,.07)",cursor:"pointer",display:"flex",alignItems:"center",gap:14}}>
           <div style={{width:44,height:44,borderRadius:22,background:SL,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}><span style={{fontSize:22}}>🧾</span></div>
           <div style={{flex:1}}>
@@ -3644,7 +3657,7 @@ export default function App(){
           const open=expandedCard===c.id;
           return(
             <div key={c.id} style={{background:c.isDefault?SELBG:W,border:c.isDefault?`1.5px solid ${SELBORDER}`:"1.5px solid transparent",borderRadius:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",overflow:"hidden"}}>
-              <div onClick={()=>setExpandedCard(open?null:c.id)} style={{padding:16,display:"flex",alignItems:"center",gap:14,cursor:"pointer"}}>
+              <div role="button" tabIndex={0} onKeyDown={keyActivate} aria-expanded={open} onClick={()=>setExpandedCard(open?null:c.id)} style={{padding:16,display:"flex",alignItems:"center",gap:14,cursor:"pointer"}}>
                 <div style={{width:44,height:30,borderRadius:6,background:cardColors[c.brand]||N,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontSize:9,fontWeight:800,flexShrink:0}}>{c.brand.slice(0,4).toUpperCase()}</div>
                 <div style={{flex:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:6}}>
@@ -3720,7 +3733,7 @@ export default function App(){
           const open=expandedAddr===a.id;
           return(
             <div key={a.id} style={{background:a.isPrimary?SELBG:W,border:a.isPrimary?`1.5px solid ${SELBORDER}`:"1.5px solid transparent",borderRadius:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",overflow:"hidden"}}>
-              <div onClick={()=>setExpandedAddr(open?null:a.id)} style={{padding:16,display:"flex",gap:12,alignItems:"flex-start",cursor:"pointer"}}>
+              <div role="button" tabIndex={0} onKeyDown={keyActivate} aria-expanded={open} onClick={()=>setExpandedAddr(open?null:a.id)} style={{padding:16,display:"flex",gap:12,alignItems:"flex-start",cursor:"pointer"}}>
                 <span style={{fontSize:20}}>{addressIcon(a)}</span>
                 <div style={{flex:1}}>
                   <div style={{display:"flex",alignItems:"center",gap:6}}>
@@ -3922,7 +3935,7 @@ export default function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG,position:"relative"}}>
         <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between",gap:14}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <button onClick={()=>backFrom("notifCenter",{scr:"home",tab:"profile"})} style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+            <button onClick={()=>backFrom("notifCenter",{scr:"home",tab:"profile"})} aria-label="Back" style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
             <span style={{fontWeight:700,fontSize:17,color:TX}}>Notifications</span>
           </div>
           {unreadCount>0&&<button onClick={markAllNotifsRead} aria-label="Mark all notifications as read" style={{background:"none",border:"none",color:N,fontSize:13,fontWeight:700,cursor:"pointer",padding:0}}>Mark all as read</button>}
@@ -4055,7 +4068,7 @@ export default function App(){
               const open=openTopicIdx===i;
               return(
                 <div key={topic.t} style={{borderBottom:i<TOPICS.length-1?`1px solid ${BD}`:"none"}}>
-                  <div onClick={()=>setOpenTopicIdx(open?null:i)} style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
+                  <div role="button" tabIndex={0} onKeyDown={keyActivate} aria-expanded={open} onClick={()=>setOpenTopicIdx(open?null:i)} style={{padding:"14px 18px",display:"flex",justifyContent:"space-between",alignItems:"center",cursor:"pointer"}}>
                     <span style={{fontSize:14,color:TX,fontWeight:500}}>{topic.t}</span>
                     <span style={{color:TM,transform:open?"rotate(90deg)":"none",display:"inline-block"}}>›</span>
                   </div>
@@ -4676,7 +4689,7 @@ export default function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div style={{background:W,padding:"12px 20px 14px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <button onClick={()=>goTo("tracking")} style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+            <button onClick={()=>goTo("tracking")} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
             <div style={{width:38,height:38,borderRadius:19,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontWeight:800,fontSize:14,flexShrink:0}}>{vjPro.i}</div>
             <div>
               <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjPro.n}</div>
