@@ -900,6 +900,39 @@ export default function App(){
     }
     return null;
   };
+  // Tap the status bar to scroll to the top. iOS scrolls the page (not our
+  // inner scroll areas) to the top when the status bar is tapped. The page
+  // is kept scrolled down by its one spare pixel; when it lands at 0 (the
+  // tap), the current screen scrolls to the top and the pixel is re-armed.
+  // Never while typing (iOS also scrolls the page to show the keyboard).
+  useEffect(()=>{
+    if(typeof window==="undefined"||typeof document==="undefined")return;
+    let armed=false, timer=null;
+    const se=()=>document.scrollingElement||document.documentElement;
+    const arm=()=>{
+      const canScroll=se().scrollHeight>window.innerHeight;
+      if(canScroll&&window.scrollY<1) window.scrollTo(0,1);
+      armed=canScroll&&window.scrollY>=1;
+    };
+    const typing=()=>{ const a=document.activeElement; return !!a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"||a.tagName==="SELECT"); };
+    const onScroll=()=>{
+      if(armed&&window.scrollY<=0){
+        armed=false;
+        if(!typing()){
+          const el=mainScroller();
+          if(el&&el.scrollTop>0){
+            try{ el.scrollTo({top:0,behavior:prefersReducedMotion()?"auto":"smooth"}); }catch{ el.scrollTop=0; }
+          }
+        }
+        clearTimeout(timer); timer=setTimeout(arm,400);
+      }
+    };
+    const t0=setTimeout(arm,600);
+    window.addEventListener("scroll",onScroll,{passive:true});
+    window.addEventListener("resize",arm);
+    return ()=>{ clearTimeout(t0); clearTimeout(timer); window.removeEventListener("scroll",onScroll); window.removeEventListener("resize",arm); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[]);
   const rememberScroll=()=>{
     const el=mainScroller();
     if(el)scrollPositions.current[scrollKey(scr,tab)]=el.scrollTop;
@@ -2005,9 +2038,9 @@ export default function App(){
         <div style={{display:"flex",gap:16,marginBottom:16}}>
           {["✓ Fixed pricing","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
         </div>
-        <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+        <div role="button" tabIndex={0} aria-label="Search 50+ services" onKeyDown={keyActivate} onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
           <span style={{fontSize:16,color:TM}}>🔍</span>
-          <input value={q} onChange={e=>setQ(e.target.value)} onFocus={()=>openBrowse(null,"")} placeholder="Search 50+ services..." style={{border:"none",flex:1,fontSize:15,color:TX,background:"transparent",outline:"none"}} readOnly/>
+          <input value={q} onChange={e=>setQ(e.target.value)} onFocus={()=>openBrowse(null,"")} placeholder="Search 50+ services..." tabIndex={-1} aria-hidden="true" style={{border:"none",flex:1,fontSize:15,color:TX,background:"transparent",outline:"none",pointerEvents:"none"}} readOnly/>
         </div>
       </div>
 
@@ -2072,10 +2105,10 @@ export default function App(){
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div style={{background:W,padding:"12px 20px 12px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:12}}>
-          <button onClick={goHome} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+          <button onClick={goHome} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:"10px 18px",margin:"-10px -18px",lineHeight:1,fontWeight:300}}>‹</button>
           <div style={{flex:1,background:BG,borderRadius:12,padding:"9px 14px",display:"flex",alignItems:"center",gap:8}}>
             <span style={{fontSize:14,color:TM}}>🔍</span>
-            <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search services..."
+            <input value={q} onChange={e=>setQ(e.target.value)} aria-label="Search services" placeholder="Search services..."
               style={{border:"none",flex:1,fontSize:14,color:TX,background:"transparent",outline:"none"}}/>
             {q&&<button onClick={()=>setQ("")} style={{background:"none",border:"none",cursor:"pointer",color:TM,fontSize:13,padding:0}}>✕</button>}
           </div>
@@ -2220,6 +2253,7 @@ export default function App(){
         <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,padding:"20px 20px 16px",position:"relative",zIndex:1}}>
           <div style={{background:W,borderRadius:18,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <textarea value={diagInput} onChange={e=>{setDiagInput(e.target.value);setDiagResult(null);}} maxLength={300}
+              aria-label="Describe the problem"
               placeholder={`e.g. "My garbage disposal is humming but not spinning" or "There's a small leak under my kitchen sink"`}
               style={{width:"100%",minHeight:90,border:"none",resize:"none",background:"transparent",color:TX,fontSize:14,lineHeight:1.55,outline:"none",padding:0}}/>
             <div style={{fontSize:11,color:TM,textAlign:"right",marginTop:6,paddingTop:6,borderTop:`1px solid ${BD}`}}>{diagInput.length}/300</div>
@@ -2271,7 +2305,7 @@ export default function App(){
         <div style={{display:"flex",gap:8,marginBottom:18}}>
           {[["all",`All (${allJobs.length})`],["active",`Active (${activeCount})`],["done",`Done (${doneCount})`]].map(([id,lb])=>{
             const a=bFilter===id;
-            return <button key={id} onClick={()=>setBFilter(id)} style={{flex:1,padding:"9px 0",borderRadius:12,border:"none",fontWeight:a?700:500,background:a?N:W,color:a?W:TS,fontSize:13,cursor:"pointer",boxShadow:a?`0 2px 8px rgba(28,43,58,.18)`:`0 1px 3px rgba(0,0,0,.06)`}}>{lb}</button>;
+            return <button key={id} onClick={()=>setBFilter(id)} style={{flex:1,padding:"9px 0",borderRadius:12,border:"none",fontWeight:a?700:500,background:a?N:W,color:a?ON:TS,fontSize:13,cursor:"pointer",boxShadow:a?`0 2px 8px rgba(28,43,58,.18)`:`0 1px 3px rgba(0,0,0,.06)`}}>{lb}</button>;
           })}
         </div>
         {shownJobs.length===0?(
@@ -2406,7 +2440,7 @@ export default function App(){
   };
   const subHeader=(title,onBack=backToProfile)=>(
     <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",gap:14}}>
-      <button onClick={onBack} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+      <button onClick={onBack} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:"10px 18px",margin:"-10px -18px",lineHeight:1,fontWeight:300}}>‹</button>
       <span style={{fontWeight:700,fontSize:17,color:TX}}>{title}</span>
     </div>
   );
@@ -2447,7 +2481,7 @@ export default function App(){
             const a=tpid===p.id;
             return(
               <button key={p.id} onClick={()=>setTpid(p.id)} style={{border:`1.5px solid ${a?N:BD}`,borderRadius:14,padding:"9px 14px",cursor:"pointer",background:a?N:W,display:"flex",alignItems:"center",gap:6}}>
-                <span style={{fontWeight:700,fontSize:13,color:a?W:TX}}>{p.label}</span>
+                <span style={{fontWeight:700,fontSize:13,color:a?ON:TX}}>{p.label}</span>
                 {p.surge>0&&<span style={{fontSize:10,fontWeight:700,color:a?"#FFE8B0":"#D97706"}}>+${p.surge}</span>}
               </button>
             );
@@ -3885,7 +3919,7 @@ export default function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG,position:"relative"}}>
         <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0,display:"flex",alignItems:"center",justifyContent:"space-between",gap:14}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <button onClick={()=>backFrom("notifCenter",{scr:"home",tab:"profile"})} aria-label="Back" style={{background:"none",border:"none",color:N,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+            <button onClick={()=>backFrom("notifCenter",{scr:"home",tab:"profile"})} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:"10px 18px",margin:"-10px -18px",lineHeight:1,fontWeight:300}}>‹</button>
             <span style={{fontWeight:700,fontSize:17,color:TX}}>Notifications</span>
           </div>
           {unreadCount>0&&<button onClick={markAllNotifsRead} aria-label="Mark all notifications as read" style={{background:"none",border:"none",color:N,fontSize:13,fontWeight:700,cursor:"pointer",padding:0}}>Mark all as read</button>}
@@ -4136,12 +4170,12 @@ export default function App(){
 
           <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>What needs to be done?</div>
-            <input value={ctitle} onChange={e=>setCtitle(e.target.value)} placeholder="e.g. Pressure wash my driveway"
+            <input value={ctitle} onChange={e=>setCtitle(e.target.value)} aria-label="What needs to be done?" placeholder="e.g. Pressure wash my driveway"
               style={{width:"100%",border:"none",fontSize:16,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0,marginBottom:10}}/>
             <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
               {JOB_CATS.map(c=>{
                 const a=ccat===c;
-                return <button key={c} onClick={()=>setCcat(c)} style={{border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:a?700:500,background:a?N:BG,color:a?W:TS}}>{c}</button>;
+                return <button key={c} onClick={()=>setCcat(c)} style={{border:"none",borderRadius:20,padding:"6px 12px",fontSize:11,cursor:"pointer",fontWeight:a?700:500,background:a?N:BG,color:a?ON:TS}}>{c}</button>;
               })}
             </div>
           </div>
@@ -4150,7 +4184,7 @@ export default function App(){
             <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Your budget</div>
             <div style={{display:"flex",alignItems:"center",gap:6}}>
               <span style={{fontSize:20,fontWeight:700,color:AMT}}>$</span>
-              <input type="number" value={cprice} onChange={e=>setCprice(e.target.value)} placeholder="0"
+              <input type="number" value={cprice} onChange={e=>setCprice(e.target.value)} aria-label="Your budget in dollars" placeholder="0"
                 style={{border:"none",fontSize:20,fontWeight:700,color:TX,background:"transparent",outline:"none",width:"100%",padding:0}}/>
             </div>
             {emergency&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`,display:"flex",justifyContent:"space-between"}}><span style={{fontSize:12,color:"#C2410C",fontWeight:600}}>🚨 Emergency priority fee</span><span style={{fontSize:12,color:"#C2410C",fontWeight:700}}>+${EMERGENCY_FEE}</span></div>}
@@ -4554,13 +4588,31 @@ export default function App(){
       </div>
     );
   };
+  // Star value (0.5 steps) under an x position on the stars row: the left
+  // half of a star is a half star. null when the row has no layout (tests).
+  const starValueAt=(row,clientX)=>{
+    const kids=Array.from(row.children);
+    for(let i=0;i<kids.length;i++){
+      const r=kids[i].getBoundingClientRect();
+      if(!r.width) return null;
+      if(clientX<=r.right) return i+(clientX<r.left+r.width/2?0.5:1);
+    }
+    return kids.length?5:null;
+  };
+  // Keyboard / VoiceOver: arrows change the rating by half a star.
+  const onStarKey=e=>{
+    const step={ArrowRight:0.5,ArrowUp:0.5,ArrowLeft:-0.5,ArrowDown:-0.5}[e.key];
+    if(step!=null){ e.preventDefault(); setStars(v=>Math.max(0.5,Math.min(5,(v||0)+step))); }
+    else if(e.key==="Home"){ e.preventDefault(); setStars(0.5); }
+    else if(e.key==="End"){ e.preventDefault(); setStars(5); }
+  };
   const ratingScreen=()=>{
     if(!vj) return unavailableScreen("Rate your experience",goBookings);
     const HIRE=[["yes","Yes, definitely! 👍"],["maybe","Maybe"],["no","No"]];
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div style={{background:W,padding:"14px 20px 16px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
-          <button onClick={()=>goTo("tracking")} style={{background:"none",border:"none",color:NT,fontSize:14,fontWeight:700,cursor:"pointer",padding:0}}>← Back</button>
+          <button onClick={()=>backFrom("rating",{scr:"tracking",tab:"bookings"})} style={{background:"none",border:"none",color:NT,fontSize:14,fontWeight:700,cursor:"pointer",padding:0}}>← Back</button>
         </div>
         <div className="sc" style={{flex:1,overflowY:"auto",padding:"28px 22px"}}>
           <div style={{textAlign:"center",marginBottom:28}}>
@@ -4572,8 +4624,25 @@ export default function App(){
             <div style={{fontSize:13,fontWeight:600,color:TS,marginBottom:14}}>How was your experience?</div>
             <div
               data-no-edge-swipe
-              onPointerDown={()=>setStarDragging(true)}
+              role="slider"
+              tabIndex={0}
+              aria-label="Your rating"
+              aria-valuemin={0.5}
+              aria-valuemax={5}
+              aria-valuenow={stars||undefined}
+              aria-valuetext={stars>0?`${stars} star${stars===1?"":"s"}, ${STAR_LABELS[Math.round(stars)]||STAR_LABELS[Math.ceil(stars)]}`:"Not rated"}
+              onKeyDown={onStarKey}
+              onPointerDown={e=>{
+                // Follow the finger: a touch is captured by the row, so the
+                // per-star targets below never hear a drag on a phone. The
+                // value comes from where the pointer is over the row instead.
+                try{ e.currentTarget.setPointerCapture(e.pointerId); }catch{}
+                setStarDragging(true);
+                const v=starValueAt(e.currentTarget,e.clientX); if(v) setStars(v);
+              }}
+              onPointerMove={e=>{ if(starDragging){ const v=starValueAt(e.currentTarget,e.clientX); if(v) setStars(v); } }}
               onPointerUp={()=>setStarDragging(false)}
+              onPointerCancel={()=>setStarDragging(false)}
               onPointerLeave={()=>setStarDragging(false)}
               style={{position:"relative",display:"inline-flex",gap:4,justifyContent:"center",marginBottom:10,touchAction:"none",userSelect:"none"}}
             >
@@ -4614,7 +4683,7 @@ export default function App(){
               {HIRE.map(([val,lbl])=>{
                 const a=hireAgain===val;
                 return(
-                  <button key={val} onClick={()=>setHireAgain(a?null:val)} style={{flex:1,padding:"10px 4px",borderRadius:12,border:`1.5px solid ${a?N:BD}`,background:a?N:BG,color:a?W:TS,fontWeight:a?700:500,fontSize:12,cursor:"pointer",lineHeight:1.3}}>{lbl}</button>
+                  <button key={val} onClick={()=>setHireAgain(a?null:val)} style={{flex:1,padding:"10px 4px",borderRadius:12,border:`1.5px solid ${a?N:BD}`,background:a?N:BG,color:a?ON:TS,fontWeight:a?700:500,fontSize:12,cursor:"pointer",lineHeight:1.3}}>{lbl}</button>
                 );
               })}
             </div>
@@ -4636,7 +4705,7 @@ export default function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div style={{background:W,padding:"12px 20px 14px",borderBottom:`1px solid ${BD}`,flexShrink:0}}>
           <div style={{display:"flex",alignItems:"center",gap:14}}>
-            <button onClick={()=>goTo("tracking")} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:0,lineHeight:1,fontWeight:300}}>‹</button>
+            <button onClick={()=>backFrom("messages",{scr:"tracking",tab:"bookings"})} aria-label="Back" style={{background:"none",border:"none",color:NT,fontSize:24,cursor:"pointer",padding:"10px 18px",margin:"-10px -18px",lineHeight:1,fontWeight:300}}>‹</button>
             <div style={{width:38,height:38,borderRadius:19,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontWeight:800,fontSize:14,flexShrink:0}}>{vjPro.i}</div>
             <div>
               <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjPro.n}</div>

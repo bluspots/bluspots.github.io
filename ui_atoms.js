@@ -56,7 +56,11 @@ input,textarea,select{font-size:16px!important;}
    device instead of using the real screen. */
 @media (max-width:480px){
   .haven-frame-outer{padding:0!important;background:#F5F2ED!important;align-items:stretch!important;}
-  .haven-frame-phone{width:100%!important;height:100dvh!important;border-radius:0!important;box-shadow:none!important;}
+  /* One pixel taller than the screen, so the page itself can scroll by 1px:
+     iOS's "tap the status bar to scroll to top" scrolls the page, and the
+     app turns that into scrolling the current screen to the top. The spare
+     pixel is the bottom edge of the tab bar's padding, so nothing shows. */
+  .haven-frame-phone{width:100%!important;height:calc(100dvh + 1px)!important;border-radius:0!important;box-shadow:none!important;}
 }
 /* Print isolation: hide everything except the receipt itself — no app
    chrome, no bottom nav, no header buttons, no phone-frame styling. */
