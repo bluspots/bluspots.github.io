@@ -1389,7 +1389,7 @@ async function runUxImprovementChecks(){
     await advanceBackendJobViaPoll('en_route', 'Mount TV');
     // The old card counted down from a timer, not from the Pro's location.
     assert(existsRegex(/is on the way/) && !existsRegex(/min away|miles|Time remaining/), 'En route: says the Pro is on the way, with no invented minutes or miles');
-    assert(existsRegex(/Job length, once there/), 'Job length is shown separately from arrival');
+    assert(existsRegex(/Typical job length \(estimate\)/), 'Job length is shown separately from arrival, labelled as an estimate');
   });
 
   step('21. Job Preferences — toggle, add custom, attach to booking', () => {

@@ -952,6 +952,12 @@ export default function App(){
   // string rather than requiring per-task field additions to the catalog.
   const getExpectedDuration=(t)=>{
     if(!t||t==="Varies")return {estimatedDurationMin:60,estimatedDurationMax:180,durationConfidence:"low",mayRequireInspection:true};
+    // Ranges straight from the catalog ("2-3 hrs", "4-6 hrs") are used as-is.
+    const r=/^(\d+)\s*[-–]\s*(\d+)\s*(min|hr|hrs|hour|hours)$/i.exec(t.trim());
+    if(r){
+      const k=/hr|hour/i.test(r[3])?60:1;
+      return {estimatedDurationMin:parseInt(r[1])*k,estimatedDurationMax:parseInt(r[2])*k,durationConfidence:"high",mayRequireInspection:false};
+    }
     const m=/^(\d+)\s*(min|hr|hrs|hour|hours)$/i.exec(t.trim());
     if(m){
       const n=parseInt(m[1]);
@@ -964,6 +970,12 @@ export default function App(){
     const fmt=(mins)=>mins<60?`${mins} min`:(mins%60===0?`${mins/60} hr${mins/60>1?"s":""}`:`${Math.floor(mins/60)}h ${mins%60}m`);
     if(Math.abs(maxM-minM)<15)return fmt(Math.round((minM+maxM)/2));
     return `${fmt(minM)}–${fmt(maxM)}`;
+  };
+  // What to show for a task's expected time. The catalog has no time for
+  // "Varies" and custom jobs, so no number is shown for them.
+  const durationText=(t)=>{
+    const d=getExpectedDuration(t);
+    return d.durationConfidence==="low"?"Varies by job":formatDurationRange(d.estimatedDurationMin,d.estimatedDurationMax);
   };
   // A property's icon is determined ONLY by its own label/type — never by
   // whether it's currently Primary. Primary is communicated separately via
@@ -2171,7 +2183,7 @@ export default function App(){
                 <div style={{fontSize:32,marginBottom:10,lineHeight:1}}>{t.e}</div>
                 <div style={{fontWeight:700,fontSize:13,color:TX,marginBottom:6,lineHeight:1.3}}>{t.n}</div>
                 <div style={{fontWeight:800,fontSize:t.propertyScoped?15:20,color:AMT}}>{priceInfo}</div>
-                <div style={{fontSize:11,color:TM,marginTop:1}}>est. {formatDurationRange(getExpectedDuration(t.t).estimatedDurationMin,getExpectedDuration(t.t).estimatedDurationMax)}</div>
+                <div style={{fontSize:11,color:TM,marginTop:1}}>{getExpectedDuration(t.t).durationConfidence==="low"?"Time varies":`est. ${durationText(t.t)}`}</div>
               </div>
               );
             })}
@@ -2230,7 +2242,7 @@ export default function App(){
                 <div style={{fontSize:28}}>{diagResult.task.e}</div>
                 <div style={{flex:1}}>
                   <div style={{fontWeight:700,fontSize:14,color:TX}}>{diagResult.task.n}</div>
-                  <div style={{fontSize:12,color:TS,marginTop:1}}>est. {formatDurationRange(getExpectedDuration(diagResult.task.t).estimatedDurationMin,getExpectedDuration(diagResult.task.t).estimatedDurationMax)}</div>
+                  <div style={{fontSize:12,color:TS,marginTop:1}}>{getExpectedDuration(diagResult.task.t).durationConfidence==="low"?"Time varies":`est. ${durationText(diagResult.task.t)}`}</div>
                 </div>
                 <div style={{fontWeight:800,fontSize:18,color:AMT}}>${diagResult.task.p}</div>
               </div>
@@ -4078,7 +4090,7 @@ export default function App(){
                   <span style={{fontSize:20,flexShrink:0}}>⏱️</span>
                   <div>
                     <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:3}}>Expected time</div>
-                    <div style={{fontWeight:700,fontSize:15,color:TX}}>{formatDurationRange(dur.estimatedDurationMin,dur.estimatedDurationMax)}</div>
+                    <div style={{fontWeight:700,fontSize:15,color:TX}}>{durationText(browsedTask.t)}</div>
                     {dur.mayRequireInspection&&<div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.4}}>Could take longer if hidden damage or additional materials are discovered.</div>}
                   </div>
                 </div>
@@ -4343,17 +4355,18 @@ export default function App(){
             // minutes or miles are shown (they used to count down from a
             // timer, not from where the Pro is). Arrival and job length are
             // shown as two different things.
-            const dur=vjTask?getExpectedDuration(vjTask.t):null;
+            // Only a time the catalog actually gives; nothing for "Varies"/custom.
+            const durOk=vjTask&&getExpectedDuration(vjTask.t).durationConfidence!=="low";
             const acceptedAt=vj.acceptedAt?new Date(vj.acceptedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):null;
             return(
               <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                 <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:4}}>Arrival</div>
                 <div aria-live="polite" style={{fontWeight:800,fontSize:18,color:TX}}>{vjPname} is on the way</div>
                 <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>{acceptedAt?`Accepted at ${acceptedAt}. `:""}A live arrival time will show here once location sharing is available.</div>
-                {dur&&(
+                {durOk&&(
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
-                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Job length, once there</span>
-                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{formatDurationRange(dur.estimatedDurationMin,dur.estimatedDurationMax)}</span>
+                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Typical job length (estimate)</span>
+                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{durationText(vjTask.t)}</span>
                   </div>
                 )}
               </div>
