@@ -6,6 +6,9 @@
  * failure doesn't hide results from the rest of the audit.
  */
 const { JSDOM } = require('jsdom');
+// Text only the Profile root shows (its footer). Used to tell that Profile is on
+// screen; it used to be the "Jane Doe" placeholder name, which Profile no longer shows.
+const PROFILE_ROOT_MARKER = 'Prototype build';
 const dom = new JSDOM('<!doctype html><html><body><div id="root"></div></body></html>', { url: 'http://localhost/' });
 global.window = dom.window;
 Object.defineProperty(global.window, 'innerWidth', { value: 390, configurable: true });
@@ -971,7 +974,7 @@ await stepAsync('0b. Signed-out auth gate — no marketplace without an account'
 step('1. Profile — 3 large featured cards on top, standard list below, exact row order, no My Bookings', () => {
   click('Profile');
   const t = document.body.textContent;
-  assert(existsRegex('Jane Doe'), 'Account card present');
+  assert(existsRegex('Add your name') && existsRegex('Edit ›'), 'Account card present (no account name in this test, so it invites adding one)');
   assert(t.indexOf('My Home') < t.indexOf('Notifications'), 'My Home before Notifications');
   assert(t.indexOf('Notifications') < t.indexOf('Payment Methods'), 'Notifications before Payment Methods');
   assert(t.indexOf('Payment Methods') < t.indexOf('Saved Addresses'), 'Payment Methods before Saved Addresses');
@@ -1229,7 +1232,7 @@ step('11. Regression — tab persistence and draft booking still work', () => {
     clickTab('Bookings');
     assert(!existsRegex('Install smart lock') && !existsRegex('Mount TV'), 'All jobs cleared after reset');
     clickTab('Profile');
-    assert(existsRegex('Jane Doe'), 'Tapping Profile after reset lands on the actual Profile root, not a stale remembered sub-screen (this was a real bug found and fixed this slice)');
+    assert(existsRegex(PROFILE_ROOT_MARKER), 'Tapping Profile after reset lands on the actual Profile root, not a stale remembered sub-screen (this was a real bug found and fixed this slice)');
     click('Saved Addresses');
     assert(existsRegex(/🏠 Primary/), 'Addresses reset to the default seed, with a valid Primary');
   });
@@ -1470,11 +1473,11 @@ async function runInteractiveBackChecks(){
   // in the DOM" is a real, observable signal that the settle animation has
   // actually finished, not a guess about how long it should take.
   const waitForSettleIdle = (msg) => waitForCondition(
-    () => !document.body.innerHTML.includes('Jane Doe') || existsRegex('Home overview'),
+    () => !document.body.innerHTML.includes(PROFILE_ROOT_MARKER) || existsRegex('Home overview'),
     { timeout: 2000, message: msg }
   );
   const waitForCommitted = (msg) => waitForCondition(
-    () => existsRegex('Jane Doe') && !existsRegex('Home overview'),
+    () => existsRegex(PROFILE_ROOT_MARKER) && !existsRegex('Home overview'),
     { timeout: 2000, message: msg }
   );
 
@@ -1482,7 +1485,7 @@ async function runInteractiveBackChecks(){
     click('Profile'); click('My Home');
     assert(existsRegex('Home overview'), 'On My Home');
     pdown(5,300); pmove(60,301); pmove(150,302);
-    assert(document.body.innerHTML.includes('Jane Doe'), 'Destination screen (Profile) renders live underneath during the drag');
+    assert(document.body.innerHTML.includes(PROFILE_ROOT_MARKER), 'Destination screen (Profile) renders live underneath during the drag');
     assert(existsRegex('Home overview'), 'Current screen (My Home) still showing — no premature navigation mid-drag');
     pmove(80,302); // reverse the swipe partway back toward the edge
     assert(existsRegex('Home overview'), 'Reversing the gesture before release does not navigate');
@@ -1493,7 +1496,7 @@ async function runInteractiveBackChecks(){
 
   step('26. Releasing before the completion threshold cancels — no navigation', () => {
     assert(existsRegex('Home overview'), 'Released under threshold: cancelled, still on the original screen');
-    assert(!document.body.innerHTML.includes('Jane Doe') || existsRegex('Home overview'), 'No stray destination content left behind after cancel');
+    assert(!document.body.innerHTML.includes(PROFILE_ROOT_MARKER) || existsRegex('Home overview'), 'No stray destination content left behind after cancel');
   });
 
   step('27. Releasing past the completion threshold commits navigation', () => {
@@ -1504,7 +1507,7 @@ async function runInteractiveBackChecks(){
   await waitForCommitted('Step 27/27b: commit settle animation never finished.');
 
   step('27b. (continued) navigation committed via the centralized backFrom path', () => {
-    assert(existsRegex('Jane Doe') && !existsRegex('Home overview'), 'Past-threshold release completed navigation to the correct destination');
+    assert(existsRegex(PROFILE_ROOT_MARKER) && !existsRegex('Home overview'), 'Past-threshold release completed navigation to the correct destination');
   });
 
   step('28. A fast flick commits even with a short drag distance (velocity rule)', () => {
@@ -1523,7 +1526,7 @@ async function runInteractiveBackChecks(){
   await waitForCommitted('Step 28/28b: fast-flick commit settle animation never finished.');
 
   step('28b. (continued) short-distance fast flick still completed via velocity', () => {
-    assert(existsRegex('Jane Doe') && !existsRegex('Home overview'), 'Fast flick under the distance threshold still committed');
+    assert(existsRegex(PROFILE_ROOT_MARKER) && !existsRegex('Home overview'), 'Fast flick under the distance threshold still committed');
   });
 
   step('29. A slow short swipe (low velocity, short distance) cancels', () => {
@@ -1558,7 +1561,7 @@ async function runInteractiveBackChecks(){
   step('31. Visible Back buttons still navigate to the identical destination as the gesture', () => {
     const backBtn = screen.queryAllByText('‹').slice(-1)[0];
     if(backBtn) act(()=>{fireEvent.click(backBtn);});
-    assert(existsRegex('Jane Doe'), 'Visible Back button reaches the same destination the interactive gesture would');
+    assert(existsRegex(PROFILE_ROOT_MARKER), 'Visible Back button reaches the same destination the interactive gesture would');
   });
 
   await runInlineEditChecks();

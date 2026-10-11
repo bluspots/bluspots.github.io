@@ -1545,7 +1545,7 @@ export default function App(){
 
   // Profile edit
   const profilePhotoInputRef = useRef(null);
-  const openEditProfile=()=>{setDraftName(profile.name);setDraftBio(profile.bio);setDraftPhoto(profile.photo);goTo("editProfile");};
+  const openEditProfile=()=>{setDraftName(profileShownName);setDraftBio(profile.bio);setDraftPhoto(profile.photo);goTo("editProfile");};
   const handleProfilePhoto=(e)=>{
     const file=e.target.files?.[0]; if(!file) return;
     const reader=new FileReader();
@@ -1553,6 +1553,12 @@ export default function App(){
     reader.readAsDataURL(file);
     e.target.value="";
   };
+  // Name shown on Profile and pre-filled in Edit profile: the name typed in
+  // Edit profile, else the account's name (profiles.display_name), never the
+  // "Jane Doe" seed. "" when there's neither (Profile then says "Add your
+  // name"). Edit profile still saves on this device only, as before.
+  const profileEditedName=typeof profile.name==="string"&&profile.name.trim()!==DEFAULT_PROFILE.name?profile.name.trim():"";
+  const profileShownName=profileEditedName||(havenAuth?havenProfileDisplayName:"");
   const saveProfile=()=>{setProfile(p=>({...p,name:draftName.trim()||"Jane Doe",bio:draftBio.trim(),photo:draftPhoto}));goProfile();};
 
   // My Home / Addresses — one canonical model, one edit form for both contexts
@@ -2346,7 +2352,7 @@ export default function App(){
       <button onClick={openEditProfile} style={{width:"100%",textAlign:"left",font:"inherit",background:N,border:"none",borderRadius:20,padding:20,marginBottom:16,display:"flex",gap:14,alignItems:"center",cursor:"pointer"}}>
         <Avatar photo={profile.photo} size={52} iconSize={30} iconColor={W}/>
         <div style={{flex:1}}>
-          <div style={{fontWeight:700,fontSize:16,color:ON}}>{profile.name}</div>
+          <div style={{fontWeight:700,fontSize:16,color:ON}}>{profileShownName||"Add your name"}</div>
           <div style={{color:"rgba(255,255,255,.55)",fontSize:13,marginTop:2}}>{profile.bio||`Member since ${new Date(profile.accountCreatedAt).getFullYear()}`}</div>
           {havenAuth&&havenAuth.email?(
             <div style={{color:"rgba(255,255,255,.72)",fontSize:12,marginTop:4}}>{havenAuth.email} · {havenAuth.role||"customer"}</div>
