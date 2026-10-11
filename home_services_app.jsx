@@ -232,8 +232,6 @@ class ErrorBoundary extends React.Component{
 }
 
 export default function App(){
-  // First screen is committed; hide the splash on the next frame, once it has painted.
-  useEffect(()=>{ (typeof requestAnimationFrame==="function"?requestAnimationFrame:setTimeout)(hideOpeningSplash); },[]);
   // (polling moved below after jobs state + TERMINAL_STATUSES)
   // Appearance — System / Light / Dark. Persisted so it survives reopening
   // the installed PWA. "Tokens, not per-screen styles": every screen in this
@@ -637,6 +635,18 @@ export default function App(){
   // local fallback: a failure shows the connection error with Retry.
   const [backendStatus,setBackendStatus]=useState("connecting");
   const [backendAttempt,setBackendAttempt]=useState(0);
+  // Opening splash: hide it on the frame after the first real screen is
+  // drawn (Home, the sign-in gate or the connection error), not the brief
+  // "Connecting" screen in between, so the splash hands straight over to
+  // Home. If connecting takes over 4 s, hand over to the Connecting screen
+  // so the wait is visible. No minimum time.
+  useEffect(()=>{
+    const nextFrame=typeof requestAnimationFrame==="function"?requestAnimationFrame:setTimeout;
+    if(backendStatus!=="connecting"){ nextFrame(hideOpeningSplash); return undefined; }
+    const t=setTimeout(hideOpeningSplash,4000);
+    if(t&&typeof t.unref==="function") t.unref();
+    return ()=>clearTimeout(t);
+  },[backendStatus]);
   // Phase 1B A2: server-confirmed QA tester. False by default, while the
   // check is pending, and on any error. Never localStorage / email.
   const [qaTester,setQaTester]=useState(false);

@@ -7,8 +7,9 @@
  * (1) Shell: the splash markup and styles come before any script; every
  *     library script is deferred, in the original order (React, ReactDOM,
  *     Babel, jsPDF, Supabase); reduced motion turns the animation off.
- * (2) App: hides the splash on the frame after its first screen and from the
- *     ErrorBoundary. No minimum time. The shell's hide starts a 0.3 s fade
+ * (2) App: hides the splash on the frame after its first real screen (Home,
+ *     sign-in gate or connection error; never the brief Connecting screen),
+ *     after 4 s if connecting is slow, and from the ErrorBoundary. No minimum time. The shell's hide starts a 0.3 s fade
  *     (none with Reduce Motion), stops taking touches at once, then removes
  *     it. A 12 s safety net covers an app that never starts.
  * (3) The app script still ends with the root.render line the tests rely on.
@@ -30,7 +31,10 @@ ok(scripts.length === 5 && scripts.every(s => s.defer), 'all 5 library scripts a
 ok(['react.production', 'react-dom.production', 'babel.min', 'jspdf', 'supabase'].every((k, i) => scripts[i].src.includes(k)), 'library order unchanged (React, ReactDOM, Babel, jsPDF, Supabase)');
 ok(/@media \(prefers-reduced-motion:reduce\)\{#haven-splash \.hs-mark,#haven-splash \.hs-line\{animation:none/.test(pre), 'reduced motion: no splash animation');
 // (2)
-ok(/export default function App\(\)\{\n  \/\/ First screen is committed[^\n]*\n  useEffect\(\(\)=>\{ \(typeof requestAnimationFrame==="function"\?requestAnimationFrame:setTimeout\)\(hideOpeningSplash\); \},\[\]\);/.test(jsx), 'App hides the splash on the frame after its first screen');
+const fx = jsx.slice(jsx.indexOf('// Opening splash: hide it on the frame after the first real screen'), jsx.indexOf('},[backendStatus]);') + 20);
+ok(/if\(backendStatus!=="connecting"\)\{ nextFrame\(hideOpeningSplash\); return undefined; \}/.test(fx), 'hides on the frame after the first real screen (not the brief Connecting screen)');
+ok(/setTimeout\(hideOpeningSplash,4000\)/.test(fx) && /return \(\)=>clearTimeout\(t\);/.test(fx), 'slow connection: hands over to the Connecting screen after 4 s');
+ok(jsx.indexOf('const [backendStatus,setBackendStatus]=useState("connecting");') < jsx.indexOf('// Opening splash: hide it on the frame after'), 'effect sits after backendStatus is declared');
 ok(/componentDidCatch\(\)\{ hideOpeningSplash\(\); \}/.test(jsx), 'ErrorBoundary hides it too');
 ok(!/function havenHideSplash/.test(jsx), 'the app never redefines the shell\'s window.havenHideSplash');
 ok(!/800-since|Math\.max\(0,800/.test(jsx + pre), 'no minimum display time');
