@@ -201,9 +201,16 @@ const DEFAULT_ADDRESSES=[
 // blank screen. Only catches render-phase errors (React limitation) — errors
 // thrown inside event handlers still go to the console, which is why goTo()
 // logs-and-refuses on an unknown screen rather than throwing.
+// Opening splash: the HTML shell draws it and defines window.havenHideSplash
+// (named differently here so this global function never replaces it).
+// The app hides it right after its first screen is drawn (no minimum time).
+function hideOpeningSplash(){
+  try{ if(typeof window!=="undefined"&&typeof window.havenHideSplash==="function") window.havenHideSplash(); }catch(_){}
+}
 class ErrorBoundary extends React.Component{
   constructor(props){ super(props); this.state={error:null}; }
   static getDerivedStateFromError(error){ return {error}; }
+  componentDidCatch(){ hideOpeningSplash(); }
   render(){
     if(this.state.error){
       return (
@@ -634,6 +641,14 @@ export default function App(){
   // local fallback: a failure shows the connection error with Retry.
   const [backendStatus,setBackendStatus]=useState("connecting");
   const [backendAttempt,setBackendAttempt]=useState(0);
+  // Opening splash = the loading screen. It stays up, however slow the
+  // connection, until the first real screen is drawn (Home, the sign-in
+  // gate or the connection error with Retry), never the "Connecting"
+  // screen in between, then hides on the next frame. No minimum time.
+  useEffect(()=>{
+    if(backendStatus==="connecting") return;
+    (typeof requestAnimationFrame==="function"?requestAnimationFrame:setTimeout)(hideOpeningSplash);
+  },[backendStatus]);
   // Phase 1B A2: server-confirmed QA tester. False by default, while the
   // check is pending, and on any error. Never localStorage / email.
   const [qaTester,setQaTester]=useState(false);
