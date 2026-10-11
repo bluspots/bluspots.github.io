@@ -942,31 +942,6 @@ export default function App(){
     : vj.status
   ):null;
   const vjSIdx= vj?SF.indexOf(progressStatus):-1;
-  // Progressively-tightening arrival estimate — deterministic, anchored to
-  // real elapsed time since the pro accepted (not random), so it always
-  // counts down smoothly and believably rather than jumping around.
-  const [etaTick,setEtaTick]=useState(0);
-  useEffect(()=>{
-    if(scr!=="tracking"||vj?.status!=="en_route")return;
-    const interval=setInterval(()=>setEtaTick(t=>t+1),3000);
-    if (interval && typeof interval === "object" && typeof interval.unref === "function") { try { interval.unref(); } catch(_) {} }
-    return ()=>clearInterval(interval);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[scr,vj?.status,vj?.id]);
-  const getArrivalSim=(job)=>{
-    if(!job?.acceptedAt)return null;
-    const elapsedSec=(Date.now()-job.acceptedAt)/1000;
-    const minutesAway=Math.max(1,Math.round(18-elapsedSec/8));
-    const milesAway=Math.max(0.1,Math.round(minutesAway*0.22*10)/10);
-    const etaTime=new Date(Date.now()+minutesAway*60000).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-    const fmt=(mins)=>new Date(Date.now()+mins*60000).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
-    let stage,windowLabel;
-    if(elapsedSec<15){ stage="broad"; windowLabel=`${fmt(Math.max(0,minutesAway-30))} – ${fmt(minutesAway+90)}`; }
-    else if(elapsedSec<35){ stage="medium"; windowLabel=`${fmt(Math.max(0,minutesAway-10))} – ${fmt(minutesAway+10)}`; }
-    else{ stage="tight"; windowLabel=null; }
-    return {minutesAway,milesAway,etaTime,stage,windowLabel};
-  };
-  const vjArrivalSim=vj?.status==="en_route"?getArrivalSim(vj):null;
   const vjMsgs= vj?.msgs||[];
   const proProfilePro = PROS.find(p=>p.i===proProfileId) || (vjPro&&vjPro.real&&vjPro.i===proProfileId?vjPro:PROS[0]);
   const formatAddress=a=>a?`${a.street}${a.unit?", "+a.unit:""}, ${a.city}, ${a.state} ${a.zip}`:"";
@@ -4255,7 +4230,7 @@ export default function App(){
         {vjSIdx<3&&<><circle cx={240} cy={83} r="18" fill={W} stroke={N} strokeWidth="2.5"/><text x="240" y="88" textAnchor="middle" fontSize="14">🏠</text></>}
         {vjSIdx===3&&<><circle cx={240} cy={83} r="22" fill={SL}/><circle cx={240} cy={83} r="16" fill={SC}/><text x="240" y="89" textAnchor="middle" fontSize="14" fill={W} fontWeight="900">✓</text></>}
         {showCar&&<><circle cx={px} cy={83} r="20" fill={N} opacity="0.12"/><circle cx={px} cy={83} r="14" fill={N}/><text x={px} y="88" textAnchor="middle" fontSize="13">🚗</text></>}
-        {vj?.status==="en_route"&&<><rect x={px-2} y="50" width="90" height="21" rx="10" fill={AM}/><text x={px+43} y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">{vjArrivalSim?`${vjArrivalSim.minutesAway} min away`:"On the way"}</text></>}
+        {vj?.status==="en_route"&&<><rect x={px-2} y="50" width="90" height="21" rx="10" fill={AM}/><text x={px+43} y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">On the way</text></>}
         {vj?.status==="arrived"&&<><rect x="138" y="50" width="104" height="21" rx="10" fill={SC}/><text x="190" y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">{vjPname} is here!</text></>}
       </svg>
     );
@@ -4363,31 +4338,27 @@ export default function App(){
               </div>
             );
           })()}
-          {vjArrivalSim&&(
-            <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-              {vjArrivalSim.stage!=="tight"?(
-                <>
-                  <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:4}}>Arriving</div>
-                  <div aria-live="polite" style={{fontWeight:800,fontSize:20,color:TX}}>{vjArrivalSim.windowLabel}</div>
-                </>
-              ):(
-                <>
-                  <div aria-live="polite" style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10}}>
-                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Time remaining</span>
-                    <span style={{fontWeight:800,fontSize:18,color:TX}}>{vjArrivalSim.minutesAway} min away</span>
+          {vj.status==="en_route"&&(()=>{
+            // Honest arrival card. There is no live Pro location yet, so no
+            // minutes or miles are shown (they used to count down from a
+            // timer, not from where the Pro is). Arrival and job length are
+            // shown as two different things.
+            const dur=vjTask?getExpectedDuration(vjTask.t):null;
+            const acceptedAt=vj.acceptedAt?new Date(vj.acceptedAt).toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'}):null;
+            return(
+              <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:4}}>Arrival</div>
+                <div aria-live="polite" style={{fontWeight:800,fontSize:18,color:TX}}>{vjPname} is on the way</div>
+                <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>{acceptedAt?`Accepted at ${acceptedAt}. `:""}A live arrival time will show here once location sharing is available.</div>
+                {dur&&(
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
+                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Job length, once there</span>
+                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{formatDurationRange(dur.estimatedDurationMin,dur.estimatedDurationMax)}</span>
                   </div>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginBottom:10,paddingTop:10,borderTop:`1px solid ${BD}`}}>
-                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Distance remaining</span>
-                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{typeof vjArrivalSim.milesAway==="number"?vjArrivalSim.milesAway.toFixed(1):vjArrivalSim.milesAway} miles</span>
-                  </div>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",paddingTop:10,borderTop:`1px solid ${BD}`}}>
-                    <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Estimated arrival</span>
-                    <span style={{fontWeight:700,fontSize:14,color:TX}}>{vjArrivalSim.etaTime}</span>
-                  </div>
-                </>
-              )}
-            </div>
-          )}
+                )}
+              </div>
+            );
+          })()}
           <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div onClick={()=>{ if(!vjPro.real) openProProfile(vjPro,"tracking"); }} style={{display:"flex",gap:14,alignItems:"center",marginBottom:14,cursor:vjPro.real?"default":"pointer"}}>
               <div style={{width:50,height:50,borderRadius:25,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontWeight:800,fontSize:16,flexShrink:0}}>{vjPro.i}</div>
