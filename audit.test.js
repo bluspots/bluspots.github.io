@@ -1383,11 +1383,13 @@ async function runUxImprovementChecks(){
   document.body.appendChild(container5);
   await mountApp(container5);
 
-  await stepAsync('20. Arrival window progressively tightens (deterministic, elapsed-time-based)', async () => {
+  await stepAsync('20. On the way: honest arrival card (no simulated minutes/miles; job length shown separately)', async () => {
     click('Mount TV');
     await clickPostJobAndWait();
     await advanceBackendJobViaPoll('en_route', 'Mount TV');
-    assert(existsRegex('Arriving') && !existsRegex('Time remaining'), 'Broad stage: shows Arriving + a window, not yet the precise breakdown');
+    // The old card counted down from a timer, not from the Pro's location.
+    assert(existsRegex(/is on the way/) && !existsRegex(/min away|miles|Time remaining/), 'En route: says the Pro is on the way, with no invented minutes or miles');
+    assert(existsRegex(/Typical job length \(estimate\)/), 'Job length is shown separately from arrival, labelled as an estimate');
   });
 
   step('21. Job Preferences — toggle, add custom, attach to booking', () => {
