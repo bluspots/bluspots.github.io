@@ -18,10 +18,10 @@ const line = needle => { const i = s.indexOf(needle); assert.ok(i >= 0, 'missing
 ok(/const W  = isDark \? "#1B242E" : "#FFFFFF";/.test(s) && /const ON = "#FFFFFF";/.test(s), 'W is dark in dark mode; ON is always white');
 for (const [needle, label] of [['onClick={()=>setBFilter(id)}', 'Bookings filter'], ['onClick={()=>setCcat(c)}', 'custom-job category'], ['onClick={()=>setHireAgain(a?null:val)}', '"Would you hire again?"']]) {
   const l = line(needle);
-  ok(/background:a\?N:/.test(l) && /color:a\?ON:/.test(l) && !/color:a\?W:/.test(l), label + ': selected = white on navy');
+  ok(/background:a\?(N|CHIP_ON):/.test(l) && /color:a\?ON:/.test(l) && !/color:a\?W:/.test(l), label + ': selected = white on the selected fill (navy; blue in dark mode, see dark_selected_chips.test.js)');
 }
 ok(/<span style=\{\{fontWeight:700,fontSize:13,color:a\?ON:TX\}\}>\{p\.label\}<\/span>/.test(s), 'booking time chip: selected = white on navy');
-ok(!/background:a\?N:[^}]*color:a\?W:/.test(s), 'no selected navy chip uses W for its text anywhere');
+ok(!/background:a\?(N|CHIP_ON):[^}]*color:a\?W:/.test(s), 'no selected chip uses W for its text anywhere');
 // (2)
 const backs = [...s.matchAll(/aria-label="Back" style=\{\{[^}]*\}\}>‹</g)].map(m => m[0]);
 ok(backs.length === 4 && backs.every(b => /padding:"10px 18px",margin:"-10px -18px"/.test(b)), 'all 4 ‹ back arrows have a 45 x 44 tap area that does not move them');
