@@ -157,26 +157,6 @@ const VALID_JOB_STATUSES = /* @__PURE__ */ new Set([
   "cancelled"
 ]);
 const TERMINAL_STATUSES = /* @__PURE__ */ new Set(["complete", "inspection_completed", "materials_declined"]);
-function getCompletionDetails(category, taskPrice) {
-  const templates = COMPLETION_TEMPLATES[category];
-  const chosen = templates && templates.length ? templates[Math.floor(Math.random() * templates.length)] : DEFAULT_COMPLETION_TEMPLATE;
-  const maxMaterialsCost = Math.max(0, Math.floor((taskPrice || 0) * 0.35));
-  const materials = [];
-  let materialsCost = 0;
-  for (const m of chosen.materialsTemplate) {
-    if (materialsCost + m.amount <= maxMaterialsCost) {
-      materials.push({ ...m });
-      materialsCost += m.amount;
-    }
-  }
-  return {
-    workPerformed: chosen.workPerformed,
-    materials,
-    // materials are ADDITIVE on top of labor — not carved from it
-    laborAmount: taskPrice || 0,
-    proNotes: chosen.notes
-  };
-}
 const CLEANING_PRICE_COEFFICIENTS = {
   30: { base: 69, perBed: 25, perBath: 20, per100Sqft: 2 },
   // Deep Home Cleaning
@@ -332,83 +312,6 @@ const PROS = [
     responseTime: "3 min"
   }
 ];
-const COMPLETION_TEMPLATES = {
-  Plumbing: [{
-    workPerformed: ["Diagnosed the source of the issue", "Replaced the affected component", "Tested water pressure and flow", "Checked for leaks at all connections", "Cleaned the work area"],
-    materialsTemplate: [{ description: "Replacement cartridge", qty: 1, amount: 28 }, { description: "Compression fitting", qty: 2, amount: 9 }],
-    notes: "Found the original part had worn past a simple repair, so replaced it outright rather than patching — should hold up long-term. Tested under full pressure before wrapping up; no drips at any connection."
-  }],
-  Electrical: [{
-    workPerformed: ["Shut off power at the breaker before starting", "Diagnosed the wiring issue", "Replaced the faulty component", "Tested the circuit under load", "Restored power and confirmed normal operation"],
-    materialsTemplate: [{ description: "Outlet/switch (code-rated)", qty: 1, amount: 14 }, { description: "Wire nuts and connectors", qty: 1, amount: 6 }],
-    notes: "Everything tested normal after the repair — no flickering, no warm-to-the-touch spots. Recommend keeping an eye on it for the next week just as routine follow-up, but I don't expect any issues."
-  }],
-  Appliance: [{
-    workPerformed: ["Diagnosed the malfunction", "Replaced the failed part", "Ran a full test cycle", "Checked for leaks and unusual noise", "Confirmed normal operation before leaving"],
-    materialsTemplate: [{ description: "Replacement part (OEM-equivalent)", qty: 1, amount: 32 }],
-    notes: "Ran a complete cycle after the repair to confirm everything's back to normal — no error codes, no unusual noise. Should be good to go."
-  }],
-  Installation: [{
-    workPerformed: ["Confirmed placement and measurements", "Completed the installation", "Secured all mounting points", "Tested for stability and proper function", "Cleaned up packaging and work area"],
-    materialsTemplate: [{ description: "Mounting hardware kit", qty: 1, amount: 18 }],
-    notes: "Double-checked everything was level and securely mounted before finishing. Let me know if you'd like anything adjusted."
-  }],
-  Assembly: [{
-    workPerformed: ["Unpacked and inventoried all parts", "Assembled per manufacturer specifications", "Tightened and checked all hardware", "Tested stability", "Cleared away packaging"],
-    materialsTemplate: [],
-    notes: "All hardware fully tightened and checked for stability. Packaging removed — let me know if you'd like it kept for a return."
-  }],
-  Cleaning: [{
-    workPerformed: ["Dusted and wiped all surfaces", "Vacuumed and mopped floors", "Cleaned kitchen and bathroom fixtures", "Emptied trash and replaced liners", "Final walkthrough for quality"],
-    materialsTemplate: [],
-    notes: "Focused extra attention on the kitchen and bathrooms as usual. Everything's ready to go."
-  }],
-  Landscaping: [{
-    workPerformed: ["Assessed the yard/area", "Completed the requested work", "Cleared and bagged debris", "Edged and tidied borders", "Final walkthrough"],
-    materialsTemplate: [],
-    notes: "Yard's in good shape. Let me know if you'd like this set up as a recurring visit."
-  }],
-  Painting: [{
-    workPerformed: ["Prepped surfaces (patched, sanded, taped)", "Applied primer where needed", "Applied two coats of paint", "Removed tape and protected surfaces", "Cleaned up work area"],
-    materialsTemplate: [{ description: "Paint (per gallon)", qty: 1, amount: 34 }, { description: "Painter's tape and supplies", qty: 1, amount: 7 }],
-    notes: "Two full coats for even coverage. Give it about 24 hours before hanging anything or wiping down the walls."
-  }],
-  Flooring: [{
-    workPerformed: ["Inspected the affected area", "Completed the repair/installation", "Checked for levelness and secure fit", "Cleaned the area", "Final inspection"],
-    materialsTemplate: [{ description: "Flooring materials/adhesive", qty: 1, amount: 22 }],
-    notes: "Everything's level and secure. Give any adhesive a full 24 hours before heavy foot traffic in that area."
-  }],
-  "Smart Home": [{
-    workPerformed: ["Confirmed compatibility and placement", "Completed the installation and wiring", "Paired the device with your network/app", "Tested all functions", "Walked through basic usage"],
-    materialsTemplate: [{ description: "Mounting/wiring hardware", qty: 1, amount: 12 }],
-    notes: "Device is paired and tested — all functions working as expected. Happy to answer any questions about the app setup."
-  }],
-  Maintenance: [{
-    workPerformed: ["Inspected the system/area", "Performed the requested maintenance", "Checked for any additional issues", "Tested normal operation", "Cleaned up work area"],
-    materialsTemplate: [{ description: "Filter/consumable part", qty: 1, amount: 15 }],
-    notes: "Everything's in good working order. I noted the date so you'll have a record for next time this is due."
-  }],
-  "Pest Control": [{
-    workPerformed: ["Inspected the affected areas", "Identified entry points and activity", "Applied treatment", "Sealed accessible entry points where possible", "Provided prevention recommendations"],
-    materialsTemplate: [{ description: "Treatment product", qty: 1, amount: 19 }],
-    notes: "Treated all active areas and the main entry points I could find. You may see some activity for a few days as the treatment takes effect — that's normal."
-  }],
-  Moving: [{
-    workPerformed: ["Confirmed the scope with you before starting", "Carefully wrapped/protected items as needed", "Completed the move", "Placed items in requested locations", "Final walkthrough"],
-    materialsTemplate: [],
-    notes: "Everything moved without any damage. Let me know if anything needs to be repositioned."
-  }],
-  Repair: [{
-    workPerformed: ["Diagnosed the issue", "Completed the repair", "Tested for proper function", "Inspected surrounding area for related wear", "Cleaned up work area"],
-    materialsTemplate: [{ description: "Repair parts/hardware", qty: 1, amount: 16 }],
-    notes: "Fixed and tested — working normally now. Let me know if you notice anything else in that area."
-  }]
-};
-const DEFAULT_COMPLETION_TEMPLATE = {
-  workPerformed: ["Assessed the job on arrival", "Completed the requested work", "Tested the result", "Cleaned up the work area"],
-  materialsTemplate: [],
-  notes: "Completed as requested — let me know if you have any questions."
-};
 const N = "#1C2B3A", AM = "#F59E0B";
 const SC = "#059669";
 const PersonIcon = ({ col = AM, sz = 22 }) => /* @__PURE__ */ React.createElement("svg", { width: sz, height: sz, viewBox: "0 0 24 24", fill: col, style: { display: "block" } }, /* @__PURE__ */ React.createElement("path", { d: "M12 12c2.7 0 4.8-2.1 4.8-4.8S14.7 2.4 12 2.4 7.2 4.5 7.2 7.2 9.3 12 12 12zm0 2.4c-3.2 0-9.6 1.6-9.6 4.8v2.4h19.2v-2.4c0-3.2-6.4-4.8-9.6-4.8z" }));
@@ -2039,7 +1942,7 @@ function makeJob({
   workPerformed = [],
   materials = [],
   proNotes = "",
-  // populated once, at completion — see getCompletionDetails()
+  // only what the Pro reports (backend); never generated
   lockedPrice = null,
   // the actual labor price agreed to at booking time (property-aware for scoped tasks like Deep/Standard/Move-Out Cleaning). null for older jobs or non-scoped tasks — those fall back to the catalog's reference price, which is safe since it was never property-dependent to begin with.
   requiresDiagnosis = false,
@@ -2247,6 +2150,7 @@ const APPT_WINDOW_STARTS = [8, 10, 12, 14, 16];
 const APPT_DAYS_AHEAD = 7;
 const APPT_TIME_PREF_ID = 7;
 const HAVEN_REQUESTED_TIME_SHARED_WITH_PROS = false;
+const HAVEN_TIPPING_AVAILABLE = false;
 const fmtHour = (h) => {
   const ap = h < 12 ? "AM" : "PM";
   const hh = h % 12 === 0 ? 12 : h % 12;
@@ -2369,10 +2273,13 @@ const formatLayout = (h) => {
   return `${beds} / ${h.baths || "—"} bath`;
 };
 const STAR_LABELS = ["", "Terrible", "Bad", "OK", "Good", "Excellent!"];
-const DEFAULT_CARDS = [
-  { id: 1, brand: "Visa", last4: "4242", exp: "08/28", isDefault: true },
-  { id: 2, brand: "Mastercard", last4: "8821", exp: "02/27", isDefault: false }
+const HAVEN_PAYMENTS_AVAILABLE = false;
+const SAMPLE_CARDS = [
+  { id: 1, brand: "Visa", last4: "4242", exp: "08/28" },
+  { id: 2, brand: "Mastercard", last4: "8821", exp: "02/27" }
 ];
+const isSampleCard = (c) => SAMPLE_CARDS.some((x) => x.id === c.id && x.brand === c.brand && x.last4 === c.last4 && x.exp === c.exp);
+const DEFAULT_CARDS = [];
 const DEFAULT_ADDRESSES = [
   { id: 1, label: "Home", isPrimary: true, street: "123 Market Street", unit: "Apt 4B", city: "San Francisco", state: "CA", zip: "94103", accessNotes: "", propertyType: "Apartment", yearBuilt: "1998", sqft: "1,150", beds: "2", baths: "1" },
   { id: 2, label: "Work", isPrimary: false, street: "500 Folsom Street", unit: "", city: "San Francisco", state: "CA", zip: "94105", accessNotes: "", propertyType: "", yearBuilt: "", sqft: "", beds: "", baths: "" }
@@ -2998,7 +2905,7 @@ function App() {
         last4: typeof c.last4 === "string" ? c.last4 : "----",
         exp: typeof c.exp === "string" ? c.exp : "",
         isDefault: !!c.isDefault
-      }));
+      })).filter((c) => !isSampleCard(c));
       if (cleaned.length === 0) return cleaned;
       const defaults = cleaned.filter((c) => c.isDefault);
       if (defaults.length > 1) {
@@ -3016,14 +2923,6 @@ function App() {
     }
   });
   const [expandedCard, setExpandedCard] = useState(null);
-  const [addingCard, setAddingCard] = useState(false);
-  const [newCardNum, setNewCardNum] = useState("");
-  const [newCardExp, setNewCardExp] = useState("");
-  const [newCardCvv, setNewCardCvv] = useState("");
-  const [newCardAddr, setNewCardAddr] = useState("");
-  const [newCardCity, setNewCardCity] = useState("");
-  const [newCardState, setNewCardState] = useState("");
-  const [newCardZip, setNewCardZip] = useState("");
   const [addresses, setAddresses] = usePersistedState("haven_addresses", DEFAULT_ADDRESSES, {
     version: 1,
     validate: (v) => {
@@ -3319,10 +3218,9 @@ function App() {
           return { job: { ...j, status: "in_progress", justAccepted: false }, accepted: null, arrived: null, track: j.id };
         }
         if (remoteStatus === "complete" && (j.status === "posted" || j.status === "en_route" || j.status === "arrived" || j.status === "diagnosing" || j.status === "materials_requested" || j.status === "materials_approved" || j.status === "in_progress")) {
-          const cat2 = j.taskId ? TASKS.find((t) => t.id === j.taskId)?.c : j.custom?.cat;
-          const task = j.taskId ? TASKS.find((t) => t.id === j.taskId) : null;
-          const price = j.taskId ? j.lockedPrice ?? (task ? task.p : 0) : j.custom?.price || 0;
-          const { workPerformed, materials, proNotes } = getCompletionDetails(cat2, price);
+          const workPerformed = Array.isArray(j.workPerformed) ? j.workPerformed : [];
+          const materials = Array.isArray(j.materials) ? j.materials : [];
+          const proNotes = typeof j.proNotes === "string" ? j.proNotes : "";
           return { job: { ...j, status: "complete", justAccepted: false, completedAt: Date.now(), workPerformed, materials, proNotes }, accepted: null, arrived: null, track: j.id, completed: j.id, proName: j.pro?.n || "Your pro" };
         }
         let mappedRequest = null;
@@ -3833,19 +3731,6 @@ function App() {
     setCards((cs) => cs.filter((c) => c.id !== id));
     setExpandedCard(null);
   };
-  const addCard = () => {
-    if (newCardNum.trim().length < 4) return;
-    const last4 = newCardNum.trim().slice(-4);
-    setCards((cs) => [...cs, { id: Date.now(), brand: "Card", last4, exp: newCardExp.trim() || "—", isDefault: cs.length === 0 }]);
-    setNewCardNum("");
-    setNewCardExp("");
-    setNewCardCvv("");
-    setNewCardAddr("");
-    setNewCardCity("");
-    setNewCardState("");
-    setNewCardZip("");
-    setAddingCard(false);
-  };
   const removeAddr = (id) => {
     setAddresses((as) => {
       const target = as.find((a) => a.id === id);
@@ -3934,8 +3819,9 @@ function App() {
       emergencyFee: emergency ? EMERGENCY_FEE : 0,
       addressText: selectedAddress ? formatAddress(selectedAddress) : "—",
       addressLabel: selectedAddress?.label || "",
-      paymentBrand: selectedCard?.brand || "Card",
-      paymentLast4: selectedCard?.last4 || "----",
+      // No payment provider yet: the job carries the existing "no card" placeholder, never a card.
+      paymentBrand: HAVEN_PAYMENTS_AVAILABLE ? selectedCard?.brand || "Card" : "Card",
+      paymentLast4: HAVEN_PAYMENTS_AVAILABLE ? selectedCard?.last4 || "----" : "----",
       jobPreferences: jobPrefs.filter((p) => p.enabled).map((p) => p.label),
       lockedPrice: tid ? effectiveTaskPrice : null,
       // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
@@ -4145,6 +4031,7 @@ function App() {
     goTo("tip");
   };
   const addTipToJob = (jobId, amount, { simulateFailure = false } = {}) => {
+    if (!HAVEN_TIPPING_AVAILABLE) return;
     if (isTippingRef.current) return;
     isTippingRef.current = true;
     setJobs((js) => js.map((j) => j.id === jobId ? { ...j, tipStatus: "processing" } : j));
@@ -4451,10 +4338,10 @@ function App() {
     },
     /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: TX } }, a.label, a.isPrimary ? " · Primary" : ""),
     /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TS, marginTop: 1 } }, formatAddress(a))
-  ))), /* @__PURE__ */ React.createElement("div", { style: { height: 1, background: BD, margin: "12px 0" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 16 } }, "💳"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: TX, fontWeight: 600 } }, selectedCard ? `${selectedCard.brand} •••• ${selectedCard.last4}` : "No card saved")), cards.length > 1 && /* @__PURE__ */ React.createElement("span", { role: "button", tabIndex: 0, onKeyDown: keyActivate, onClick: () => {
+  ))), /* @__PURE__ */ React.createElement("div", { style: { height: 1, background: BD, margin: "12px 0" } }), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 16 } }, "💳"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: HAVEN_PAYMENTS_AVAILABLE ? TX : TS, fontWeight: 600 } }, !HAVEN_PAYMENTS_AVAILABLE ? "Payment isn't collected in the app yet" : selectedCard ? `${selectedCard.brand} •••• ${selectedCard.last4}` : "No card saved")), HAVEN_PAYMENTS_AVAILABLE && cards.length > 1 && /* @__PURE__ */ React.createElement("span", { role: "button", tabIndex: 0, onKeyDown: keyActivate, onClick: () => {
     setShowCardPicker((v) => !v);
     setShowAddressPicker(false);
-  }, style: { fontSize: 12, color: NT, fontWeight: 700, cursor: "pointer" } }, "Change")), showCardPicker && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, paddingTop: 12, borderTop: `1px solid ${BD}` } }, cards.map((c) => /* @__PURE__ */ React.createElement(
+  }, style: { fontSize: 12, color: NT, fontWeight: 700, cursor: "pointer" } }, "Change")), HAVEN_PAYMENTS_AVAILABLE && showCardPicker && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, paddingTop: 12, borderTop: `1px solid ${BD}` } }, cards.map((c) => /* @__PURE__ */ React.createElement(
     "div",
     {
       role: "button",
@@ -5149,78 +5036,10 @@ function App() {
     return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, subHeader(showHomeDetails ? "Edit home details" : editingAddressId ? "Edit address" : "Add address", () => backFrom("addressEdit", { scr: "myhome", tab: "home" })), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: 20 } }, addressFormError && /* @__PURE__ */ React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 14, padding: "12px 14px", marginBottom: 16 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#DC2626", fontWeight: 600 } }, addressFormError)), !isPrimaryEdit && homeFieldCard("Label", addressInput("label", "e.g. Work, Parents' house")), homeFieldCard("Street address", addressInput("street", "123 Main Street")), homeFieldCard("Apartment, unit, suite, or building (optional)", addressInput("unit", "Apt, unit, suite, or building")), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 } }, homeFieldCard("City", addressInput("city", "City")), homeFieldCard("State", stateSelect())), homeFieldCard("ZIP code", addressInput("zip", "ZIP code", { inputMode: "numeric" })), homeFieldCard("Access notes (optional)", addressInput("accessNotes", "Gate code, parking notes, etc.")), homeFieldCard("Property type", addressSelect("propertyType", HOME_TYPES), "propertyType"), showHomeDetails && /* @__PURE__ */ React.createElement(React.Fragment, null, homeFieldCard("Year built", addressSelect("yearBuilt", YEAR_OPTIONS), "yearBuilt"), homeFieldCard("Square footage", addressInput("sqft", "e.g. 1,150", { inputMode: "numeric" }), "sqft"), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 0 } }, homeFieldCard("Bedrooms", addressSelect("beds", BEDROOM_OPTIONS), "beds"), homeFieldCard("Bathrooms", addressSelect("baths", BATHROOM_OPTIONS), "baths"))), /* @__PURE__ */ React.createElement("button", { onClick: saveAddressForm, style: { width: "100%", padding: 17, borderRadius: 18, border: "none", background: AM, color: ON, fontWeight: 800, fontSize: 16, cursor: "pointer", boxShadow: `0 6px 20px rgba(245,158,11,.3)`, marginBottom: 10, marginTop: 8 } }, "Save changes"), /* @__PURE__ */ React.createElement("button", { onClick: () => backFrom("addressEdit", { scr: "myhome", tab: "home" }), style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: TS, fontWeight: 600, fontSize: 15, cursor: "pointer" } }, "Cancel")));
   };
   const cardColors = { Visa: N, Mastercard: "#C2410C", Card: "#5B21B6" };
-  const paymentScreen = () => /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, subHeader("Payment methods", () => backFrom("payment", { scr: "home", tab: "profile" })), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: 20 } }, sortedCards.map((c) => {
+  const paymentScreen = () => !HAVEN_PAYMENTS_AVAILABLE ? /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, subHeader("Payment methods", () => backFrom("payment", { scr: "home", tab: "profile" })), /* @__PURE__ */ React.createElement("div", { role: "status", className: "sc", style: { flex: 1, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 32, marginBottom: 12 } }, "💳"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 16, color: TX, marginBottom: 6 } }, "Payments aren't available yet"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5, maxWidth: 300 } }, "Haven doesn't take card payments in the app yet, so there's nothing to add here and you won't be charged through the app."))) : /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, subHeader("Payment methods", () => backFrom("payment", { scr: "home", tab: "profile" })), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: 20 } }, sortedCards.map((c) => {
     const open = expandedCard === c.id;
     return /* @__PURE__ */ React.createElement("div", { key: c.id, style: { background: c.isDefault ? SELBG : W, border: c.isDefault ? `1.5px solid ${SELBORDER}` : "1.5px solid transparent", borderRadius: 18, marginBottom: 12, boxShadow: "0 2px 10px rgba(28,43,58,.07)", overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { role: "button", tabIndex: 0, onKeyDown: keyActivate, "aria-expanded": open, onClick: () => setExpandedCard(open ? null : c.id), style: { padding: 16, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 44, height: 30, borderRadius: 6, background: cardColors[c.brand] || N, display: "flex", alignItems: "center", justifyContent: "center", color: ON, fontSize: 9, fontWeight: 800, flexShrink: 0 } }, c.brand.slice(0, 4).toUpperCase()), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 14, color: TX } }, c.brand, " •••• ", c.last4), c.isDefault && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: N, background: "#DBEAFE", padding: "2px 8px", borderRadius: 8 } }, "Default")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, marginTop: 2 } }, "Expires ", c.exp)), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 16, transform: open ? "rotate(90deg)" : "none", display: "inline-block" } }, "›")), open && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, padding: "0 16px 16px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setCardDefault(c.id), disabled: c.isDefault, style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: c.isDefault ? BG : W, color: c.isDefault ? TM : N, fontWeight: 600, fontSize: 12, cursor: c.isDefault ? "default" : "pointer" } }, c.isDefault ? "Default card" : "Set as default"), /* @__PURE__ */ React.createElement("button", { onClick: () => removeCard(c.id), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "1.5px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Remove card")));
-  }), addingCard ? /* @__PURE__ */ React.createElement("div", { style: { background: W, borderRadius: 18, padding: 16, marginBottom: 12, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 8 } }, "Card number"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardNum,
-      onChange: (e) => setNewCardNum(e.target.value.replace(/\D/g, "").slice(0, 16)),
-      placeholder: "1234 5678 9012 3456",
-      inputMode: "numeric",
-      style: { width: "100%", border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, color: TX, marginBottom: 12, outline: "none" }
-    }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 8 } }, "Expiry"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardExp,
-      onChange: (e) => setNewCardExp(e.target.value),
-      placeholder: "MM/YY",
-      style: { width: "100%", border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, color: TX, outline: "none" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 8 } }, "CVV"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardCvv,
-      onChange: (e) => setNewCardCvv(e.target.value.replace(/\D/g, "").slice(0, 4)),
-      placeholder: "123",
-      inputMode: "numeric",
-      style: { width: "100%", border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, color: TX, outline: "none" }
-    }
-  ))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 8 } }, "Billing address"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardAddr,
-      onChange: (e) => setNewCardAddr(e.target.value),
-      placeholder: "Street address",
-      style: { width: "100%", border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, color: TX, marginBottom: 10, outline: "none" }
-    }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardCity,
-      onChange: (e) => setNewCardCity(e.target.value),
-      placeholder: "City",
-      style: { flex: 2, minWidth: 0, border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 10px", fontSize: 13, color: TX, outline: "none" }
-    }
-  ), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardState,
-      onChange: (e) => setNewCardState(e.target.value.slice(0, 2).toUpperCase()),
-      placeholder: "ST",
-      style: { width: 52, border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 8px", fontSize: 13, color: TX, outline: "none", textAlign: "center" }
-    }
-  ), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardZip,
-      onChange: (e) => setNewCardZip(e.target.value.replace(/\D/g, "").slice(0, 5)),
-      placeholder: "ZIP",
-      inputMode: "numeric",
-      style: { width: 68, border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 8px", fontSize: 13, color: TX, outline: "none" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
-    setAddingCard(false);
-    setNewCardNum("");
-    setNewCardExp("");
-    setNewCardCvv("");
-    setNewCardAddr("");
-    setNewCardCity("");
-    setNewCardState("");
-    setNewCardZip("");
-  }, style: { flex: 1, padding: "10px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: BG, color: TS, fontWeight: 600, fontSize: 13, cursor: "pointer" } }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: addCard, disabled: newCardNum.length < 4, style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: newCardNum.length >= 4 ? AM : "#DDD9D2", color: ON, fontWeight: 700, fontSize: 13, cursor: newCardNum.length >= 4 ? "pointer" : "default" } }, "Add card"))) : /* @__PURE__ */ React.createElement("button", { onClick: () => setAddingCard(true), style: { width: "100%", padding: 15, borderRadius: 16, border: `1.5px dashed ${BD}`, background: "transparent", color: NT, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 14 } }, "+ Add payment method"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-start", justifyContent: "center", padding: "0 8px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, flexShrink: 0 } }, "🔒"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: TM, lineHeight: 1.5, textAlign: "center" } }, "Payments are securely processed. Your full card information is never displayed."))));
+  }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, textAlign: "center", lineHeight: 1.5, padding: "4px 8px" } }, "Cards are added through Haven's payment provider, never typed into the app.")));
   const addressesScreen = () => /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, subHeader("Saved addresses", () => backFrom("addresses", { scr: "home", tab: "profile" })), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: 20 } }, sortedAddresses.map((a) => {
     const open = expandedAddr === a.id;
     return /* @__PURE__ */ React.createElement("div", { key: a.id, style: { background: a.isPrimary ? SELBG : W, border: a.isPrimary ? `1.5px solid ${SELBORDER}` : "1.5px solid transparent", borderRadius: 18, marginBottom: 12, boxShadow: "0 2px 10px rgba(28,43,58,.07)", overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { role: "button", tabIndex: 0, onKeyDown: keyActivate, "aria-expanded": open, onClick: () => setExpandedAddr(open ? null : a.id), style: { padding: 16, display: "flex", gap: 12, alignItems: "flex-start", cursor: "pointer" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, addressIcon(a)), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 14, color: TX } }, a.label), a.isPrimary && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: N, background: "#DBEAFE", padding: "2px 8px", borderRadius: 8 } }, "🏠 Primary")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginTop: 3, lineHeight: 1.4 } }, formatAddress(a)), a.accessNotes && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 2 } }, "Access notes: ", a.accessNotes)), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 16, transform: open ? "rotate(90deg)" : "none", display: "inline-block" } }, "›")), open && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, padding: "0 16px 16px", flexWrap: "wrap" } }, a.isPrimary ? /* @__PURE__ */ React.createElement("button", { disabled: true, style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: BG, color: TM, fontWeight: 600, fontSize: 12, cursor: "default" } }, "Primary") : /* @__PURE__ */ React.createElement("button", { onClick: () => setPrimaryAddress(a.id), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: NT, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Set as Primary"), /* @__PURE__ */ React.createElement("button", { onClick: () => openAddressForm(a), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: NT, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Edit"), /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmDeleteAddrId(a.id), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "1.5px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Delete")), confirmDeleteAddrId === a.id && /* @__PURE__ */ React.createElement("div", { style: { margin: "0 16px 16px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 14, padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#DC2626", marginBottom: 4 } }, "Delete this property?"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 12, lineHeight: 1.4 } }, "This will remove it from Saved Addresses and My Home."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmDeleteAddrId(null), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: TS, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: () => removeAddr(a.id), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: "#DC2626", color: ON, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Delete Property"))));
@@ -5434,16 +5253,16 @@ function App() {
       const curr = i === vjSIdx;
       const sz = curr ? 20 : 16;
       return /* @__PURE__ */ React.createElement("div", { key: s, style: { display: "flex", alignItems: "center", flex: isL ? 0 : 1 } }, /* @__PURE__ */ React.createElement("div", { style: { width: sz, height: sz, borderRadius: sz / 2, background: i <= vjSIdx ? N : BD, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } }, past && /* @__PURE__ */ React.createElement("span", { style: { color: ON, fontSize: 8, fontWeight: 900 } }, "✓"), curr && /* @__PURE__ */ React.createElement("div", { style: { width: 7, height: 7, borderRadius: 3.5, background: W } })), !isL && /* @__PURE__ */ React.createElement("div", { style: { flex: 1, height: 2.5, background: past ? N : BD, margin: "0 3px" } }));
-    })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 5 } }, ["En Route", "Arrived", "Working", "Done"].map((l, i) => /* @__PURE__ */ React.createElement("span", { key: l, style: { fontSize: 9, color: i <= vjSIdx ? N : TM, fontWeight: i === vjSIdx ? 700 : 400, flex: i === 0 || i === 3 ? 0 : 1, textAlign: i === 0 ? "left" : i === 3 ? "right" : "center", width: i === 0 || i === 3 ? 44 : void 0, flexShrink: 0 } }, l)))), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { margin: "14px 20px 0", background: W, borderRadius: 20, padding: "16px 18px", boxShadow: "0 2px 10px rgba(28,43,58,.07)", display: "flex", gap: 14, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 52, height: 52, borderRadius: 26, background: emBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 } }, info.em), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { "aria-live": "polite", style: { fontWeight: 800, fontSize: 17, color: TX, marginBottom: 3 } }, info.label), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS } }, vjPname, " ", info.sub))), /* @__PURE__ */ React.createElement("div", { style: { margin: "12px 20px", borderRadius: 20, overflow: "hidden", boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, trackMap()), vj.status === "materials_requested" && (() => {
+    })), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", marginTop: 5 } }, ["En Route", "Arrived", "Working", "Done"].map((l, i) => /* @__PURE__ */ React.createElement("span", { key: l, style: { fontSize: 9, color: i <= vjSIdx ? N : TM, fontWeight: i === vjSIdx ? 700 : 400, flex: i === 0 || i === 3 ? 0 : 1, textAlign: i === 0 ? "left" : i === 3 ? "right" : "center", width: i === 0 || i === 3 ? 44 : void 0, flexShrink: 0 } }, l)))), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto" } }, /* @__PURE__ */ React.createElement("div", { style: { margin: "14px 20px 0", background: W, borderRadius: 20, padding: "16px 18px", boxShadow: "0 2px 10px rgba(28,43,58,.07)", display: "flex", gap: 14, alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 52, height: 52, borderRadius: 26, background: emBg, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 } }, info.em), (() => {
+      const matReq = vj.status === "materials_requested";
+      const hasList = !!(vj.materialsRequest && Array.isArray(vj.materialsRequest.items) && vj.materialsRequest.items.length);
+      const label = matReq && !hasList ? "Materials requested" : info.label;
+      const sub = matReq ? hasList ? "Review and approve the list below" : "Waiting for your Pro's list" : `${vjPname} ${info.sub}`;
+      return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { "aria-live": "polite", style: { fontWeight: 800, fontSize: 17, color: TX, marginBottom: 3 } }, label), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS } }, sub));
+    })()), /* @__PURE__ */ React.createElement("div", { style: { margin: "12px 20px", borderRadius: 20, overflow: "hidden", boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, trackMap()), vj.status === "materials_requested" && (() => {
       const jt = vjTask ? { n: vjTask.n, c: TASKS.find((t) => t.id === vj.taskId)?.c } : vj.custom ? { n: vj.custom.title, c: vj.custom.cat } : null;
-      const computeFallback = () => {
-        const category = vj.taskId ? TASKS.find((t) => t.id === vj.taskId)?.c : vj.custom?.cat;
-        const price = vjTask ? vj.lockedPrice ?? vjTask.p : vj.custom?.price || 0;
-        const { materials } = getCompletionDetails(category, price);
-        const est = materials.reduce((s, m) => s + m.amount * (m.qty || 1), 0);
-        return { items: materials, estimatedTotal: est };
-      };
-      const req = vj.materialsRequest || computeFallback();
+      const req = vj.materialsRequest && Array.isArray(vj.materialsRequest.items) && vj.materialsRequest.items.length ? vj.materialsRequest : null;
+      if (!req) return /* @__PURE__ */ React.createElement("div", { role: "status", style: { margin: "0 20px 12px", background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 800, color: TM, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 8 } }, "Materials request"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: TX, marginBottom: 6 } }, jt?.n || "Your job"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, lineHeight: 1.5 } }, "Your Pro asked to buy materials. The list hasn't arrived yet. It will show here for your approval as soon as it does."));
       const estTotal = req.items.reduce((s, m) => s + m.amount * (m.qty || 1), 0);
       return /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 12px", background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 800, color: TM, letterSpacing: 0.8, textTransform: "uppercase" } }, "Materials needed — your approval"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#92400E", background: "#FEF3C7", padding: "4px 10px", borderRadius: 20 } }, "Action needed")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: TX, marginBottom: 6 } }, jt?.n || "Your job"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, marginBottom: 12 } }, "Your pro requested these materials to complete the job."), /* @__PURE__ */ React.createElement("div", { style: { border: `1px solid ${BD}`, borderRadius: 12, overflow: "hidden", marginBottom: 12 } }, req.items.map((m, i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", padding: "10px 12px", background: i % 2 === 0 ? BG : W } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TX } }, m.description), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS } }, "×", m.qty || 1), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: TX } }, "$", (m.amount * (m.qty || 1)).toFixed(2)))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 12px", borderTop: `1px solid ${BD}`, background: W } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TM, fontWeight: 700 } }, "Estimated total"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 16, fontWeight: 900, color: AMT } }, "$", estTotal.toFixed(2)))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TS, marginBottom: 12, lineHeight: 1.5 } }, "Approving authorizes the purchase only. The receipt later locks the actual total. Haven takes $0 on materials."), /* @__PURE__ */ React.createElement("button", { onClick: approveMaterials, style: { width: "100%", padding: 13, borderRadius: 14, border: "none", background: AM, color: ON, fontWeight: 800, fontSize: 14, cursor: "pointer", marginBottom: 8 } }, "Approve materials"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowMaterialsDeclineConfirm(true), style: { width: "100%", padding: 13, borderRadius: 14, border: `1.5px solid ${BD}`, background: "transparent", color: "#DC2626", fontWeight: 800, fontSize: 14, cursor: "pointer" } }, "Decline and end job"));
     })(), vj.status === "materials_approved" && (() => {
@@ -5471,13 +5290,14 @@ function App() {
         }, style: { width: "100%", padding: 12, borderRadius: 12, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 13, cursor: "pointer" } }, "Contact Haven Support")));
       }
       if (vj.status === "complete") {
-        return /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 24px" } }, !vj.rated ? /* @__PURE__ */ React.createElement("button", { onClick: openRating, style: { width: "100%", padding: 17, borderRadius: 18, border: "none", background: AM, color: ON, fontWeight: 800, fontSize: 16, cursor: "pointer", boxShadow: `0 6px 20px rgba(245,158,11,.35)`, marginBottom: 10 } }, "⭐ Rate ", vjPname) : /* @__PURE__ */ React.createElement("div", { style: { background: SL, borderRadius: 18, padding: 16, textAlign: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, starDisplay(vj.stars, 22)), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: SC } }, "Review submitted — thanks!")), vj.tipStatus === "paid" ? /* @__PURE__ */ React.createElement("button", { onClick: openTip, style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: SC, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 } }, "✓ Tip sent: $", vj.tipAmount.toFixed(2)) : /* @__PURE__ */ React.createElement("button", { onClick: openTip, style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 } }, "💛 Tip Pro"), /* @__PURE__ */ React.createElement("button", { onClick: () => openReceipt(vj.id), style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 14, cursor: "pointer" } }, "🧾 View Receipt"));
+        return /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 24px" } }, !vj.rated ? /* @__PURE__ */ React.createElement("button", { onClick: openRating, style: { width: "100%", padding: 17, borderRadius: 18, border: "none", background: AM, color: ON, fontWeight: 800, fontSize: 16, cursor: "pointer", boxShadow: `0 6px 20px rgba(245,158,11,.35)`, marginBottom: 10 } }, "⭐ Rate ", vjPname) : /* @__PURE__ */ React.createElement("div", { style: { background: SL, borderRadius: 18, padding: 16, textAlign: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, starDisplay(vj.stars, 22)), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: SC } }, "Review submitted — thanks!")), !HAVEN_TIPPING_AVAILABLE ? /* @__PURE__ */ React.createElement("div", { role: "note", style: { fontSize: 12, color: TS, textAlign: "center", lineHeight: 1.5, margin: "2px 8px 12px" } }, "In-app tipping isn't available yet. You haven't been charged for a tip.") : vj.tipStatus === "paid" ? /* @__PURE__ */ React.createElement("button", { onClick: openTip, style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: SC, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 } }, "✓ Tip sent: $", vj.tipAmount.toFixed(2)) : /* @__PURE__ */ React.createElement("button", { onClick: openTip, style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 } }, "💛 Tip Pro"), /* @__PURE__ */ React.createElement("button", { onClick: () => openReceipt(vj.id), style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 14, cursor: "pointer" } }, "🧾 View Receipt"));
       }
       return /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 24px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 16, padding: 16, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#DC2626", marginBottom: 6 } }, vj.status === "inspection_completed" ? "Inspection visit completed" : "Job ended — materials declined"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", lineHeight: 1.5, marginBottom: 8 } }, vj.status === "inspection_completed" ? "A $45 Inspection Visit applies. Haven takes $0." : "A $30 convenience fee applies. Haven takes $0."), /* @__PURE__ */ React.createElement("button", { onClick: goBookings, style: { padding: "10px 14px", borderRadius: 10, border: "none", background: N, color: ON, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "← Back to Bookings"));
     })()));
   };
   const tipScreen = () => {
     if (!vj) return unavailableScreen("Tip Pro", goBookings);
+    if (!HAVEN_TIPPING_AVAILABLE) return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, subHeader("Tip Pro", () => backFrom("tip", { scr: "tracking", tab: "bookings" })), /* @__PURE__ */ React.createElement("div", { role: "status", className: "sc", style: { flex: 1, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 32, marginBottom: 12 } }, "💛"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 16, color: TX, marginBottom: 6 } }, "Tipping isn't available yet"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5, maxWidth: 300 } }, "In-app tipping will open once payments are connected. You haven't been charged.")));
     const presets = [5, 10, 15, 20];
     const parsedCustom = parseFloat(tipCustomAmount);
     const customValid = tipCustomAmount.trim() !== "" && !isNaN(parsedCustom) && parsedCustom > 0 && parsedCustom <= 2e3;
