@@ -115,6 +115,10 @@ function seed() {
   storedData['haven_auth_email'] = 'qa-customer@example.com';
   storedData['haven_auth_role'] = 'customer';
   storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
+  // The customer's saved address for booking (MAP-03: no sample addresses are created any more).
+  storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: [
+    { id: 1700000000101, label: 'Home', isPrimary: true, street: '1 Oak St', unit: '', city: 'Orlando', state: 'FL', zip: '32801', accessNotes: '', propertyType: 'House', yearBuilt: '1990', sqft: '1800', beds: '3', baths: '2' },
+  ] });
   if (cardsSeed) storedData['haven_cards'] = JSON.stringify({ __v: 1, data: cardsSeed });
 }
 async function delay(ms) { await new Promise(r => setTimeout(r, ms)); }
