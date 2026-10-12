@@ -79,7 +79,7 @@ function proProfileFacts(p){
 }
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
 const TIME_PREFS=[
-  {id:1,label:"ASAP",          sub:"Within 2 hours",              surge:10},
+  {id:1,label:"ASAP",          sub:"As soon as a Pro is available",surge:10},
   {id:2,label:"This morning",  sub:"Today · 8:00 AM – 12:00 PM",  surge:0},
   {id:3,label:"This afternoon",sub:"Today · 12:00 – 5:00 PM",     surge:0},
   {id:4,label:"This evening",  sub:"Today · 5:00 – 9:00 PM",      surge:0},
@@ -87,11 +87,13 @@ const TIME_PREFS=[
   {id:6,label:"Tomorrow PM",   sub:"Tomorrow · 12:00 – 5:00 PM",  surge:0},
   {id:7,label:"Requested time",sub:"",                            surge:0},
 ];
-// Emergency jobs use their own short-window timing instead of normal scheduling.
+// Emergency jobs keep their own timing choices (and prices), but they are the
+// customer's preference only: nothing enforces a response time, and requested
+// times don't reach Pros yet (HB-01, HB-10). No arrival is promised.
 const EMERGENCY_TIME_PREFS=[
-  {id:101,label:"ASAP",            sub:"Within 1–2 hours", surge:10},
-  {id:102,label:"Within 4 hours",  sub:"Response within 4 hours",surge:0},
-  {id:103,label:"Within 6 hours",  sub:"Response within 6 hours",surge:0},
+  {id:101,label:"ASAP",            sub:"Preferred · not a guaranteed arrival time", surge:10},
+  {id:102,label:"Within 4 hours",  sub:"Preferred · not a guaranteed arrival time",surge:0},
+  {id:103,label:"Within 6 hours",  sub:"Preferred · not a guaranteed arrival time",surge:0},
 ];
 const ALL_TIME_PREFS=[...TIME_PREFS,...EMERGENCY_TIME_PREFS];
 // Specific appointment windows (founder-approved Option 1). Two-hour
@@ -104,6 +106,9 @@ const APPT_DAYS_AHEAD=7;
 const APPT_TIME_PREF_ID=7; // TIME_PREFS entry for a requested window
 // The backend does not receive the requested time yet (GROKBOT_BACKEND_HANDOFF HB-01).
 const HAVEN_REQUESTED_TIME_SHARED_WITH_PROS=false;
+// In-app tipping needs a real payment provider (HB-06). Until then the tip
+// flow is off: nothing is charged, so nothing may ever read "Tip sent" or "paid".
+const HAVEN_TIPPING_AVAILABLE=false;
 const fmtHour=h=>{const ap=h<12?"AM":"PM";const hh=h%12===0?12:h%12;return `${hh} ${ap}`;};
 const fmtWindow=start=>{const end=start+2;const sameHalf=(start<12)===(end<12)&&end!==12;return sameHalf?`${start%12===0?12:start%12}–${fmtHour(end)}`:`${fmtHour(start)}–${fmtHour(end)}`;};
 const dayKey=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -194,10 +199,19 @@ const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
 // "Reset Prototype Data". Cards only ever hold safe prototype display
 // fields (brand, last four digits, expiration, default flag) — never a
 // full card number, CVV, or any real payment credential.
-const DEFAULT_CARDS=[
-  {id:1,brand:"Visa",last4:"4242",exp:"08/28",isDefault:true},
-  {id:2,brand:"Mastercard",last4:"8821",exp:"02/27",isDefault:false},
+// Payments aren't connected to a provider yet (HB-07): Haven doesn't charge,
+// store or verify cards. Until it does, the app shows payments as not
+// available, never lists a card as a payment method, and never sends card
+// details on a job.
+const HAVEN_PAYMENTS_AVAILABLE=false;
+// The two sample cards earlier builds put on every new device. Only an exact,
+// unedited match is removed from a device; anything else stays stored as is.
+const SAMPLE_CARDS=[
+  {id:1,brand:"Visa",last4:"4242",exp:"08/28"},
+  {id:2,brand:"Mastercard",last4:"8821",exp:"02/27"},
 ];
+const isSampleCard=c=>SAMPLE_CARDS.some(x=>x.id===c.id&&x.brand===c.brand&&x.last4===c.last4&&x.exp===c.exp);
+const DEFAULT_CARDS=[];
 const DEFAULT_ADDRESSES=[
   {id:1,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
   {id:2,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
@@ -827,7 +841,8 @@ export default function App(){
           last4:typeof c.last4==="string"?c.last4:"----",
           exp:typeof c.exp==="string"?c.exp:"",
           isDefault:!!c.isDefault,
-        }));
+        }))
+        .filter(c=>!isSampleCard(c));
       if(cleaned.length===0)return cleaned;
       const defaults=cleaned.filter(c=>c.isDefault);
       if(defaults.length>1){
@@ -840,14 +855,6 @@ export default function App(){
     },
   });
   const [expandedCard,setExpandedCard]=useState(null);
-  const [addingCard,setAddingCard]=useState(false);
-  const [newCardNum,setNewCardNum]=useState("");
-  const [newCardExp,setNewCardExp]=useState("");
-  const [newCardCvv,setNewCardCvv]=useState("");
-  const [newCardAddr,setNewCardAddr]=useState("");
-  const [newCardCity,setNewCardCity]=useState("");
-  const [newCardState,setNewCardState]=useState("");
-  const [newCardZip,setNewCardZip]=useState("");
   // Addresses — canonical property/address model. Exactly one entry has
   // isPrimary:true; that entry IS "My Home" (no separate home/draftHome
   // state exists anymore — My Home reads/writes this same array so the two
@@ -1206,10 +1213,12 @@ export default function App(){
           return {job:{...j,status:"in_progress",justAccepted:false},accepted:null,arrived:null,track:j.id};
         }
         if(remoteStatus==="complete" && (j.status==="posted"||j.status==="en_route"||j.status==="arrived"||j.status==="diagnosing"||j.status==="materials_requested"||j.status==="materials_approved"||j.status==="in_progress")){
-          const cat=j.taskId?(TASKS.find(t=>t.id===j.taskId)?.c):j.custom?.cat;
-          const task=j.taskId?TASKS.find(t=>t.id===j.taskId):null;
-          const price=j.taskId?(j.lockedPrice??(task?task.p:0)):(j.custom?.price||0);
-          const {workPerformed,materials,proNotes}=getCompletionDetails(cat,price);
+          // Only what the Pro actually reported. Nothing is generated: the
+          // backend doesn't send work notes yet (HB-03), so these stay empty
+          // and the receipt leaves those sections out.
+          const workPerformed=Array.isArray(j.workPerformed)?j.workPerformed:[];
+          const materials=Array.isArray(j.materials)?j.materials:[];
+          const proNotes=typeof j.proNotes==="string"?j.proNotes:"";
           return {job:{...j,status:"complete",justAccepted:false,completedAt:Date.now(),workPerformed,materials,proNotes},accepted:null,arrived:null,track:j.id,completed:j.id,proName:j.pro?.n||"Your pro"};
         }
         // Map materials metadata if present
@@ -1813,14 +1822,6 @@ export default function App(){
   // Payment methods
   const setCardDefault=id=>{setCards(cs=>cs.map(c=>({...c,isDefault:c.id===id})));setExpandedCard(null);};
   const removeCard=id=>{setCards(cs=>cs.filter(c=>c.id!==id));setExpandedCard(null);};
-  const addCard=()=>{
-    if(newCardNum.trim().length<4)return;
-    const last4=newCardNum.trim().slice(-4);
-    // Only brand, last 4, expiry, and default status are ever persisted —
-    // CVV and billing address are used for this prototype form only and discarded.
-    setCards(cs=>[...cs,{id:Date.now(),brand:"Card",last4,exp:newCardExp.trim()||"—",isDefault:cs.length===0}]);
-    setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");setAddingCard(false);
-  };
 
   // Addresses
   const removeAddr=id=>{
@@ -1892,7 +1893,8 @@ export default function App(){
       tpId:tpid,reqWindow:tpid===APPT_TIME_PREF_ID&&reqWindowValid(reqWindow)?reqWindow:null,photos:[...photos],desc,surge,
       emergency,emergencyFee:emergency?EMERGENCY_FEE:0,
       addressText:selectedAddress?formatAddress(selectedAddress):"—",addressLabel:selectedAddress?.label||"",
-      paymentBrand:selectedCard?.brand||"Card",paymentLast4:selectedCard?.last4||"----",
+      // No payment provider yet: the job carries the existing "no card" placeholder, never a card.
+      paymentBrand:HAVEN_PAYMENTS_AVAILABLE?(selectedCard?.brand||"Card"):"Card",paymentLast4:HAVEN_PAYMENTS_AVAILABLE?(selectedCard?.last4||"----"):"----",
       jobPreferences:jobPrefs.filter(p=>p.enabled).map(p=>p.label),
       lockedPrice:tid?effectiveTaskPrice:null, // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
       requiresDiagnosis:requiresDiagnosisLocal,
@@ -2094,6 +2096,7 @@ export default function App(){
   // neither the Receipt nor Pro earnings are touched (both are derived from
   // tipStatus==="paid", so a failed/processing tip simply doesn't count yet).
   const addTipToJob=(jobId,amount,{simulateFailure=false}={})=>{
+    if(!HAVEN_TIPPING_AVAILABLE)return; // never mark a tip paid without a real payment (HB-06)
     if(isTippingRef.current)return;
     isTippingRef.current=true;
     setJobs(js=>js.map(j=>j.id===jobId?{...j,tipStatus:"processing"}:j));
@@ -2151,7 +2154,7 @@ export default function App(){
           <div style={{textAlign:"center"}}>
             <div style={{fontSize:40,marginBottom:10}}>🚨</div>
             <div style={{color:ON,fontWeight:800,fontSize:20,marginBottom:6}}>What's the emergency?</div>
-            <div style={{color:"rgba(255,255,255,.6)",fontSize:13}}>We'll prioritize nearby available pros.</div>
+            <div style={{color:"rgba(255,255,255,.6)",fontSize:13}}>Your job is marked urgent for nearby Pros.</div>
           </div>
         </div>
         <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,padding:"20px 20px 16px",position:"relative",zIndex:1}}>
@@ -2189,7 +2192,7 @@ export default function App(){
           </button>
         </div>
         <div style={{display:"flex",gap:16,marginBottom:16}}>
-          {["✓ Fixed pricing","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
+          {["✓ Fixed pricing"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
         </div>
         <div role="button" tabIndex={0} aria-label="Search 50+ services" onKeyDown={keyActivate} onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
           <span style={{fontSize:16,color:TM}}>🔍</span>
@@ -2214,7 +2217,7 @@ export default function App(){
           <button onClick={()=>goTo("emergency")} style={{font:"inherit",background:isDark?"#3A1A12":"#FFF1EE",border:`1.5px solid ${isDark?"#7C2D12":"#FFD4C7"}`,borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
             <div style={{fontSize:22,marginBottom:6}}>🚨</div>
             <div style={{fontWeight:700,fontSize:13,color:isDark?"#FDBA74":"#C2410C"}}>Urgent</div>
-            <div style={{fontSize:10,color:isDark?"#FDBA74":"#C2410C",opacity:isDark?.75:1,marginTop:1}}>Fast help</div>
+            <div style={{fontSize:10,color:isDark?"#FDBA74":"#C2410C",opacity:isDark?.75:1,marginTop:1}}>Marked urgent</div>
           </button>
           <button onClick={()=>{setTid(null);setTpid(null);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
             style={{font:"inherit",background:SELBG,border:`1.5px solid ${SELBORDER}`,borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
@@ -2744,11 +2747,11 @@ export default function App(){
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
           <span style={{fontSize:16}}>💳</span>
-          <span style={{fontSize:13,color:TX,fontWeight:600}}>{selectedCard?`${selectedCard.brand} •••• ${selectedCard.last4}`:"No card saved"}</span>
+          <span style={{fontSize:13,color:HAVEN_PAYMENTS_AVAILABLE?TX:TS,fontWeight:600}}>{!HAVEN_PAYMENTS_AVAILABLE?"Payment isn't collected in the app yet":selectedCard?`${selectedCard.brand} •••• ${selectedCard.last4}`:"No card saved"}</span>
         </div>
-        {cards.length>1&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setShowCardPicker(v=>!v);setShowAddressPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Change</span>}
+        {HAVEN_PAYMENTS_AVAILABLE&&cards.length>1&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setShowCardPicker(v=>!v);setShowAddressPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Change</span>}
       </div>
-      {showCardPicker&&(
+      {HAVEN_PAYMENTS_AVAILABLE&&showCardPicker&&(
         <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
           {cards.map(c=>(
             <div role="button" tabIndex={0} onKeyDown={keyActivate} key={c.id} onClick={()=>{setSelectedCardId(c.id);setShowCardPicker(false);}}
@@ -3989,7 +3992,16 @@ export default function App(){
 
   // ── PAYMENT METHODS ───────────────────────────────────────────────────────
   const cardColors={Visa:N,Mastercard:"#C2410C",Card:"#5B21B6"};
-  const paymentScreen=()=>(
+  const paymentScreen=()=>!HAVEN_PAYMENTS_AVAILABLE?(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Payment methods",()=>backFrom("payment",{scr:"home",tab:"profile"}))}
+      <div role="status" className="sc" style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
+        <div style={{fontSize:32,marginBottom:12}}>💳</div>
+        <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:6}}>Payments aren't available yet</div>
+        <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:300}}>Haven doesn't take card payments in the app yet, so there's nothing to add here and you won't be charged through the app.</div>
+      </div>
+    </div>
+  ):(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       {subHeader("Payment methods",()=>backFrom("payment",{scr:"home",tab:"profile"}))}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
@@ -4017,49 +4029,10 @@ export default function App(){
             </div>
           );
         })}
-        {addingCard?(
-          <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Card number</div>
-            <input value={newCardNum} onChange={e=>setNewCardNum(e.target.value.replace(/\D/g,"").slice(0,16))} placeholder="1234 5678 9012 3456" inputMode="numeric"
-              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,marginBottom:12,outline:"none"}}/>
-
-            <div style={{display:"flex",gap:10,marginBottom:12}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Expiry</div>
-                <input value={newCardExp} onChange={e=>setNewCardExp(e.target.value)} placeholder="MM/YY"
-                  style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,outline:"none"}}/>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>CVV</div>
-                <input value={newCardCvv} onChange={e=>setNewCardCvv(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="123" inputMode="numeric"
-                  style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,outline:"none"}}/>
-              </div>
-            </div>
-
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Billing address</div>
-            <input value={newCardAddr} onChange={e=>setNewCardAddr(e.target.value)} placeholder="Street address"
-              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,marginBottom:10,outline:"none"}}/>
-            <div style={{display:"flex",gap:8,marginBottom:14}}>
-              <input value={newCardCity} onChange={e=>setNewCardCity(e.target.value)} placeholder="City"
-                style={{flex:2,minWidth:0,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 10px",fontSize:13,color:TX,outline:"none"}}/>
-              <input value={newCardState} onChange={e=>setNewCardState(e.target.value.slice(0,2).toUpperCase())} placeholder="ST"
-                style={{width:52,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 8px",fontSize:13,color:TX,outline:"none",textAlign:"center"}}/>
-              <input value={newCardZip} onChange={e=>setNewCardZip(e.target.value.replace(/\D/g,"").slice(0,5))} placeholder="ZIP" inputMode="numeric"
-                style={{width:68,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 8px",fontSize:13,color:TX,outline:"none"}}/>
-            </div>
-
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>{setAddingCard(false);setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");}} style={{flex:1,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Cancel</button>
-              <button onClick={addCard} disabled={newCardNum.length<4} style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background:newCardNum.length>=4?AM:"#DDD9D2",color:ON,fontWeight:700,fontSize:13,cursor:newCardNum.length>=4?"pointer":"default"}}>Add card</button>
-            </div>
-          </div>
-        ):(
-          <button onClick={()=>setAddingCard(true)} style={{width:"100%",padding:15,borderRadius:16,border:`1.5px dashed ${BD}`,background:"transparent",color:NT,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:14}}>+ Add payment method</button>
-        )}
-        <div style={{display:"flex",gap:8,alignItems:"flex-start",justifyContent:"center",padding:"0 8px"}}>
-          <span style={{fontSize:13,flexShrink:0}}>🔒</span>
-          <span style={{fontSize:11,color:TM,lineHeight:1.5,textAlign:"center"}}>Payments are securely processed. Your full card information is never displayed.</span>
-        </div>
+        {/* No card-entry form: card numbers and CVVs are never typed into Haven.
+            When payments are connected, cards are added in the payment
+            provider's own secure form (HB-07). */}
+        <div style={{fontSize:12,color:TS,textAlign:"center",lineHeight:1.5,padding:"4px 8px"}}>Cards are added through Haven's payment provider, never typed into the app.</div>
       </div>
     </div>
   );
@@ -4488,7 +4461,7 @@ export default function App(){
             })()}
 
             <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:8}}>{emergency?"Emergency timing":"When do you need it?"}</div>
-            {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10}}>Urgent issues, handled within 6 hours.</div>}
+            {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10,lineHeight:1.5}}>Your job is marked urgent for nearby Pros. Haven can't guarantee an arrival time, and your timing preference isn't shared with Pros yet.</div>}
             {emergency?timeChips(EMERGENCY_TIME_PREFS,true):apptPicker()}
 
             {photoRow()}
@@ -4549,7 +4522,7 @@ export default function App(){
           {addressPaymentCard()}
 
           <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:8}}>{emergency?"Emergency timing":"When do you need it?"}</div>
-          {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10}}>Urgent issues, handled within 6 hours.</div>}
+          {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10,lineHeight:1.5}}>Your job is marked urgent for nearby Pros. Haven can't guarantee an arrival time, and your timing preference isn't shared with Pros yet.</div>}
           {emergency?timeChips(EMERGENCY_TIME_PREFS,true):apptPicker()}
 
           {photoRow()}
@@ -4586,8 +4559,8 @@ export default function App(){
           <div style={{textAlign:"center",padding:"28px 0 22px"}}>
             <div style={{width:72,height:72,borderRadius:36,background:vj.emergency?"#FFF1EE":"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 16px",animation:"pulse 1.8s ease-in-out infinite"}}>{vj.emergency?"🚨":"📋"}</div>
             {vj.emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:5,background:"#FFF1EE",color:"#C2410C",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,marginBottom:10}}>Emergency priority</span>}
-            <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{postedArrived?SI.arrived.label:(vj.emergency?"Prioritizing nearby available pros…":"Looking for a pro…")}</div>
-            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Pros near you can see your job. This screen updates as soon as one accepts.")}</div>
+            <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{postedArrived?SI.arrived.label:(vj.emergency?"Looking for a Pro (urgent)…":"Looking for a pro…")}</div>
+            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is marked urgent for Pros near you. Arrival times aren't guaranteed. This screen updates as soon as one accepts.":"Pros near you can see your job. This screen updates as soon as one accepts.")}</div>
           </div>
           <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{display:"flex",gap:14,alignItems:"center",paddingBottom:14,marginBottom:14,borderBottom:`1px solid ${BD}`}}>
@@ -4686,21 +4659,31 @@ export default function App(){
         <div className="sc" style={{flex:1,overflowY:"auto"}}>
           <div style={{margin:"14px 20px 0",background:W,borderRadius:20,padding:"16px 18px",boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:14,alignItems:"center"}}>
             <div style={{width:52,height:52,borderRadius:26,background:emBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{info.em}</div>
-            <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{info.label}</div><div style={{fontSize:13,color:TS}}>{vjPname} {info.sub}</div></div>
+            {(()=>{
+              // Materials requested: the line is about the customer's action, not the
+              // Pro's ("Grace review and approve" read wrong), and an approval is only
+              // asked for once the Pro's list has actually arrived (HB-09).
+              const matReq=vj.status==="materials_requested";
+              const hasList=!!(vj.materialsRequest&&Array.isArray(vj.materialsRequest.items)&&vj.materialsRequest.items.length);
+              const label=matReq&&!hasList?"Materials requested":info.label;
+              const sub=matReq?(hasList?"Review and approve the list below":"Waiting for your Pro's list"):`${vjPname} ${info.sub}`;
+              return <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{label}</div><div style={{fontSize:13,color:TS}}>{sub}</div></div>;
+            })()}
           </div>
           <div style={{margin:"12px 20px",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>{trackMap()}</div>
           {/* Materials approval card — shown only while awaiting customer decision */}
           {vj.status==="materials_requested"&&(()=>{
             const jt=vjTask?{n:vjTask.n,c: (TASKS.find(t=>t.id===vj.taskId)?.c)}:(vj.custom?{n:vj.custom.title,c:vj.custom.cat}:null);
-            // Fallback demo materials from completion template when no explicit request attached
-            const computeFallback=()=>{
-              const category=vj.taskId?(TASKS.find(t=>t.id===vj.taskId)?.c):vj.custom?.cat;
-              const price=vjTask?(vj.lockedPrice??vjTask.p):(vj.custom?.price||0);
-              const {materials}=getCompletionDetails(category,price);
-              const est=materials.reduce((s,m)=>s+(m.amount*(m.qty||1)),0);
-              return {items:materials,estimatedTotal:est};
-            };
-            const req=vj.materialsRequest||computeFallback();
+            // Only the Pro's real request. If it hasn't arrived, say so; never
+            // show a made-up list or let the customer approve unseen items (HB-09).
+            const req=vj.materialsRequest&&Array.isArray(vj.materialsRequest.items)&&vj.materialsRequest.items.length?vj.materialsRequest:null;
+            if(!req) return(
+              <div role="status" style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                <div style={{fontSize:11,fontWeight:800,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Materials request</div>
+                <div style={{fontSize:14,fontWeight:700,color:TX,marginBottom:6}}>{jt?.n||"Your job"}</div>
+                <div style={{fontSize:12,color:TS,lineHeight:1.5}}>Your Pro asked to buy materials. The list hasn't arrived yet. It will show here for your approval as soon as it does.</div>
+              </div>
+            );
             const estTotal=req.items.reduce((s,m)=>s+(m.amount*(m.qty||1)),0);
             return(
               <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
@@ -4827,7 +4810,9 @@ export default function App(){
                       <div style={{fontWeight:700,fontSize:14,color:SC}}>Review submitted — thanks!</div>
                     </div>
                   )}
-                  {vj.tipStatus==="paid"?(
+                  {!HAVEN_TIPPING_AVAILABLE?(
+                    <div role="note" style={{fontSize:12,color:TS,textAlign:"center",lineHeight:1.5,margin:"2px 8px 12px"}}>In-app tipping isn't available yet. You haven't been charged for a tip.</div>
+                  ):vj.tipStatus==="paid"?(
                     <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:SC,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>✓ Tip sent: ${vj.tipAmount.toFixed(2)}</button>
                   ):(
                     <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>💛 Tip Pro</button>
@@ -4859,6 +4844,16 @@ export default function App(){
   // ── RATING ─────────────────────────────────────────────────────────────────
   const tipScreen=()=>{
     if(!vj) return unavailableScreen("Tip Pro",goBookings);
+    if(!HAVEN_TIPPING_AVAILABLE) return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        {subHeader("Tip Pro",()=>backFrom("tip",{scr:"tracking",tab:"bookings"}))}
+        <div role="status" className="sc" style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
+          <div style={{fontSize:32,marginBottom:12}}>💛</div>
+          <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:6}}>Tipping isn't available yet</div>
+          <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:300}}>In-app tipping will open once payments are connected. You haven't been charged.</div>
+        </div>
+      </div>
+    );
     const presets=[5,10,15,20];
     const parsedCustom=parseFloat(tipCustomAmount);
     const customValid=tipCustomAmount.trim()!==""&&!isNaN(parsedCustom)&&parsedCustom>0&&parsedCustom<=2000;

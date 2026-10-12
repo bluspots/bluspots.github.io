@@ -1,19 +1,3 @@
-function getCompletionDetails(category,taskPrice){
-  const templates=COMPLETION_TEMPLATES[category];
-  const chosen=(templates&&templates.length)?templates[Math.floor(Math.random()*templates.length)]:DEFAULT_COMPLETION_TEMPLATE;
-  // Simulation cap for generated example materials — keeps examples reasonable.
-  const maxMaterialsCost=Math.max(0,Math.floor((taskPrice||0)*0.35));
-  const materials=[]; let materialsCost=0;
-  for(const m of chosen.materialsTemplate){
-    if(materialsCost+m.amount<=maxMaterialsCost){ materials.push({...m}); materialsCost+=m.amount; }
-  }
-  return {
-    workPerformed:chosen.workPerformed,
-    materials, // materials are ADDITIVE on top of labor — not carved from it
-    laborAmount:(taskPrice||0),
-    proNotes:chosen.notes,
-  };
-}
 // Property-aware pricing — deliberately separate from intent matching and
 // from the property record itself. A propertyScoped task's own "p" field
 // is only ever a fallback reference price (shown before any property is
