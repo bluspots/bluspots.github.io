@@ -1339,57 +1339,81 @@ async function runTippingChecks(){
   document.body.appendChild(container4);
   await mountApp(container4);
 
-  await stepAsync('17. Tipping — action order, receipt access before tipping, no preselected amount', async () => {
-    click('Mount TV');
-    await clickPostJobAndWait();
-    await completeBackendJobViaPoll('Mount TV');
-    const t = document.body.textContent;
-    assert(t.indexOf('Rate') < t.indexOf('Tip Pro') && t.indexOf('Tip Pro') < t.indexOf('View Receipt'), 'Completed-job action order is Rate, Tip Pro, View Receipt');
-    click('🧾 View Receipt');
-    assert(existsRegex('RECEIPT'), 'Receipt is fully accessible before any tip is added');
-    assert(!existsRegex(/Tip to/), 'No tip line item exists before tipping');
-    click('‹');
-    click('💛 Tip Pro');
-    assert(existsRegex('Recognize exceptional service'), 'Tip screen shows the required optional-tip copy');
-    assert(!document.querySelector('[style*="254, 243, 199"]'), 'No preset amount is selected by default');
-  });
-
-  step('18. Tipping — custom amount validation', () => {
-    click('Custom amount');
-    const input = screen.getByPlaceholderText('0.00');
-    act(()=>{fireEvent.change(input,{target:{value:'-5'}});});
-    assert(existsRegex(/greater than \$0/), 'Negative custom amount rejected with a clear message');
-    act(()=>{fireEvent.change(input,{target:{value:'0'}});});
-    assert(existsRegex(/greater than \$0/), 'Zero custom amount rejected');
-    act(()=>{fireEvent.change(input,{target:{value:'abc'}});});
-    assert(existsRegex(/valid amount/), 'Malformed custom amount rejected');
-    act(()=>{fireEvent.change(input,{target:{value:'99999'}});});
-    assert(existsRegex(/unusually large/), 'Unreasonably large custom amount flagged');
-    act(()=>{fireEvent.change(input,{target:{value:'12.50'}});});
-    assert(existsRegex("You're tipping") && existsRegex('$12.50'), 'Exact chosen amount shown before confirmation');
-    click('Confirm Tip');
-    assert(existsRegex('Processing…'), 'Deliberate confirmation triggers a real processing state, not instant silent success');
-  });
-
-  await delay(1200);
-  {
-    step('19. Tipping — confirmed tip persists, prevents accidental double-tipping; a local-only tip does not change the Receipt', () => {
-      assert(existsRegex('Tip sent: $12.50'), 'Tip resolved to paid and shows the confirmed amount');
-      click('← Back');
-      assert(existsRegex('Tip sent: $12.50') && !existsRegex('💛 Tip Pro'), 'Tracking screen reflects the paid tip instead of offering to tip again');
+  // HB-06: in-app tipping is off until real payments exist
+  // (HAVEN_TIPPING_AVAILABLE=false). The original tip-flow steps 17-19 below
+  // run unchanged whenever the flag is turned back on.
+  const tippingAvailable = /const HAVEN_TIPPING_AVAILABLE=true;/.test(fs.readFileSync('home_services_app.jsx', 'utf8'));
+  if (!tippingAvailable) {
+    await stepAsync('17. Tipping unavailable — no Tip button, a plain note, receipt still reachable, nothing marked paid', async () => {
+      click('Mount TV');
+      await clickPostJobAndWait();
+      await completeBackendJobViaPoll('Mount TV');
+      const t = document.body.textContent;
+      assert(!existsRegex('💛 Tip Pro') && !existsRegex(/Tip sent/), 'No Tip Pro button and no "Tip sent" without real payments');
+      assert(existsRegex("In-app tipping isn't available yet. You haven't been charged for a tip."), 'A plain note says tipping is not available and nothing was charged');
+      assert(t.indexOf('Rate') < t.indexOf('In-app tipping') && t.indexOf('In-app tipping') < t.indexOf('View Receipt'), 'Order is Rate, the tipping note, View Receipt');
       click('🧾 View Receipt');
-      // Phase 1B item B: the receipt reads backend values only. This tip is
-      // local (no backend in this mount), so it adds no line and no total.
-      assert(!existsRegex(/Tip to/), 'Receipt has no tip line from a local-only tip');
-      assert(existsRegex('Total not available yet'), 'Receipt shows no local total without backend values');
-      assert(!existsRegex(/Total paid/), 'Receipt does not claim Total paid');
+      assert(existsRegex('RECEIPT') && !existsRegex(/Tip to/), 'Receipt is reachable and has no tip line');
+      const jobs = JSON.parse(storedData['haven_jobs']).data;
+      assert(!jobs.some(j => j.tipStatus === 'paid'), 'No job is marked tip paid');
+    });
+    step('18-19. Tipping unavailable — the tip write path refuses to mark anything paid', () => {
+      const src = fs.readFileSync('home_services_app.jsx', 'utf8');
+      assert(/if\(!HAVEN_TIPPING_AVAILABLE\)return; \/\/ never mark a tip paid without a real payment/.test(src), 'addTipToJob returns before any write while tipping is unavailable');
+      assert(/if\(!HAVEN_TIPPING_AVAILABLE\) return\(/.test(src) && /Tipping isn't available yet/.test(src), 'the Tip screen itself shows "Tipping isn\'t available yet" if reached');
+    });
+  } else {
+    await stepAsync('17. Tipping — action order, receipt access before tipping, no preselected amount', async () => {
+      click('Mount TV');
+      await clickPostJobAndWait();
+      await completeBackendJobViaPoll('Mount TV');
+      const t = document.body.textContent;
+      assert(t.indexOf('Rate') < t.indexOf('Tip Pro') && t.indexOf('Tip Pro') < t.indexOf('View Receipt'), 'Completed-job action order is Rate, Tip Pro, View Receipt');
+      click('🧾 View Receipt');
+      assert(existsRegex('RECEIPT'), 'Receipt is fully accessible before any tip is added');
+      assert(!existsRegex(/Tip to/), 'No tip line item exists before tipping');
       click('‹');
-      click('✓ Tip sent: $12.50');
-      assert(existsRegex('Tip sent: $12.50') && !existsRegex('Recognize exceptional service'), 'Reopening Tip Pro after already tipping shows the sent state, not the selection flow again');
+      click('💛 Tip Pro');
+      assert(existsRegex('Recognize exceptional service'), 'Tip screen shows the required optional-tip copy');
+      assert(!document.querySelector('[style*="254, 243, 199"]'), 'No preset amount is selected by default');
     });
 
-    await runUxImprovementChecks();
+    step('18. Tipping — custom amount validation', () => {
+      click('Custom amount');
+      const input = screen.getByPlaceholderText('0.00');
+      act(()=>{fireEvent.change(input,{target:{value:'-5'}});});
+      assert(existsRegex(/greater than \$0/), 'Negative custom amount rejected with a clear message');
+      act(()=>{fireEvent.change(input,{target:{value:'0'}});});
+      assert(existsRegex(/greater than \$0/), 'Zero custom amount rejected');
+      act(()=>{fireEvent.change(input,{target:{value:'abc'}});});
+      assert(existsRegex(/valid amount/), 'Malformed custom amount rejected');
+      act(()=>{fireEvent.change(input,{target:{value:'99999'}});});
+      assert(existsRegex(/unusually large/), 'Unreasonably large custom amount flagged');
+      act(()=>{fireEvent.change(input,{target:{value:'12.50'}});});
+      assert(existsRegex("You're tipping") && existsRegex('$12.50'), 'Exact chosen amount shown before confirmation');
+      click('Confirm Tip');
+      assert(existsRegex('Processing…'), 'Deliberate confirmation triggers a real processing state, not instant silent success');
+    });
+
+    await delay(1200);
+    {
+      step('19. Tipping — confirmed tip persists, prevents accidental double-tipping; a local-only tip does not change the Receipt', () => {
+        assert(existsRegex('Tip sent: $12.50'), 'Tip resolved to paid and shows the confirmed amount');
+        click('← Back');
+        assert(existsRegex('Tip sent: $12.50') && !existsRegex('💛 Tip Pro'), 'Tracking screen reflects the paid tip instead of offering to tip again');
+        click('🧾 View Receipt');
+        // Phase 1B item B: the receipt reads backend values only. This tip is
+        // local (no backend in this mount), so it adds no line and no total.
+        assert(!existsRegex(/Tip to/), 'Receipt has no tip line from a local-only tip');
+        assert(existsRegex('Total not available yet'), 'Receipt shows no local total without backend values');
+        assert(!existsRegex(/Total paid/), 'Receipt does not claim Total paid');
+        click('‹');
+        click('✓ Tip sent: $12.50');
+        assert(existsRegex('Tip sent: $12.50') && !existsRegex('Recognize exceptional service'), 'Reopening Tip Pro after already tipping shows the sent state, not the selection flow again');
+      });
+    }
   }
+  await runUxImprovementChecks();
 }
 
 // ── PHASE 4: UX & convenience improvements slice — arrival window/ETA, Job
@@ -1688,15 +1712,18 @@ async function runReceiptPdfChecks(){
 
   await mountApp(container8);
 
-  await stepAsync('38. Completing a job populates real receipt content (work performed, materials, notes) — not empty, not placeholder', async () => {
+  // Founder rule (Oct 11, 2026; HB-03): receipt content comes only from what
+  // the Pro reported. The backend doesn't send work notes yet, so a completed
+  // job has none, instead of the generated "work performed"/notes it used to get.
+  await stepAsync('38. Completing a job keeps only what the Pro reported (no invented work performed, materials or notes)', async () => {
     click('Mount TV');
     await clickPostJobAndWait();
     await completeBackendJobViaPoll('Mount TV');
     const jobsData = JSON.parse(storedData['haven_jobs']);
     const job = jobsData.data[jobsData.data.length-1];
-    assert(Array.isArray(job.workPerformed) && job.workPerformed.length>0, 'Completed job has real work-performed bullets, not an empty list');
-    assert(typeof job.proNotes==='string' && job.proNotes.length>0, 'Completed job has real professional notes, not empty');
-    assert(Array.isArray(job.materials), 'Completed job has a materials array (may legitimately be empty for some categories)');
+    assert(Array.isArray(job.workPerformed) && job.workPerformed.length===0, 'Completed job has no invented work-performed bullets');
+    assert(job.proNotes==='', 'Completed job has no invented professional notes');
+    assert(Array.isArray(job.materials) && job.materials.length===0, 'Completed job has no invented materials');
   });
 
   step('39. Receipt shows no local or demo amounts without backend values (Phase 1B item B)', () => {
