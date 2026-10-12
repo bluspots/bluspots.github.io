@@ -4,11 +4,11 @@ Maintained by Claude (frontend). Owner of every fix below: **Grokbot** (backend:
 
 **Founder rule (Oct 11, 2026):** if information is presented as real to a user, it must come from legitimate data or be clearly identified as an estimate supported by real inputs. No fake addresses, payment methods, arrival times, simulated replies presented as real, imaginary earnings, invented notifications or unsupported promises. Use an honest empty state instead.
 
-Last updated: 2026-10-11 (evening) · Line numbers refer to `master` (Customer) / `main` (Pro) on that date.
+Last updated: 2026-10-12 · Line numbers refer to `master` (Customer) / `main` (Pro) on 2026-10-11 and may drift.
 
 **Status values:** Reported · Confirmed · Blocked · In progress · Resolved. **Confirmed** = reproduced in code and/or the running app. **Suspected** = seen in code but not proven against the live backend.
 
-**Note on visibility:** this repo is public and served by GitHub Pages. Security findings here stay at "what to verify" level; specifics are shared with the founder privately.
+**Note on visibility:** this repo is public and served by GitHub Pages. Security items here only name the area to review; specifics, test steps and table names are in private notes shared with the founder and Grokbot.
 
 ## Launch-critical (founder priority, Oct 11)
 
@@ -25,7 +25,8 @@ Fix before launch. No fabricated operational data may be shown as real in either
 | HB-07 | Sample payment cards on real accounts and jobs | Fake payment methods stored on jobs |
 | HB-08 | Sample addresses on real accounts | Fake properties shown as the user's |
 | HB-10 | Unsupported emergency timing promises | Guarantees nothing enforces |
-| HB-11 | Mapbox and location enforcement | Matching uses city centres; no real distances or routes (see the Mapbox plan) |
+| HB-11 | Mapbox and location enforcement | Matching uses city centres; no real distances or routes. Decided: straight-line radius enforced server-side; road routing for navigation and arrival info |
+| HB-18 | Properties linked by address text, not a property id | A property's history can detach or mix when an address is edited |
 | HB-21 | Secure developer/QA accounts | Needed to test mature accounts without Demo Mode (milestone after Mapbox) |
 
 ## Summary
@@ -47,9 +48,9 @@ Fix before launch. No fabricated operational data may be shown as real in either
 | HB-13 | Pro verification and payout steps show "pending" with no provider | Pro | P2 | Confirmed |
 | HB-14 | Statement email delivery is simulated | Pro | P3 | Confirmed (UI removed) |
 | HB-15 | Profile edits are device-only; email and phone can't be changed | Both | P2 | Confirmed |
-| HB-16 | Security review of tables the apps don't use yet | Backend | P1 | Suspected |
-| HB-17 | Job lifecycle authorization and one-active-job rule: verify live | Backend | P2 | Reported |
-| HB-18 | Jobs link to a property by address text | Customer | P3 | Confirmed |
+| HB-16 | Database access-rules review before new features | Backend | P1 | Suspected |
+| HB-17 | Job lifecycle authorization: verify live | Backend | P2 | Reported |
+| HB-18 | Jobs link to a property by address text | Customer | P1 | Confirmed |
 | HB-19 | Customer-facing Pro trust metrics come from demo profiles | Customer | P3 | Suspected |
 | HB-20 | Face ID / passkey sign-in | Both | P3 | Reported (feature) |
 | HB-21 | Secure developer/QA accounts with realistic history | Both | Milestone | Planned (after Mapbox) |
@@ -129,6 +130,8 @@ Fix before launch. No fabricated operational data may be shown as real in either
 - **Apps:** Both.
 - **Status:** Simulated ETA/distance removed from Customer tracking (Customer #63, live). The tracking map is a decorative illustration, not a location. Pro watches its own location only during en-route to gate "I've Arrived" (`home_services_pro_app.jsx` ~L1245); nothing is shared with the customer. Pro job distances depend on radius matching (migration 0023).
 - **Expected:** Per the Mapbox plan: validated addresses with coordinates, server-side distance/radius matching, routing distance/time from Mapbox, and later opt-in live Pro location shared only during an active job.
+- **Founder decisions (Oct 12):** service radius and job matching use **straight-line distance** from the Pro's real operating location, **enforced server-side**. **Road-routing** distance and travel time (Mapbox Directions) are used for navigation and arrival information, labelled as estimates.
+- **Dependencies:** geocoding of customer addresses and Pro operating locations (server-side token), coordinates on jobs and profiles, a matching query that filters by radius, location privacy rules (exact address only to the assigned Pro).
 
 ## HB-12 · Support chat and support contacts are simulated
 - **Apps:** Both. Customer: Grokbot's open PRs #47 (removes fake phone/Transaction ID/contacts) and #49 (simulated support). Pro: "Demo — replies are simulated" in support chat (~L4108) and a `mailto:pro-support@havenpro.example` link (~L4096) to a non-existent address.
@@ -146,14 +149,17 @@ Fix before launch. No fabricated operational data may be shown as real in either
 - **Apps:** Customer name/bio/photo are saved on the device only (account name now shown from Auth, Customer #59). Email change needs an Auth flow; the phone field is unused. Pro profile workspace syncs for QA testers only (`profiles.pro_workspace`).
 - **Expected:** Profile fields stored server-side per user; email change via Auth with confirmation.
 
-## HB-16 · Security review of tables the apps don't use yet
-- **Status:** Suspected. Migrations in this repo enable row-level security on `jobs` and `profiles`. Before the apps start using the messaging, media, notes, tips, materials and statement tables, confirm their access rules and grants on the live database. Details shared with the founder privately.
+## HB-16 · Database access-rules review before new features
+- **Status:** Suspected. Before either app starts reading or writing any table it doesn't use today (messaging, media, notes, tips, materials, statements), confirm that table's access rules on the live database. Specifics are in the private notes.
 
-## HB-17 · Job lifecycle authorization and one-active-job rule: verify live
-- **Status:** Reported. Migrations define per-transition rules (0004–0015, 0017–0019, 0025) and the `one_active_job_per_pro` unique index (0001). Claude can't verify the live database. **Verify:** a Pro can't move another Pro's job; a customer can't advance status; a second active claim returns 409.
+## HB-17 · Job lifecycle authorization: verify live
+- **Status:** Reported. The job status rules in the migrations need confirming on the live database; the frontend can't check this. Test steps are in the private notes, to run with QA accounts only.
 
 ## HB-18 · Jobs link to a property by address text
-- **App:** Customer My Home (Customer #60). Service history matches jobs by the address string saved on the job; editing a property's address detaches its history. **Expected:** a property id on the job.
+- **App:** Customer My Home (Customer #60, live). Properties are saved on the device only, and service history, maintenance and receipts are matched to a property by the address text saved on each job.
+- **Why it matters:** editing a property's address detaches its history; two properties with the same text could share it; history doesn't follow the customer to a new device.
+- **Expected:** server-side `properties` per customer with a stable id (and validated coordinates, see HB-11); `jobs.property_id` set at booking; My Home reads history by property id. Existing jobs mapped once by address.
+- **Verify:** rename a property's address → its history stays; a job never appears under two properties; history appears on a second device.
 
 ## HB-19 · Customer-facing Pro trust metrics come from demo profiles
 - **Status:** Suspected. `PROS[]` demo profiles carry trust score, on-time rate and "would hire again" (~L62–75, L2489). Backend job cards say they never use the demo pro (L16). Verify no real user sees demo metrics; real metrics need a backend source.
@@ -163,6 +169,6 @@ Fix before launch. No fabricated operational data may be shown as real in either
 
 ## HB-21 · Secure developer/QA accounts with realistic history (milestone, after Mapbox)
 - **Goal:** Let the founder use the real apps as an established Pro (and customer) with months of history, without bringing back public Demo Mode.
-- **Data to seed:** 10–20 completed jobs across categories and several weeks/months; varied labor, tips and materials reimbursements; ratings; plus empty accounts for comparison.
-- **Must have:** dedicated restricted QA identities; explicit test-data markers; no real charges or payouts; never visible to ordinary users; no effect on real financial reporting; no public keys or bypass controls; a safe reset/remove; real UI and data paths.
+- **Data to seed:** 10–20 completed jobs across different categories, spread over several weeks and months; varied earnings, tips and materials reimbursements; ratings and performance history; enough to fill the Earnings charts, statements and receipts; plus empty accounts for comparison.
+- **Must have:** dedicated restricted QA identities; explicit test-data markers; seeded only by secure backend processes; no real charges or payouts; excluded from financial reporting and customer notifications; never visible to ordinary users; no public keys or bypass controls; safely reversible; seen through the real app, not a separate demo interface.
 - **Owners:** Grokbot (seeding, authorization, isolation, financial safeguards). Claude (frontend experience, visual checks, regression tests).
