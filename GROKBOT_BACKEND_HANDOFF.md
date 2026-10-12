@@ -58,7 +58,7 @@ Fix before launch. No fabricated operational data may be shown as real in either
 
 ## HB-01 · Booking time never reaches the backend
 - **App / feature:** Customer booking → Pro job board / My Jobs.
-- **Problem:** The customer picks a time (today: ASAP / This morning / …), but the job insert has no time field. `postCanonicalJob` payload in `home_services_app.jsx` (~L1817–1845) sends category, price, location, emergency, preferences and payment snapshot only. Pros can't see when the customer wants the work. Accepting a job confirms nothing about time.
+- **Problem:** The customer picks ASAP or a specific 2-hour window on one of the next 7 days (since #62), but the job insert has no time field. `postCanonicalJob` payload in `home_services_app.jsx` (~L1817–1845) sends category, price, location, emergency, preferences and payment snapshot only. Pros can't see when the customer wants the work. Accepting a job confirms nothing about time.
 - **Why it matters:** Customers believe they booked a time that no Pro ever sees. The approved design (specific 2-hour windows, Requested → Confirmed) can't be honest without it.
 - **Expected:** Job stores the requested window (date + start/end, or ASAP flag; emergency separately). Pro feed and job detail show it. Accepting the job (or an explicit Pro action) records confirmation as a status event; the Customer app shows **Confirmed** only from that event.
 - **Dependencies:** `jobs` columns, `job_status_events`, Pro feed query, RLS for the new fields.
