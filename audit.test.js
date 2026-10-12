@@ -678,7 +678,16 @@ assert(typeof ErrorBoundary === 'function', 'ErrorBoundary class loaded from com
 console.log('--- Running audit ---');
 let mainContainer;
 // Account-required gate: marketplace tests run as a signed-in customer.
+// The customer's own saved addresses for these tests. Builds before MAP-03
+// created two sample addresses on every device; the app no longer does, so
+// the tests seed the addresses they use (customer-created ids, not 1/2).
+const TEST_SAVED_ADDRESSES=[
+  {id:1700000000101,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
+  {id:1700000000102,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
+];
+function seedTestAddresses(){ storedData['haven_addresses']=JSON.stringify({__v:1,data:TEST_SAVED_ADDRESSES.map(a=>({...a}))}); }
 function seedSignedInCustomer(){
+  if(!('haven_addresses' in storedData)) storedData['haven_addresses']=JSON.stringify({__v:1,data:TEST_SAVED_ADDRESSES.map(a=>({...a}))});
   storedData['haven_auth_access_token'] = 'signed-in-access-token';
   storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   storedData['haven_auth_email'] = 'qa-customer@example.com';
@@ -963,6 +972,7 @@ function decodeJwtClaims(token){
   // A failed A1 step must not leave the backend mocked as down.
   resetBackendMock();
   seedSignedInCustomer();
+  seedTestAddresses();
   mainContainer = await mountApp();
 
 await stepAsync('0b. Signed-out auth gate — no marketplace without an account', async () => {
@@ -981,6 +991,7 @@ await stepAsync('0b. Signed-out auth gate — no marketplace without an account'
   assert(!gateRoot.textContent.includes('There is no signed-out marketplace.'), 'signed-out gate has no marketplace sentence');
   cleanup();
   seedSignedInCustomer();
+  seedTestAddresses(); // the main suite's customer has two saved addresses
   mainContainer = await mountApp();
 });
 
@@ -1249,7 +1260,8 @@ step('11. Regression — tab persistence and draft booking still work', () => {
     clickTab('Profile');
     assert(existsRegex(PROFILE_ROOT_MARKER), 'Tapping Profile after reset lands on the actual Profile root, not a stale remembered sub-screen (this was a real bug found and fixed this slice)');
     click('Saved Addresses');
-    assert(existsRegex(/🏠 Primary/), 'Addresses reset to the default seed, with a valid Primary');
+    // MAP-03: there are no sample addresses any more, so a reset leaves none.
+    assert(existsRegex('No saved addresses yet') && !existsRegex(/🏠 Primary/) && !existsRegex(/Market Street|Folsom/) && JSON.parse(storedData['haven_addresses']).data.length === 0, 'Addresses reset to empty (no sample addresses are recreated), with an empty-state prompt');
   });
 
   console.log(`\n--- Interaction suite complete: ${pass} passing, ${fail} failing so far ---`);
@@ -1278,7 +1290,7 @@ async function runPersistenceAndCorruptStorageChecks(){
     click('Bookings');
     assert(!existsRegex('Install smart lock') && !existsRegex('Mount TV'), 'The Reset Prototype Data from step 14 survived the remount — a fresh instance does not silently resurrect old jobs');
     click('Profile'); click('Saved Addresses');
-    assert(existsRegex(/🏠 Primary/), 'Default seed address data (post-reset) survived the remount with a valid Primary');
+    assert(existsRegex('No saved addresses yet') && !existsRegex(/Market Street|Folsom/) && JSON.parse(storedData['haven_addresses']).data.length === 0, 'The empty address list (post-reset) survived the remount; no sample addresses came back');
     click('‹'); click('Payment Methods');
     if (PAYMENTS_ON) assert(existsRegex('Default'), 'Default seed card data (post-reset) survived the remount with a valid Default');
     else assert(existsRegex("Payments aren't available yet") && !/4242|8821/.test(storedData['haven_cards']||''), 'After reset no sample card comes back (payments not available)');
@@ -2293,7 +2305,7 @@ async function runLockedPriceChecks(){
   // and ensure a clean jobs slate so we can assert against the newest job.
   storedData['haven_addresses'] = JSON.stringify({__v:1, data:[
     {id:1,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1650",beds:"4",baths:"2.5"},
-    {id:2,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
+    {id:1700000000102,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
   ]});
   storedData['haven_jobs'] = JSON.stringify({__v:1, data:[]});
   const container = document.createElement('div');
