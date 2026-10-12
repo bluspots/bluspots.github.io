@@ -4,27 +4,45 @@ Maintained by Claude (frontend). Owner of every fix below: **Grokbot** (backend:
 
 **Founder rule (Oct 11, 2026):** if information is presented as real to a user, it must come from legitimate data or be clearly identified as an estimate supported by real inputs. No fake addresses, payment methods, arrival times, simulated replies presented as real, imaginary earnings, invented notifications or unsupported promises. Use an honest empty state instead.
 
-Last updated: 2026-10-11 · Line numbers refer to `master` (Customer) / `main` (Pro) on that date.
+Last updated: 2026-10-11 (evening) · Line numbers refer to `master` (Customer) / `main` (Pro) on that date.
 
 **Status values:** Reported · Confirmed · Blocked · In progress · Resolved. **Confirmed** = reproduced in code and/or the running app. **Suspected** = seen in code but not proven against the live backend.
 
 **Note on visibility:** this repo is public and served by GitHub Pages. Security findings here stay at "what to verify" level; specifics are shared with the founder privately.
 
+## Launch-critical (founder priority, Oct 11)
+
+Fix before launch. No fabricated operational data may be shown as real in either app; where the backend has no real value, the apps show an empty state or a truthful limitation.
+
+| ID | Problem | Why it blocks launch |
+|---|---|---|
+| HB-01 | Requested appointment time never reaches the backend; no real confirmation | Customers choose a window no Pro sees (Customer shows it as "Requested" with a visible "not shared yet" note since #62) |
+| HB-02 | Pro app invents tips | Fake earnings in Earnings and statements |
+| HB-03 | Customer app invents work performed, materials and Pro notes | Fake job records on receipts |
+| HB-04 | Canned "customer" chat replies; messages not stored | Pros read messages customers never wrote |
+| HB-05 | Customer categories missing from Pro discovery | Six job types never reach any Pro |
+| HB-06 | Customer tips shown as paid without payment | False payment status |
+| HB-07 | Sample payment cards on real accounts and jobs | Fake payment methods stored on jobs |
+| HB-08 | Sample addresses on real accounts | Fake properties shown as the user's |
+| HB-10 | Unsupported emergency timing promises | Guarantees nothing enforces |
+| HB-11 | Mapbox and location enforcement | Matching uses city centres; no real distances or routes (see the Mapbox plan) |
+| HB-21 | Secure developer/QA accounts | Needed to test mature accounts without Demo Mode (milestone after Mapbox) |
+
 ## Summary
 
 | ID | Title | App | Priority | Status |
 |---|---|---|---|---|
-| HB-01 | Booking time never reaches the backend | Both | P1 | Confirmed |
+| HB-01 | Booking time never reaches the backend | Both | P0 (launch-critical) | Confirmed |
 | HB-02 | Pro app invents tips on completed jobs | Pro | P0 | Confirmed |
 | HB-03 | Customer app invents "work performed", materials and Pro notes on completion | Customer | P0 | Confirmed |
 | HB-04 | Pro chat shows canned "customer" replies; messages are not stored | Both | P0 | Confirmed |
 | HB-05 | Service categories don't match between apps | Both | P0 | Confirmed |
-| HB-06 | Customer tip marked "paid" with no payment | Customer | P1 | Confirmed |
-| HB-07 | Sample payment cards on new devices (and sent to the backend) | Customer | P1 | Confirmed |
-| HB-08 | Sample addresses on new devices | Customer | P1 | Confirmed |
+| HB-06 | Customer tip marked "paid" with no payment | Customer | P0 | Confirmed |
+| HB-07 | Sample payment cards on new devices (and sent to the backend) | Customer | P0 | Confirmed |
+| HB-08 | Sample addresses on new devices | Customer | P0 | Confirmed |
 | HB-09 | Materials approval can show invented items and prices | Customer | P1 | Confirmed |
-| HB-10 | Emergency and speed promises nothing enforces | Customer | P2 | Confirmed |
-| HB-11 | Real location, distance and arrival time | Both | P2 | Confirmed (partly resolved) |
+| HB-10 | Emergency and speed promises nothing enforces | Customer | P1 | Confirmed |
+| HB-11 | Real location, distance and arrival time (Mapbox) | Both | P1 (next milestone) | Confirmed (partly resolved) |
 | HB-12 | Support chat and support contacts are simulated | Both | P2 | Confirmed (Grokbot PRs #47, #49 open) |
 | HB-13 | Pro verification and payout steps show "pending" with no provider | Pro | P2 | Confirmed |
 | HB-14 | Statement email delivery is simulated | Pro | P3 | Confirmed (UI removed) |
@@ -44,7 +62,7 @@ Last updated: 2026-10-11 · Line numbers refer to `master` (Customer) / `main` (
 - **Why it matters:** Customers believe they booked a time that no Pro ever sees. The approved design (specific 2-hour windows, Requested → Confirmed) can't be honest without it.
 - **Expected:** Job stores the requested window (date + start/end, or ASAP flag; emergency separately). Pro feed and job detail show it. Accepting the job (or an explicit Pro action) records confirmation as a status event; the Customer app shows **Confirmed** only from that event.
 - **Dependencies:** `jobs` columns, `job_status_events`, Pro feed query, RLS for the new fields.
-- **PRs:** Customer #62 (frontend design, held; labels the time as a request until this exists).
+- **PRs:** Customer #62 (live Oct 11): the window picker shows the pick as "Requested", says it is a preferred window and not a guaranteed arrival time, and that Pros can't see it yet. When this is built: set `HAVEN_REQUESTED_TIME_SHARED_WITH_PROS` to true, send `reqWindow` in the job insert, and map the backend confirmation to `confirmedWindow` (the only thing that makes the app show "Confirmed").
 - **Verify:** Book with a window → row has the window → Pro sees it → accept → Customer shows Confirmed with the same window.
 
 ## HB-02 · Pro app invents tips on completed jobs
