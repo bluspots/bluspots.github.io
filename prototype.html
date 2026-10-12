@@ -4683,6 +4683,22 @@ function App(){
         </div>
         {addresses.length>1&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setShowAddressPicker(v=>!v);setShowCardPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer",flexShrink:0,marginLeft:10}}>Change</span>}
       </div>
+      {/* MAP-04: the selected address on a real map, only where the customer
+          confirmed it. Display only: the job sends exactly what it did before. */}
+      {selectedAddress&&(selectedAddress.geo?(
+        <div style={{marginTop:12}}>
+          <PropertyMap geo={selectedAddress.geo} isDark={isDark} colors={{BD,BG,TS}}
+            alt={`Map of ${selectedAddress.label||"your property"} at ${selectedAddress.street}, ${selectedAddress.city}`}
+            caption={HAVEN_PRECISE_ACCURACY.includes(selectedAddress.geo.accuracy)
+              ?"The location you confirmed for this address."
+              :"The location you confirmed for this address. It's approximate: placed near the street, not on the exact building."}/>
+        </div>
+      ):(
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginTop:10,padding:"8px 12px",borderRadius:12,background:BG}}>
+          <span style={{fontSize:12,color:TS,lineHeight:1.4}}>This address isn't confirmed on the map yet.</span>
+          <button type="button" onClick={()=>openAddressForm(selectedAddress)} style={{background:"none",border:"none",color:NT,fontWeight:700,fontSize:12,cursor:"pointer",padding:"0 4px",minHeight:44,whiteSpace:"nowrap"}}>Confirm on map ›</button>
+        </div>
+      ))}
       {locationPermission==="never_requested"&&(
         <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={requestLocation} style={{marginTop:10,fontSize:11,color:TM,cursor:"pointer"}}>📡 Check my location to help prevent mistakes</div>
       )}

@@ -1,0 +1,54 @@
+{
+  "confirmed": {
+    "schema_version": 1,
+    "customer_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "pro_id": null,
+    "category": "Installation",
+    "title": "Mount TV",
+    "requires_diagnosis": false,
+    "city_label": "Orlando, FL",
+    "address_snapshot": null,
+    "lat": 28.538,
+    "lng": -81.379,
+    "fixed_customer_labor_price_cents": 8900,
+    "fixed_pro_labor_payout_cents": 7120,
+    "margin_rate_bps": 2000,
+    "emergency": false,
+    "emergency_fee_cents": 0,
+    "inspection_fee_cents": 0,
+    "status": "posted",
+    "customer_preferences_snapshot": [],
+    "payment_snapshot": {
+      "brand": "Card",
+      "last4": "----"
+    },
+    "materials_reimbursed_cents": 0,
+    "tip_amount_cents": 0
+  },
+  "unconfirmed": {
+    "schema_version": 1,
+    "customer_id": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+    "pro_id": null,
+    "category": "Installation",
+    "title": "Mount TV",
+    "requires_diagnosis": false,
+    "city_label": "Orlando, FL",
+    "address_snapshot": null,
+    "lat": 28.538,
+    "lng": -81.379,
+    "fixed_customer_labor_price_cents": 8900,
+    "fixed_pro_labor_payout_cents": 7120,
+    "margin_rate_bps": 2000,
+    "emergency": false,
+    "emergency_fee_cents": 0,
+    "inspection_fee_cents": 0,
+    "status": "posted",
+    "customer_preferences_snapshot": [],
+    "payment_snapshot": {
+      "brand": "Card",
+      "last4": "----"
+    },
+    "materials_reimbursed_cents": 0,
+    "tip_amount_cents": 0
+  }
+}
