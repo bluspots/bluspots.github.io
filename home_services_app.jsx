@@ -79,7 +79,7 @@ function proProfileFacts(p){
 }
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
 const TIME_PREFS=[
-  {id:1,label:"ASAP",          sub:"Within 2 hours",              surge:10},
+  {id:1,label:"ASAP",          sub:"As soon as a Pro is available",surge:10},
   {id:2,label:"This morning",  sub:"Today · 8:00 AM – 12:00 PM",  surge:0},
   {id:3,label:"This afternoon",sub:"Today · 12:00 – 5:00 PM",     surge:0},
   {id:4,label:"This evening",  sub:"Today · 5:00 – 9:00 PM",      surge:0},
@@ -87,11 +87,13 @@ const TIME_PREFS=[
   {id:6,label:"Tomorrow PM",   sub:"Tomorrow · 12:00 – 5:00 PM",  surge:0},
   {id:7,label:"Requested time",sub:"",                            surge:0},
 ];
-// Emergency jobs use their own short-window timing instead of normal scheduling.
+// Emergency jobs keep their own timing choices (and prices), but they are the
+// customer's preference only: nothing enforces a response time, and requested
+// times don't reach Pros yet (HB-01, HB-10). No arrival is promised.
 const EMERGENCY_TIME_PREFS=[
-  {id:101,label:"ASAP",            sub:"Within 1–2 hours", surge:10},
-  {id:102,label:"Within 4 hours",  sub:"Response within 4 hours",surge:0},
-  {id:103,label:"Within 6 hours",  sub:"Response within 6 hours",surge:0},
+  {id:101,label:"ASAP",            sub:"Preferred · not a guaranteed arrival time", surge:10},
+  {id:102,label:"Within 4 hours",  sub:"Preferred · not a guaranteed arrival time",surge:0},
+  {id:103,label:"Within 6 hours",  sub:"Preferred · not a guaranteed arrival time",surge:0},
 ];
 const ALL_TIME_PREFS=[...TIME_PREFS,...EMERGENCY_TIME_PREFS];
 // Specific appointment windows (founder-approved Option 1). Two-hour
@@ -2062,7 +2064,7 @@ export default function App(){
           <div style={{textAlign:"center"}}>
             <div style={{fontSize:40,marginBottom:10}}>🚨</div>
             <div style={{color:ON,fontWeight:800,fontSize:20,marginBottom:6}}>What's the emergency?</div>
-            <div style={{color:"rgba(255,255,255,.6)",fontSize:13}}>We'll prioritize nearby available pros.</div>
+            <div style={{color:"rgba(255,255,255,.6)",fontSize:13}}>Your job is marked urgent for nearby Pros.</div>
           </div>
         </div>
         <div style={{background:BG,borderRadius:"22px 22px 0 0",marginTop:-18,padding:"20px 20px 16px",position:"relative",zIndex:1}}>
@@ -2100,7 +2102,7 @@ export default function App(){
           </button>
         </div>
         <div style={{display:"flex",gap:16,marginBottom:16}}>
-          {["✓ Fixed pricing","✓ Same-day"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
+          {["✓ Fixed pricing"].map(x=>(<span key={x} style={{color:"rgba(255,255,255,.55)",fontSize:11,whiteSpace:"nowrap",fontWeight:500}}>{x}</span>))}
         </div>
         <div role="button" tabIndex={0} aria-label="Search 50+ services" onKeyDown={keyActivate} onClick={()=>openBrowse(null,"")} style={{background:W,borderRadius:14,padding:"11px 16px",display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
           <span style={{fontSize:16,color:TM}}>🔍</span>
@@ -2125,7 +2127,7 @@ export default function App(){
           <button onClick={()=>goTo("emergency")} style={{font:"inherit",background:isDark?"#3A1A12":"#FFF1EE",border:`1.5px solid ${isDark?"#7C2D12":"#FFD4C7"}`,borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
             <div style={{fontSize:22,marginBottom:6}}>🚨</div>
             <div style={{fontWeight:700,fontSize:13,color:isDark?"#FDBA74":"#C2410C"}}>Urgent</div>
-            <div style={{fontSize:10,color:isDark?"#FDBA74":"#C2410C",opacity:isDark?.75:1,marginTop:1}}>Fast help</div>
+            <div style={{fontSize:10,color:isDark?"#FDBA74":"#C2410C",opacity:isDark?.75:1,marginTop:1}}>Marked urgent</div>
           </button>
           <button onClick={()=>{setTid(null);setTpid(null);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
             style={{font:"inherit",background:SELBG,border:`1.5px solid ${SELBORDER}`,borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
@@ -4320,7 +4322,7 @@ export default function App(){
             })()}
 
             <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:8}}>{emergency?"Emergency timing":"When do you need it?"}</div>
-            {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10}}>Urgent issues, handled within 6 hours.</div>}
+            {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10,lineHeight:1.5}}>Your job is marked urgent for nearby Pros. Haven can't guarantee an arrival time, and your timing preference isn't shared with Pros yet.</div>}
             {emergency?timeChips(EMERGENCY_TIME_PREFS,true):apptPicker()}
 
             {photoRow()}
@@ -4381,7 +4383,7 @@ export default function App(){
           {addressPaymentCard()}
 
           <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:8}}>{emergency?"Emergency timing":"When do you need it?"}</div>
-          {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10}}>Urgent issues, handled within 6 hours.</div>}
+          {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10,lineHeight:1.5}}>Your job is marked urgent for nearby Pros. Haven can't guarantee an arrival time, and your timing preference isn't shared with Pros yet.</div>}
           {emergency?timeChips(EMERGENCY_TIME_PREFS,true):apptPicker()}
 
           {photoRow()}
@@ -4418,8 +4420,8 @@ export default function App(){
           <div style={{textAlign:"center",padding:"28px 0 22px"}}>
             <div style={{width:72,height:72,borderRadius:36,background:vj.emergency?"#FFF1EE":"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 16px",animation:"pulse 1.8s ease-in-out infinite"}}>{vj.emergency?"🚨":"📋"}</div>
             {vj.emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:5,background:"#FFF1EE",color:"#C2410C",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,marginBottom:10}}>Emergency priority</span>}
-            <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{postedArrived?SI.arrived.label:(vj.emergency?"Prioritizing nearby available pros…":"Looking for a pro…")}</div>
-            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is flagged as urgent — nearby pros are notified first.":"Pros near you can see your job. This screen updates as soon as one accepts.")}</div>
+            <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{postedArrived?SI.arrived.label:(vj.emergency?"Looking for a Pro (urgent)…":"Looking for a pro…")}</div>
+            <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is marked urgent for Pros near you. Arrival times aren't guaranteed. This screen updates as soon as one accepts.":"Pros near you can see your job. This screen updates as soon as one accepts.")}</div>
           </div>
           <div style={{background:W,borderRadius:20,padding:18,marginBottom:14,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
             <div style={{display:"flex",gap:14,alignItems:"center",paddingBottom:14,marginBottom:14,borderBottom:`1px solid ${BD}`}}>
