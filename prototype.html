@@ -6632,18 +6632,18 @@ function App(){
               const isL=i===SF.length-1;const past=i<vjSIdx;const curr=i===vjSIdx;const sz=curr?20:16;
               return(
                 <div key={s} style={{display:"flex",alignItems:"center",flex:isL?0:1}}>
-                  <div style={{width:sz,height:sz,borderRadius:sz/2,background:i<=vjSIdx?N:BD,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-                    {past&&<span style={{color:ON,fontSize:8,fontWeight:900}}>✓</span>}
+                  <div style={{width:sz,height:sz,borderRadius:sz/2,background:i<=vjSIdx?NT:BD,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+                    {past&&<span style={{color:W,fontSize:8,fontWeight:900}}>✓</span>}
                     {curr&&<div style={{width:7,height:7,borderRadius:3.5,background:W}}/>}
                   </div>
-                  {!isL&&<div style={{flex:1,height:2.5,background:past?N:BD,margin:"0 3px"}}/>}
+                  {!isL&&<div style={{flex:1,height:2.5,background:past?NT:BD,margin:"0 3px"}}/>}
                 </div>
               );
             })}
           </div>
           <div style={{display:"flex",justifyContent:"space-between",marginTop:5}}>
             {["En Route","Arrived","Working","Done"].map((l,i)=>(
-              <span key={l} style={{fontSize:9,color:i<=vjSIdx?N:TM,fontWeight:i===vjSIdx?700:400,flex:i===0||i===3?0:1,textAlign:i===0?"left":i===3?"right":"center",width:i===0||i===3?44:undefined,flexShrink:0}}>{l}</span>
+              <span key={l} style={{fontSize:9,color:i<=vjSIdx?NT:TM,fontWeight:i===vjSIdx?700:400,flex:i===0||i===3?0:1,textAlign:i===0?"left":i===3?"right":"center",width:i===0||i===3?44:undefined,flexShrink:0}}>{l}</span>
             ))}
           </div>
         </div>
@@ -6747,7 +6747,7 @@ function App(){
               </div>
               <span style={{color:TM,fontSize:18,alignSelf:"flex-start"}}>›</span>
             </div>
-            <button onClick={()=>goTo("messages")} style={{width:"100%",padding:"11px 0",borderRadius:14,border:`1.5px solid ${vj.status==="complete"?BD:N}`,background:vj.status==="complete"?BG:"rgba(28,43,58,.06)",color:vj.status==="complete"?TM:N,fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
+            <button onClick={()=>goTo("messages")} style={{width:"100%",padding:"11px 0",borderRadius:14,border:`1.5px solid ${vj.status==="complete"?BD:NT}`,background:vj.status==="complete"?BG:(isDark?"rgba(241,239,233,.06)":"rgba(28,43,58,.06)"),color:vj.status==="complete"?TM:NT,fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
               💬 {vj.status==="complete"?"Chat (closed)":"Message"}
             </button>
           </div>
