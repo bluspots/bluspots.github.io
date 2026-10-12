@@ -50,7 +50,9 @@ sed '/^import React, { useState, useRef, useEffect } from "react";$/d' "$TMP_CAT
   | sed 's/^export default function App(){/function App(){/' > "$TMP"
 
 cat _shell_pre.txt "$TMP" _shell_post.txt > prototype.html
-cp prototype.html index.html
+# index.html (what GitHub Pages serves) is the production build of prototype.html:
+# JSX compiled ahead of time, no Babel. See tools/compile_html.js. Needs `npm install` (esbuild).
+node tools/compile_html.js prototype.html index.html
 rm -f "$TMP" "$TMP_CAT"
 
-echo "prototype.html and index.html regenerated from home_services_app.jsx"
+echo "prototype.html regenerated from home_services_app.jsx; index.html compiled from it"
