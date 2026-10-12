@@ -1192,10 +1192,12 @@ export default function App(){
           return {job:{...j,status:"in_progress",justAccepted:false},accepted:null,arrived:null,track:j.id};
         }
         if(remoteStatus==="complete" && (j.status==="posted"||j.status==="en_route"||j.status==="arrived"||j.status==="diagnosing"||j.status==="materials_requested"||j.status==="materials_approved"||j.status==="in_progress")){
-          const cat=j.taskId?(TASKS.find(t=>t.id===j.taskId)?.c):j.custom?.cat;
-          const task=j.taskId?TASKS.find(t=>t.id===j.taskId):null;
-          const price=j.taskId?(j.lockedPrice??(task?task.p:0)):(j.custom?.price||0);
-          const {workPerformed,materials,proNotes}=getCompletionDetails(cat,price);
+          // Only what the Pro actually reported. Nothing is generated: the
+          // backend doesn't send work notes yet (HB-03), so these stay empty
+          // and the receipt leaves those sections out.
+          const workPerformed=Array.isArray(j.workPerformed)?j.workPerformed:[];
+          const materials=Array.isArray(j.materials)?j.materials:[];
+          const proNotes=typeof j.proNotes==="string"?j.proNotes:"";
           return {job:{...j,status:"complete",justAccepted:false,completedAt:Date.now(),workPerformed,materials,proNotes},accepted:null,arrived:null,track:j.id,completed:j.id,proName:j.pro?.n||"Your pro"};
         }
         // Map materials metadata if present
@@ -4522,21 +4524,31 @@ export default function App(){
         <div className="sc" style={{flex:1,overflowY:"auto"}}>
           <div style={{margin:"14px 20px 0",background:W,borderRadius:20,padding:"16px 18px",boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:14,alignItems:"center"}}>
             <div style={{width:52,height:52,borderRadius:26,background:emBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{info.em}</div>
-            <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{info.label}</div><div style={{fontSize:13,color:TS}}>{vjPname} {info.sub}</div></div>
+            {(()=>{
+              // Materials requested: the line is about the customer's action, not the
+              // Pro's ("Grace review and approve" read wrong), and an approval is only
+              // asked for once the Pro's list has actually arrived (HB-09).
+              const matReq=vj.status==="materials_requested";
+              const hasList=!!(vj.materialsRequest&&Array.isArray(vj.materialsRequest.items)&&vj.materialsRequest.items.length);
+              const label=matReq&&!hasList?"Materials requested":info.label;
+              const sub=matReq?(hasList?"Review and approve the list below":"Waiting for your Pro's list"):`${vjPname} ${info.sub}`;
+              return <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{label}</div><div style={{fontSize:13,color:TS}}>{sub}</div></div>;
+            })()}
           </div>
           <div style={{margin:"12px 20px",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>{trackMap()}</div>
           {/* Materials approval card — shown only while awaiting customer decision */}
           {vj.status==="materials_requested"&&(()=>{
             const jt=vjTask?{n:vjTask.n,c: (TASKS.find(t=>t.id===vj.taskId)?.c)}:(vj.custom?{n:vj.custom.title,c:vj.custom.cat}:null);
-            // Fallback demo materials from completion template when no explicit request attached
-            const computeFallback=()=>{
-              const category=vj.taskId?(TASKS.find(t=>t.id===vj.taskId)?.c):vj.custom?.cat;
-              const price=vjTask?(vj.lockedPrice??vjTask.p):(vj.custom?.price||0);
-              const {materials}=getCompletionDetails(category,price);
-              const est=materials.reduce((s,m)=>s+(m.amount*(m.qty||1)),0);
-              return {items:materials,estimatedTotal:est};
-            };
-            const req=vj.materialsRequest||computeFallback();
+            // Only the Pro's real request. If it hasn't arrived, say so; never
+            // show a made-up list or let the customer approve unseen items (HB-09).
+            const req=vj.materialsRequest&&Array.isArray(vj.materialsRequest.items)&&vj.materialsRequest.items.length?vj.materialsRequest:null;
+            if(!req) return(
+              <div role="status" style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                <div style={{fontSize:11,fontWeight:800,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Materials request</div>
+                <div style={{fontSize:14,fontWeight:700,color:TX,marginBottom:6}}>{jt?.n||"Your job"}</div>
+                <div style={{fontSize:12,color:TS,lineHeight:1.5}}>Your Pro asked to buy materials. The list hasn't arrived yet. It will show here for your approval as soon as it does.</div>
+              </div>
+            );
             const estTotal=req.items.reduce((s,m)=>s+(m.amount*(m.qty||1)),0);
             return(
               <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>

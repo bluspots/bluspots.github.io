@@ -1706,15 +1706,18 @@ async function runReceiptPdfChecks(){
 
   await mountApp(container8);
 
-  await stepAsync('38. Completing a job populates real receipt content (work performed, materials, notes) — not empty, not placeholder', async () => {
+  // Founder rule (Oct 11, 2026; HB-03): receipt content comes only from what
+  // the Pro reported. The backend doesn't send work notes yet, so a completed
+  // job has none, instead of the generated "work performed"/notes it used to get.
+  await stepAsync('38. Completing a job keeps only what the Pro reported (no invented work performed, materials or notes)', async () => {
     click('Mount TV');
     await clickPostJobAndWait();
     await completeBackendJobViaPoll('Mount TV');
     const jobsData = JSON.parse(storedData['haven_jobs']);
     const job = jobsData.data[jobsData.data.length-1];
-    assert(Array.isArray(job.workPerformed) && job.workPerformed.length>0, 'Completed job has real work-performed bullets, not an empty list');
-    assert(typeof job.proNotes==='string' && job.proNotes.length>0, 'Completed job has real professional notes, not empty');
-    assert(Array.isArray(job.materials), 'Completed job has a materials array (may legitimately be empty for some categories)');
+    assert(Array.isArray(job.workPerformed) && job.workPerformed.length===0, 'Completed job has no invented work-performed bullets');
+    assert(job.proNotes==='', 'Completed job has no invented professional notes');
+    assert(Array.isArray(job.materials) && job.materials.length===0, 'Completed job has no invented materials');
   });
 
   step('39. Receipt shows no local or demo amounts without backend values (Phase 1B item B)', () => {

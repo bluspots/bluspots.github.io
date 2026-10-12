@@ -11,7 +11,7 @@ function makeJob({
   tipAmount=0, tipStatus="notAdded", tippedAt=null, // notAdded | processing | paid | failed
   acceptedAt=null, // when status became en_route — anchors the arrival-window/ETA simulation
   jobPreferences=[], // snapshot of enabled preference labels at booking time — the shape a future Pro-app surface would read
-  workPerformed=[], materials=[], proNotes="", // populated once, at completion — see getCompletionDetails()
+  workPerformed=[], materials=[], proNotes="", // only what the Pro reports (backend); never generated
   lockedPrice=null, // the actual labor price agreed to at booking time (property-aware for scoped tasks like Deep/Standard/Move-Out Cleaning). null for older jobs or non-scoped tasks — those fall back to the catalog's reference price, which is safe since it was never property-dependent to begin with.
   requiresDiagnosis=false, // computed once at creation for diagnosis categories; used for materials-decline outcome
   materialsRequest=null,   // {items:[{description,qty,amount}], estimatedTotal} — shown while awaiting approval
