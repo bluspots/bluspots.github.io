@@ -1841,6 +1841,92 @@ async function havenMapboxGeocodeAddress(query) {
 function havenGeocodeAddress(query) {
   return havenMapboxGeocodeAddress(query);
 }
+
+// ── Address search and map confirmation (Mapbox Phase 1–2, frontend) ─────
+// Suggestions use temporary geocoding (shown, never stored). Saving a
+// confirmed address makes one permanent lookup, so its coordinates may be
+// stored (Mapbox terms: temporary results can't be stored). Nothing here
+// runs at startup; it's called only from the address screen.
+const HAVEN_MAPBOX_GEOCODE_V6 = "https://api.mapbox.com/search/geocode/v6/";
+// Orlando, used only to rank nearby results first. Not a location claim.
+const HAVEN_ADDRESS_SEARCH_PROXIMITY = "-81.3792,28.5383";
+const HAVEN_PRECISE_ACCURACY = ["rooftop", "parcel", "point"];
+
+// One Mapbox address feature -> the app's address fields. Returns null for
+// anything that isn't a full street address.
+function havenAddressFromFeature(feature) {
+  const p = feature && feature.properties;
+  const ctx = p && p.context;
+  if (!p || !ctx || p.feature_type !== "address") return null;
+  const num = ctx.address && ctx.address.address_number;
+  const streetName = (ctx.address && ctx.address.street_name) || (ctx.street && ctx.street.name);
+  const coords = p.coordinates || {};
+  const lat = Number(coords.latitude), lng = Number(coords.longitude);
+  if (!num || !streetName || !Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return {
+    mapboxId: p.mapbox_id || null,
+    street: `${num} ${streetName}`,
+    city: (ctx.place && ctx.place.name) || (ctx.locality && ctx.locality.name) || "",
+    state: (ctx.region && ctx.region.region_code) || "",
+    zip: (ctx.postcode && ctx.postcode.name) || "",
+    fullAddress: p.full_address || "",
+    lat: lat, lng: lng,
+    accuracy: coords.accuracy || "unknown",
+    precise: HAVEN_PRECISE_ACCURACY.includes(coords.accuracy),
+  };
+}
+
+// The unit part of what the customer typed ("Apt 3", "Unit 12B", "#4",
+// "Suite 200"). Mapbox drops it, so the app keeps it in its own field.
+function havenUnitFromQuery(query) {
+  const m = String(query || "").match(/(?:^|[\s,])((?:apt|apartment|unit|suite|ste|bldg|building|fl|floor|rm|room)\.?\s*(?:[A-Za-z]?\d[A-Za-z0-9-]*|[A-Za-z])|#\s*[A-Za-z0-9-]+)\s*$/i);
+  return m ? m[1].replace(/\s+/g, " ").trim() : "";
+}
+
+async function havenMapboxV6(path, params, signal) {
+  if (!HAVEN_MAPBOX_PUBLIC_TOKEN) return { ok: false, reason: "unavailable" };
+  const qs = Object.keys(params).map(k => `${k}=${encodeURIComponent(params[k])}`).join("&");
+  let res;
+  try {
+    res = await fetch(`${HAVEN_MAPBOX_GEOCODE_V6}${path}?${qs}&access_token=${encodeURIComponent(HAVEN_MAPBOX_PUBLIC_TOKEN)}`, signal ? { signal } : undefined);
+  } catch (e) {
+    return { ok: false, reason: e && e.name === "AbortError" ? "aborted" : "network" };
+  }
+  if (!res || !res.ok) return { ok: false, reason: res && (res.status === 401 || res.status === 403) ? "refused" : "network" };
+  let data = null;
+  try { data = await res.json(); } catch (e) { return { ok: false, reason: "network" }; }
+  const seen = new Set();
+  const results = (data && Array.isArray(data.features) ? data.features : [])
+    .map(havenAddressFromFeature)
+    .filter(Boolean)
+    .filter(r => { const k = `${r.street.toLowerCase()}|${r.zip}`; if (seen.has(k)) return false; seen.add(k); return true; });
+  return { ok: true, results: results };
+}
+
+// Suggestions while typing (temporary; not stored).
+function havenSuggestAddresses(query, signal) {
+  const q = String(query || "").trim();
+  if (q.length < 3) return Promise.resolve({ ok: true, results: [] });
+  return havenMapboxV6("forward", { q: q, autocomplete: "true", country: "us", types: "address", limit: 5, proximity: HAVEN_ADDRESS_SEARCH_PROXIMITY }, signal);
+}
+// The address at the phone's location (temporary; the customer confirms it).
+function havenAddressAtLocation(lat, lng, signal) {
+  return havenMapboxV6("reverse", { longitude: lng, latitude: lat, types: "address", limit: 1 }, signal);
+}
+// One permanent lookup for the address being saved, so its point may be stored.
+async function havenConfirmAddressForSaving(fullAddress) {
+  const r = await havenMapboxV6("forward", { q: fullAddress, country: "us", types: "address", limit: 1, permanent: "true" });
+  return r.ok && r.results.length ? r.results[0] : null;
+}
+
+// Static Mapbox map image of one point (loaded only when shown).
+function havenStaticMapUrl(lat, lng, opts) {
+  const o = opts || {};
+  const style = o.dark ? "dark-v11" : "streets-v12";
+  const w = o.width || 600, h = o.height || 300;
+  const ll = `${Number(lng).toFixed(6)},${Number(lat).toFixed(6)}`;
+  return `https://api.mapbox.com/styles/v1/mapbox/${style}/static/pin-l+F59E0B(${ll})/${ll},16,0/${w}x${h}@2x?logo=true&attribution=true&access_token=${encodeURIComponent(HAVEN_MAPBOX_PUBLIC_TOKEN)}`;
+}
  
 // Recognized so a job write can refuse it. Signed-out job writes do not send it.
 // A signed-in session uses that user's id and must not fall back to this one.
@@ -2714,6 +2800,10 @@ function App(){
           street:a.street||"", unit:a.unit||"", city:a.city||"", state:a.state||"", zip:a.zip||"",
           accessNotes:a.accessNotes||"", propertyType:a.propertyType||"",
           yearBuilt:a.yearBuilt||"", sqft:a.sqft||"", beds:a.beds||"", baths:a.baths||"",
+          // Map location confirmed by the customer (Mapbox, permanent lookup). Kept only if well-formed.
+          geo:a.geo&&typeof a.geo==="object"&&Number.isFinite(a.geo.lat)&&Number.isFinite(a.geo.lng)
+            ?{lat:a.geo.lat,lng:a.geo.lng,accuracy:typeof a.geo.accuracy==="string"?a.geo.accuracy:"unknown",mapboxId:a.geo.mapboxId||null,source:"mapbox",confirmedAt:a.geo.confirmedAt||null}
+            :null,
         }));
       if(cleaned.length===0)return cleaned; // zero properties is valid — booking will require adding one
       const primaries=cleaned.filter(a=>a.isPrimary);
@@ -2732,6 +2822,19 @@ function App(){
   const emptyDraftAddress={label:"",street:"",unit:"",city:"",state:"",zip:"",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""};
   const [draftAddress,setDraftAddress]=useState(emptyDraftAddress);
   const [addressFormError,setAddressFormError]=useState("");
+  // Address search (Mapbox Phase 1-2). Suggestions are temporary lookups shown
+  // only on this screen; a location is stored only after the customer confirms
+  // it on the map and a permanent lookup succeeds at save time.
+  const [addrQuery,setAddrQuery]=useState("");
+  const [addrResults,setAddrResults]=useState([]);
+  const [addrSearch,setAddrSearch]=useState("idle"); // idle|loading|results|empty|error
+  const [addrActive,setAddrActive]=useState(-1);
+  const [draftGeo,setDraftGeo]=useState(null); // {result, confirmed} for the address being edited
+  const [geoNotice,setGeoNotice]=useState("");
+  const [locState,setLocState]=useState("idle"); // idle|locating|denied|unavailable|error
+  const [mapImg,setMapImg]=useState("loading"); // loading|loaded|error
+  const [savingAddress,setSavingAddress]=useState(false);
+  const addrSearchRef=useRef({timer:null,ctrl:null,seq:0});
   const [selectedAddressId,setSelectedAddressId]=useState(1); // which address the current booking will use
   // Location awareness — architecture supports every real permission state,
   // even though the current prototype only ever uses "simulated". A future
@@ -3551,19 +3654,91 @@ function App(){
     setEditingAddressId(addr?addr.id:null);
     setDraftAddress(addr?{...addr}:{...emptyDraftAddress});
     setAddressFormError("");
+    resetAddressSearch();
+    setDraftGeo(addr&&addr.geo?{result:{...addr.geo,street:addr.street,city:addr.city,state:addr.state,zip:addr.zip,precise:["rooftop","parcel","point"].includes(addr.geo.accuracy)},confirmed:true,saved:true}:null);
+    setGeoNotice("");
     setHighlightField(targetField);
     goTo("addressEdit");
   };
-  const saveAddressForm=()=>{
+  const resetAddressSearch=()=>{
+    const r=addrSearchRef.current; clearTimeout(r.timer); if(r.ctrl) r.ctrl.abort(); r.seq++;
+    setAddrQuery(""); setAddrResults([]); setAddrSearch("idle"); setAddrActive(-1); setLocState("idle");
+  };
+  const searchAddresses=(q)=>{
+    setAddrQuery(q); setAddrActive(-1);
+    const r=addrSearchRef.current; clearTimeout(r.timer); if(r.ctrl) r.ctrl.abort();
+    if(q.trim().length<3){ r.seq++; setAddrResults([]); setAddrSearch("idle"); return; }
+    setAddrSearch("loading");
+    const seq=++r.seq;
+    r.timer=setTimeout(async()=>{
+      const ctrl=typeof AbortController==="function"?new AbortController():null; r.ctrl=ctrl;
+      const res=await havenSuggestAddresses(q,ctrl&&ctrl.signal);
+      if(seq!==addrSearchRef.current.seq||res.reason==="aborted") return; // a newer search replaced this one
+      if(!res.ok){ setAddrResults([]); setAddrSearch("error"); return; }
+      setAddrResults(res.results); setAddrSearch(res.results.length?"results":"empty");
+    },300);
+  };
+  const GEO_FIELDS=["street","city","state","zip"];
+  // Typing over a field the map location came from means the pin may no longer match.
+  const editDraftField=(field,value)=>{
+    setDraftAddress(d=>({...d,[field]:value}));
+    if(GEO_FIELDS.includes(field)&&draftGeo){ setDraftGeo(null); setGeoNotice("You changed the address, so it's no longer confirmed on the map. Search for it again to confirm the location."); }
+  };
+  const pickAddress=(res)=>{
+    const unit=havenUnitFromQuery(addrQuery);
+    setDraftAddress(d=>({...d,street:res.street,city:res.city,state:res.state,zip:res.zip,unit:unit||d.unit}));
+    setDraftGeo({result:res,confirmed:false}); setGeoNotice(""); setMapImg("loading");
+    const r=addrSearchRef.current; clearTimeout(r.timer); if(r.ctrl) r.ctrl.abort(); r.seq++;
+    setAddrQuery(""); setAddrResults([]); setAddrSearch("idle"); setAddrActive(-1);
+  };
+  const useMyLocation=()=>{
+    if(!navigator.geolocation){ setLocState("unavailable"); return; }
+    setLocState("locating");
+    navigator.geolocation.getCurrentPosition(async pos=>{
+      const res=await havenAddressAtLocation(pos.coords.latitude,pos.coords.longitude);
+      if(!res.ok||!res.results.length){ setLocState("error"); return; }
+      setLocState("idle"); pickAddress(res.results[0]);
+    },err=>{ setLocState(err&&err.code===1?"denied":"error"); },{enableHighAccuracy:true,timeout:15000,maximumAge:60000});
+  };
+  const saveAddressForm=async()=>{
+    if(savingAddress) return;
     if(!draftAddress.street.trim()||!draftAddress.city.trim()||!draftAddress.state.trim()||!draftAddress.zip.trim()){
       setAddressFormError("Please fill in street, city, state, and ZIP before saving.");
       return;
     }
+    if(draftGeo&&!draftGeo.confirmed){
+      setAddressFormError("Confirm the location on the map, or search for the address again.");
+      return;
+    }
+    // Store a map location only from a permanent lookup of a location the
+    // customer confirmed; otherwise save the address without one.
+    let geo=null;
+    if(draftGeo&&draftGeo.confirmed&&draftGeo.saved){
+      geo={lat:draftGeo.result.lat,lng:draftGeo.result.lng,accuracy:draftGeo.result.accuracy,mapboxId:draftGeo.result.mapboxId||null,source:"mapbox",confirmedAt:draftGeo.result.confirmedAt||null};
+    }else if(draftGeo&&draftGeo.confirmed&&(()=>{
+      // Re-picking the address this entry already has a stored point for:
+      // reuse it rather than paying for another permanent lookup.
+      const prev=editingAddressId?addresses.find(a=>a.id===editingAddressId):null;
+      return !!(prev&&prev.geo&&prev.geo.mapboxId&&prev.geo.mapboxId===draftGeo.result.mapboxId&&prev.street===draftAddress.street&&prev.zip===draftAddress.zip);
+    })()){
+      geo={...addresses.find(a=>a.id===editingAddressId).geo};
+    }else if(draftGeo&&draftGeo.confirmed){
+      setSavingAddress(true);
+      const full=`${draftAddress.street}, ${draftAddress.city}, ${draftAddress.state} ${draftAddress.zip}`;
+      const r=await havenConfirmAddressForSaving(full);
+      setSavingAddress(false);
+      const same=r&&r.zip===draftAddress.zip&&r.street.toLowerCase()===draftAddress.street.toLowerCase();
+      if(same) geo={lat:r.lat,lng:r.lng,accuracy:r.accuracy,mapboxId:r.mapboxId,source:"mapbox",confirmedAt:Date.now()};
+      else{
+        setAddressFormError("We couldn't save the map location just now. Check your connection and try again, or search for the address again.");
+        return;
+      }
+    }
     if(editingAddressId){
-      setAddresses(as=>as.map(a=>a.id===editingAddressId?{...a,...draftAddress,label:draftAddress.label.trim()||a.label}:a));
+      setAddresses(as=>as.map(a=>a.id===editingAddressId?{...a,...draftAddress,geo,label:draftAddress.label.trim()||a.label}:a));
     }else{
       const newId=Date.now();
-      setAddresses(as=>[...as,{...draftAddress,id:newId,isPrimary:as.length===0,label:draftAddress.label.trim()||"Address"}]);
+      setAddresses(as=>[...as,{...draftAddress,geo,id:newId,isPrimary:as.length===0,label:draftAddress.label.trim()||"Address"}]);
       if(selectNewHomeRef.current) setMyHomeId(newId);
     }
     backFrom("addressEdit",{scr:"myhome",tab:"home"});
@@ -4999,7 +5174,7 @@ function App(){
   // Stores the standard 2-letter abbreviation; prevents free-text spelling errors.
   const stateSelect=()=>(
     <div style={{position:"relative"}}>
-      <select value={draftAddress.state} onChange={e=>setDraftAddress(h=>({...h,state:e.target.value}))} style={selectStyle}>
+      <select value={draftAddress.state} onChange={e=>editDraftField("state",e.target.value)} aria-label="State" style={selectStyle}>
         <option value="">Select a state</option>
         {US_STATES.map(([abbr,name])=><option key={abbr} value={abbr}>{abbr} — {name}</option>)}
       </select>
@@ -5620,9 +5795,87 @@ function App(){
 
   // ── UNIFIED ADDRESS EDIT (used by both My Home and Saved Addresses) ──────
   const addressInput=(field,placeholder,extra={})=>(
-    <input value={draftAddress[field]} onChange={e=>setDraftAddress(d=>({...d,[field]:e.target.value}))} placeholder={placeholder}
+    <input value={draftAddress[field]} onChange={e=>editDraftField(field,e.target.value)} placeholder={placeholder} aria-label={placeholder}
       style={{width:"100%",border:"none",fontSize:15,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}} {...extra}/>
   );
+  // Address search + map confirmation card (Mapbox Phase 1-2).
+  const addressSearchCard=()=>{
+    const listId="addr-suggestions";
+    const open=addrSearch==="results"&&addrResults.length>0;
+    const onKey=e=>{
+      if(!open) return;
+      if(e.key==="ArrowDown"){ e.preventDefault(); setAddrActive(i=>Math.min(addrResults.length-1,i+1)); }
+      else if(e.key==="ArrowUp"){ e.preventDefault(); setAddrActive(i=>Math.max(0,i-1)); }
+      else if(e.key==="Enter"&&addrActive>=0){ e.preventDefault(); pickAddress(addrResults[addrActive]); }
+      else if(e.key==="Escape"){ setAddrResults([]); setAddrSearch("idle"); setAddrActive(-1); }
+    };
+    const g=draftGeo&&draftGeo.result;
+    const status=addrSearch==="loading"?"Searching…"
+      :addrSearch==="empty"?"No matching addresses. Check the spelling, or enter the address yourself below."
+      :addrSearch==="error"?"Address search isn't reachable right now. Check your connection, or enter the address yourself below."
+      :addrSearch==="results"?`${addrResults.length} address${addrResults.length===1?"":"es"} found`:"";
+    const locMsg=locState==="locating"?"Finding your location…"
+      :locState==="denied"?"Location access is off for Haven. Allow it in Settings, or search for your address instead."
+      :locState==="unavailable"?"This device can't share its location. Search for your address instead."
+      :locState==="error"?"We couldn't find an address at your location. Search for it instead.":"";
+    return(
+      <div style={{background:W,borderRadius:18,padding:18,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+        <label htmlFor="addr-search" style={{display:"block",fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:10}}>Search for the address</label>
+        <div style={{display:"flex",alignItems:"center",gap:8,border:`1.5px solid ${BD}`,borderRadius:12,padding:"10px 12px",background:BG}}>
+          <span aria-hidden="true" style={{fontSize:15}}>🔍</span>
+          <input id="addr-search" type="text" role="combobox" aria-autocomplete="list" aria-expanded={open} aria-controls={listId}
+            aria-activedescendant={open&&addrActive>=0?`addr-opt-${addrActive}`:undefined}
+            autoComplete="off" autoCorrect="off" spellCheck={false} enterKeyHint="search"
+            value={addrQuery} onChange={e=>searchAddresses(e.target.value)} onKeyDown={onKey}
+            placeholder="Start typing a street address"
+            style={{flex:1,minWidth:0,border:"none",fontSize:16,fontWeight:600,color:TX,background:"transparent",outline:"none",padding:0}}/>
+          {addrQuery&&<button type="button" onClick={resetAddressSearch} aria-label="Clear search" style={{background:"none",border:"none",color:TM,fontSize:16,cursor:"pointer",padding:"4px 6px",margin:"-4px -6px"}}>✕</button>}
+        </div>
+        <div role="status" aria-live="polite" style={{fontSize:12,color:addrSearch==="error"?"#DC2626":TS,marginTop:status?8:0,lineHeight:1.5}}>{status}</div>
+        {open&&(
+          <ul id={listId} role="listbox" aria-label="Address suggestions" style={{listStyle:"none",margin:"8px 0 0",padding:0,border:`1px solid ${BD}`,borderRadius:12,overflow:"hidden"}}>
+            {addrResults.map((r,i)=>(
+              <li key={r.mapboxId||i} id={`addr-opt-${i}`} role="option" aria-selected={i===addrActive}
+                onMouseDown={e=>e.preventDefault()} onClick={()=>pickAddress(r)}
+                style={{padding:"12px 12px",minHeight:44,cursor:"pointer",background:i===addrActive?SELBG:W,borderTop:i?`1px solid ${BD}`:"none"}}>
+                <div style={{fontSize:14,fontWeight:700,color:TX}}>{r.street}</div>
+                <div style={{fontSize:12,color:TS,marginTop:2}}>{[r.city,r.state].filter(Boolean).join(", ")}{r.zip?` ${r.zip}`:""}</div>
+              </li>
+            ))}
+          </ul>
+        )}
+        <button type="button" onClick={useMyLocation} disabled={locState==="locating"}
+          style={{marginTop:10,background:"none",border:"none",color:NT,fontWeight:700,fontSize:13,cursor:"pointer",padding:"8px 0",minHeight:44}}>📍 Use my current location</button>
+        {locMsg&&<div role="status" style={{fontSize:12,color:locState==="locating"?TS:"#B45309",lineHeight:1.5}}>{locMsg}</div>}
+        {geoNotice&&!g&&<div role="status" style={{fontSize:12,color:"#B45309",lineHeight:1.5,marginTop:6}}>{geoNotice}</div>}
+        {g&&(
+          <div style={{marginTop:12}}>
+            <div style={{position:"relative",borderRadius:14,overflow:"hidden",border:`1px solid ${BD}`,background:BG,aspectRatio:"2 / 1"}}>
+              <img src={havenStaticMapUrl(g.lat,g.lng,{dark:isDark})} alt={`Map showing ${g.street}, ${g.city}`}
+                onLoad={()=>setMapImg("loaded")} onError={()=>setMapImg("error")}
+                style={{display:"block",width:"100%",height:"100%",objectFit:"cover",opacity:mapImg==="loaded"?1:0,transition:"opacity .2s"}}/>
+              {mapImg!=="loaded"&&<div style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:TS,padding:12,textAlign:"center"}}>{mapImg==="error"?"The map couldn't load. You can still confirm the address from the details below.":"Loading map…"}</div>}
+            </div>
+            <div style={{fontSize:13,fontWeight:700,color:TX,marginTop:10}}>{g.street}{draftAddress.unit?`, ${draftAddress.unit}`:""}</div>
+            <div style={{fontSize:12,color:TS}}>{[g.city,g.state].filter(Boolean).join(", ")} {g.zip}</div>
+            {!g.precise&&<div role="note" style={{fontSize:12,color:"#B45309",lineHeight:1.5,marginTop:6}}>Approximate location: Mapbox could only place this near the street, not on the exact building. Check the pin before you confirm.</div>}
+            {draftGeo.confirmed?(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginTop:10}}>
+                <span role="status" style={{fontSize:12,fontWeight:700,color:SC}}>✓ Location confirmed on the map</span>
+                <button type="button" onClick={()=>{setDraftGeo(null);setGeoNotice("");document.getElementById("addr-search")?.focus();}} style={{background:"none",border:"none",color:NT,fontWeight:700,fontSize:12,cursor:"pointer",padding:"8px 0"}}>Change</button>
+              </div>
+            ):(
+              <div style={{display:"flex",gap:8,marginTop:10}}>
+                <button type="button" onClick={()=>setDraftGeo(d=>({...d,confirmed:true}))} style={{flex:1,padding:"12px 0",minHeight:44,borderRadius:12,border:"none",background:N,color:ON,fontWeight:800,fontSize:13,cursor:"pointer"}}>Yes, this is the place</button>
+                <button type="button" onClick={()=>{setDraftGeo(null);setGeoNotice("");document.getElementById("addr-search")?.focus();}} style={{flex:1,padding:"12px 0",minHeight:44,borderRadius:12,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:13,cursor:"pointer"}}>Not right, search again</button>
+              </div>
+            )}
+          </div>
+        )}
+        <div style={{fontSize:11,color:TM,marginTop:12,lineHeight:1.5}}>Or fill in the address yourself below.</div>
+      </div>
+    );
+  };
   const addressEditScreen=()=>{
     const isPrimaryEdit = editingAddressId===primaryHome?.id;
     // The property's home details (year, size, layout) are editable for
@@ -5637,6 +5890,7 @@ function App(){
               <span style={{fontSize:12,color:"#DC2626",fontWeight:600}}>{addressFormError}</span>
             </div>
           )}
+          {addressSearchCard()}
           {!isPrimaryEdit&&homeFieldCard("Label",addressInput("label","e.g. Work, Parents' house"))}
           {homeFieldCard("Street address",addressInput("street","123 Main Street"))}
           {homeFieldCard("Apartment, unit, suite, or building (optional)",addressInput("unit","Apt, unit, suite, or building"))}
@@ -5657,7 +5911,7 @@ function App(){
               </div>
             </>
           )}
-          <button onClick={saveAddressForm} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:ON,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10,marginTop:8}}>Save changes</button>
+          <button onClick={saveAddressForm} disabled={savingAddress} style={{width:"100%",padding:17,borderRadius:18,border:"none",background:AM,color:ON,fontWeight:800,fontSize:16,cursor:"pointer",boxShadow:`0 6px 20px rgba(245,158,11,.3)`,marginBottom:10,marginTop:8}}>{savingAddress?"Saving…":"Save changes"}</button>
           <button onClick={()=>backFrom("addressEdit",{scr:"myhome",tab:"home"})} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TS,fontWeight:600,fontSize:15,cursor:"pointer"}}>Cancel</button>
         </div>
       </div>
