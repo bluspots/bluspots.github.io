@@ -2185,6 +2185,33 @@ const DEFAULT_ADDRESSES=[];
 // Opening splash: the HTML shell draws it and defines window.havenHideSplash
 // (named differently here so this global function never replaces it).
 // The app hides it right after its first screen is drawn (no minimum time).
+// MAP-03: a static Mapbox picture of a property the customer confirmed on the
+// map. It shows the customer's own saved address only: it is not live and never
+// shows where a Pro is. It's a plain image that loads only when a screen showing
+// it is open (no map library, nothing at startup).
+function PropertyMap({geo,isDark,alt,caption,colors}){
+  const src=havenStaticMapUrl(geo.lat,geo.lng,{dark:isDark});
+  const [img,setImg]=useState({src:null,status:"loading"});
+  const status=img.src===src?img.status:"loading";
+  return(
+    <figure style={{margin:0}}>
+      <div style={{position:"relative",borderRadius:14,overflow:"hidden",border:`1px solid ${colors.BD}`,background:colors.BG,aspectRatio:"2 / 1"}}>
+        {status!=="error"&&(
+          <img src={src} alt={alt} loading="lazy" decoding="async"
+            onLoad={()=>setImg({src,status:"loaded"})} onError={()=>setImg({src,status:"error"})}
+            style={{display:"block",width:"100%",height:"100%",objectFit:"cover",opacity:status==="loaded"?1:0,transition:"opacity .2s"}}/>
+        )}
+        {status!=="loaded"&&(
+          <div role={status==="error"?"status":undefined} style={{position:"absolute",inset:0,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:colors.TS,padding:12,textAlign:"center",lineHeight:1.5}}>
+            {status==="error"?"The map couldn't load right now. Your saved address is unchanged.":"Loading map…"}
+          </div>
+        )}
+      </div>
+      {caption&&<figcaption style={{fontSize:12,color:colors.TS,marginTop:8,lineHeight:1.5}}>{caption}</figcaption>}
+    </figure>
+  );
+}
+
 function hideOpeningSplash(){
   try{ if(typeof window!=="undefined"&&typeof window.havenHideSplash==="function") window.havenHideSplash(); }catch(_){}
 }
@@ -4956,6 +4983,20 @@ function App(){
               <span aria-label="Trusted Home — this property has an established repair history through Haven" style={{fontSize:11,fontWeight:700,color:SC,background:SL,padding:"3px 9px",borderRadius:10,whiteSpace:"nowrap"}}>🏡 Trusted Home</span>
             )}
           </div>
+          {viewedHome.geo?(
+            <div style={{marginBottom:14}}>
+              <PropertyMap geo={viewedHome.geo} isDark={isDark} colors={{BD,BG,TS}}
+                alt={`Map of ${viewedHome.label||"your property"} at ${viewedHome.street}, ${viewedHome.city}`}
+                caption={HAVEN_PRECISE_ACCURACY.includes(viewedHome.geo.accuracy)
+                  ?"The location you confirmed for this address."
+                  :"The location you confirmed for this address. It's approximate: placed near the street, not on the exact building."}/>
+            </div>
+          ):(
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:14,padding:"10px 12px",borderRadius:12,background:BG}}>
+              <span style={{fontSize:12,color:TS,lineHeight:1.4}}>This address isn't confirmed on the map yet.</span>
+              <button type="button" onClick={()=>openAddressForm(viewedHome)} style={{background:"none",border:"none",color:NT,fontWeight:700,fontSize:12,cursor:"pointer",padding:"0 4px",minHeight:44,whiteSpace:"nowrap"}}>Confirm on map ›</button>
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
             {(()=>{
               const tileStyle={background:BG,borderRadius:12,padding:"10px 12px",position:"relative"};
@@ -6545,22 +6586,19 @@ function App(){
   };
 
   // ── TRACKING MAP ────────────────────────────────────────────────────────────
+  // MAP-03: the job's property, from the customer's own saved address when its
+  // location was confirmed on the map (matched by the address saved on the job,
+  // like My Home's history). It is a still picture of the address, labeled as
+  // such: Haven doesn't share a Pro's live location. No confirmed match, no map.
   const trackMap=()=>{
-    const px=vjSIdx>=1?240:60+vjSIdx*90; const showCar=vjSIdx<3;
+    const home=vj&&typeof vj.addressText==="string"?addresses.find(a=>a.geo&&formatAddress(a)===vj.addressText):null;
+    if(!home) return null;
     return(
-      <svg width="100%" height="185" viewBox="0 0 350 185" style={{display:"block"}}>
-        <rect width="350" height="185" fill="#E8EBF2"/>
-        <rect x="10" y="12" width="52" height="50" rx="4" fill="#D5D9E8"/><rect x="100" y="12" width="78" height="50" rx="4" fill="#D5D9E8"/><rect x="220" y="12" width="52" height="50" rx="4" fill="#D5D9E8"/><rect x="300" y="12" width="38" height="50" rx="4" fill="#D5D9E8"/>
-        <rect x="10" y="115" width="52" height="38" rx="4" fill="#D5D9E8"/><rect x="100" y="115" width="78" height="38" rx="4" fill="#D5D9E8"/><rect x="220" y="115" width="118" height="38" rx="4" fill="#D5D9E8"/>
-        <rect x="0" y="74" width="350" height="18" fill={W}/><rect x="72" y="0" width="14" height="185" fill={W}/><rect x="192" y="0" width="14" height="185" fill={W}/><rect x="292" y="0" width="14" height="185" fill={W}/>
-        {[90,130,170,210,250].map(x=><rect key={x} x={x} y="82" width="14" height="2" rx="1" fill="#C5CAD8"/>)}
-        {showCar&&vjSIdx<1&&<line x1={px+14} y1={83} x2={224} y2={83} stroke={N} strokeWidth="3" strokeDasharray="8,5" opacity="0.4"/>}
-        {vjSIdx<3&&<><circle cx={240} cy={83} r="18" fill={W} stroke={N} strokeWidth="2.5"/><text x="240" y="88" textAnchor="middle" fontSize="14">🏠</text></>}
-        {vjSIdx===3&&<><circle cx={240} cy={83} r="22" fill={SL}/><circle cx={240} cy={83} r="16" fill={SC}/><text x="240" y="89" textAnchor="middle" fontSize="14" fill={W} fontWeight="900">✓</text></>}
-        {showCar&&<><circle cx={px} cy={83} r="20" fill={N} opacity="0.12"/><circle cx={px} cy={83} r="14" fill={N}/><text x={px} y="88" textAnchor="middle" fontSize="13">🚗</text></>}
-        {vj?.status==="en_route"&&<><rect x={px-2} y="50" width="90" height="21" rx="10" fill={AM}/><text x={px+43} y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">On the way</text></>}
-        {vj?.status==="arrived"&&<><rect x="138" y="50" width="104" height="21" rx="10" fill={SC}/><text x="190" y="65" textAnchor="middle" fontSize="11" fill={W} fontWeight="700">{vjPname} is here!</text></>}
-      </svg>
+      <div style={{margin:"12px 20px",background:W,borderRadius:20,padding:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+        <PropertyMap geo={home.geo} isDark={isDark} colors={{BD,BG,TS}}
+          alt={`Map of your property at ${home.street}, ${home.city}`}
+          caption={<><span style={{fontWeight:700,color:TX}}>📍 Your property{home.label?` · ${home.label}`:""}</span><br/>This map shows your address, not your Pro's live location.</>}/>
+      </div>
     );
   };
 
@@ -6623,7 +6661,7 @@ function App(){
               return <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{label}</div><div style={{fontSize:13,color:TS}}>{sub}</div></div>;
             })()}
           </div>
-          <div style={{margin:"12px 20px",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>{trackMap()}</div>
+          {trackMap()}
           {/* Materials approval card — shown only while awaiting customer decision */}
           {vj.status==="materials_requested"&&(()=>{
             const jt=vjTask?{n:vjTask.n,c: (TASKS.find(t=>t.id===vj.taskId)?.c)}:(vj.custom?{n:vj.custom.title,c:vj.custom.cat}:null);
