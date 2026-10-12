@@ -1,12 +1,14 @@
 /**
- * Time-aware booking windows (Customer). Mounts the SHIPPED prototype.html
- * script in jsdom with a mocked backend and a fixed clock.
- *
- * The time choices were fixed: at 9 PM the app still offered "This morning",
- * "This afternoon" and "This evening" for today, and pre-selected "This
- * morning". Each of today's windows is now offered until an hour before it
- * ends, and the first open no-surge window is pre-selected.
- * Prices and surge fees are unchanged; ASAP and tomorrow's windows always show.
+ * Specific appointment windows (Customer, founder-approved Option 1).
+ * Mounts the SHIPPED prototype.html script in jsdom, mocked backend, fixed clock.
+ * - "As soon as possible" is separate; then a 7-day strip and two-hour
+ *   windows 8–10 AM … 4–6 PM. A window is offered only until it starts;
+ *   a day with none left reads "No times left" and the next day opens.
+ * - Nothing is pre-selected; Post asks the customer to pick a time.
+ * - The pick reads "Requested". The backend doesn't receive the time yet
+ *   (GROKBOT_BACKEND_HANDOFF HB-01), so the note says so, and "Confirmed"
+ *   never shows without a backend confirmation.
+ * - Emergency keeps its own options.
  */
 process.env.TZ = 'America/New_York';
 const { JSDOM } = require('jsdom');
@@ -133,25 +135,53 @@ async function mount() {
 }
 
 
-function chips() { return Array.from(document.querySelectorAll('button')).map(b => b.textContent.trim()).filter(t => /^(ASAP|This morning|This afternoon|This evening|Tomorrow AM|Tomorrow PM)/.test(t)).map(t => t.replace(/\+\$\d+$/, '')); }
-function selectedChip() { const b = Array.from(document.querySelectorAll('button')).find(b => /^(ASAP|This morning|This afternoon|This evening|Tomorrow AM|Tomorrow PM)/.test(b.textContent.trim()) && /rgb\(28, 43, 58\)|#1C2B3A/i.test(b.getAttribute('style') || '')); return b ? b.textContent.trim().replace(/\+\$\d+$/, '') : null; }
-const realNow = Date.now;
-async function at(hh, mm, expectChips, expectSelected) {
-  const d = new Date(); d.setHours(hh, mm, 0, 0); const fixed = d.getTime();
-  Date.now = () => fixed;
-  await mount();
-  await act(async () => { fireEvent.click(screen.getAllByText('Mount TV')[0]); }); await settle(80);
-  const label = String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
-  assert(JSON.stringify(chips()) === JSON.stringify(expectChips), label + ' offers ' + expectChips.join(', ') + ' (got ' + chips().join(', ') + ')');
-  assert(selectedChip() === expectSelected, label + ' pre-selects ' + expectSelected + ' (got ' + selectedChip() + ')');
+const RealDate = Date;
+function setClock(hh, mm) {
+  const d = new RealDate(); d.setHours(hh, mm, 0, 0); const fixed = d.getTime();
+  global.Date = class extends RealDate { constructor(...a) { if (a.length) super(...a); else super(fixed); } static now() { return fixed; } };
+  global.window.Date = global.Date;
 }
+const buttons = () => Array.from(document.querySelectorAll('button'));
+const windowGroup = () => document.querySelector('[role="group"][aria-label="Arrival window"]');
+const dayGroup = () => document.querySelector('[role="group"][aria-label="Day"]');
+const windows = () => windowGroup() ? Array.from(windowGroup().querySelectorAll('button')).map(b => b.textContent.trim()) : [];
+const days = () => dayGroup() ? Array.from(dayGroup().querySelectorAll('button')) : [];
+const postBtn = () => buttons().find(b => /Post Job|to continue/.test(b.textContent));
+async function click(el, label) { if (!el) throw new Error('missing ' + label + '\n' + bodyText().slice(0, 400)); await act(async () => { fireEvent.click(el); }); await settle(60); }
+async function openBooking(hh, mm) { setClock(hh, mm); await mount(); await click(screen.getAllByText('Mount TV')[0], 'Mount TV'); }
 (async () => {
-  await at(9, 0, ['ASAP', 'This morning', 'This afternoon', 'This evening', 'Tomorrow AM', 'Tomorrow PM'], 'This morning');
-  await at(11, 30, ['ASAP', 'This afternoon', 'This evening', 'Tomorrow AM', 'Tomorrow PM'], 'This afternoon');
-  await at(16, 30, ['ASAP', 'This evening', 'Tomorrow AM', 'Tomorrow PM'], 'This evening');
-  await at(21, 0, ['ASAP', 'Tomorrow AM', 'Tomorrow PM'], 'Tomorrow AM');
-  Date.now = realNow;
+  // 9:30 AM: 8–10 has started; the rest of today is offered.
+  await openBooking(9, 30);
+  assert(!!buttons().find(b => /As soon as possible/.test(b.textContent)), 'ASAP is its own option');
+  assert(days().length === 7 && /Today/.test(days()[0].textContent) && /Tomorrow/.test(days()[1].textContent), 'a 7-day strip: Today, Tomorrow, then dates');
+  assert(JSON.stringify(windows()) === JSON.stringify(['10 AM–12 PM', '12–2 PM', '2–4 PM', '4–6 PM']), '9:30 AM: today offers only windows that have not started (got ' + windows().join(', ') + ')');
+  assert(!buttons().some(b => b.getAttribute('aria-pressed') === 'true' && (windowGroup().contains(b) || /As soon as possible/.test(b.textContent))), 'nothing is pre-selected');
+  assert(postBtn() && postBtn().disabled && /Pick a time to continue/.test(postBtn().textContent), 'Post asks for a time first');
+  assert(!/This morning|This afternoon|This evening|Tomorrow AM/.test(bodyText()), 'the vague Morning/Afternoon/Evening choices are gone');
+  await click(days()[1], 'Tomorrow');
+  assert(JSON.stringify(windows()) === JSON.stringify(['8–10 AM', '10 AM–12 PM', '12–2 PM', '2–4 PM', '4–6 PM']), 'tomorrow offers all five windows');
+  await click(windowGroup().querySelectorAll('button')[1], '10–12');
+  assert(windowGroup().querySelectorAll('button')[1].getAttribute('aria-pressed') === 'true', 'the chosen window is marked selected');
+  assert(/Requested: Tomorrow · 10 AM–12 PM/.test(bodyText()), 'the pick reads "Requested: Tomorrow · 10 AM–12 PM"');
+  assert(/a Pro won't see this time yet/.test(bodyText()) && !/Pro confirms the time/.test(bodyText()), 'says plainly that Pros cannot see the time yet (backend pending)');
+  assert(!postBtn().disabled && /Post Job/.test(postBtn().textContent), 'Post is ready once a time is chosen');
+  await click(buttons().find(b => /As soon as possible/.test(b.textContent)), 'ASAP');
+  assert(!/Requested:/.test(bodyText()) && buttons().find(b => /As soon as possible/.test(b.textContent)).getAttribute('aria-pressed') === 'true', 'ASAP replaces the requested window');
+  // 3:15 PM: only 4–6 is left today.
+  await openBooking(15, 15);
+  assert(JSON.stringify(windows()) === JSON.stringify(['4–6 PM']), '3:15 PM: only 4–6 PM left today (got ' + windows().join(', ') + ')');
+  // 8:30 PM: nothing left today; Tomorrow opens.
+  await openBooking(20, 30);
+  assert(days()[0].disabled && /No times left/.test(days()[0].textContent), '8:30 PM: Today reads "No times left" and is disabled');
+  assert(days()[1].getAttribute('aria-pressed') === 'true' && windows().length === 5, '8:30 PM: Tomorrow opens with all five windows');
+  global.Date = RealDate; global.window.Date = RealDate;
+  // Bookings: Requested, never Confirmed without a backend confirmation.
+  const src = fs.readFileSync('home_services_app.jsx', 'utf8');
+  assert((src.match(/\{emergency\?timeChips\(EMERGENCY_TIME_PREFS,true\):apptPicker\(\)\}/g) || []).length === 2, 'emergency bookings keep their own options; normal bookings use the window picker');
+  assert(/const HAVEN_REQUESTED_TIME_SHARED_WITH_PROS=false;/.test(src), 'requested times are flagged as not shared with Pros yet');
+  assert(/const jobTimeConfirmed=j=>!!\(j&&j\.confirmedWindow\);/.test(src) && !/confirmedWindow\s*[:=]/.test(src.replace('const jobTimeConfirmed=j=>!!(j&&j.confirmedWindow);', '')), '"Confirmed" only from a backend confirmation field the app never sets itself');
+  assert(/reqWindow:tpid===APPT_TIME_PREF_ID&&reqWindowValid\(reqWindow\)\?reqWindow:null/.test(src), 'the job keeps the requested window only if it is still valid');
   cleanup();
-  console.log(`--- Time-aware windows: ${pass} passing, ${fail} failing ---`);
+  console.log(`--- Appointment windows: ${pass} passing, ${fail} failing ---`);
   process.exit(fail ? 1 : 0);
 })().catch(e => { console.error(e); process.exit(1); });
