@@ -104,7 +104,14 @@ global.supabase = global.window.supabase = {
   }),
 };
 
-function seedExtra() {}
+// The customer's saved address (MAP-03: the app no longer creates sample
+// addresses, so the booking tests seed the one they book at).
+let seedAddresses = true;
+function seedExtra() {
+  if (seedAddresses) storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: [
+    { id: 1700000000101, label: 'Home', isPrimary: true, street: '1 Oak St', unit: '', city: 'Orlando', state: 'FL', zip: '32801', accessNotes: '', propertyType: 'House', yearBuilt: '1990', sqft: '1800', beds: '3', baths: '2' },
+  ] });
+}
 function seed() {
   Object.keys(storedData).forEach(k => delete storedData[k]);
   storedData['haven_auth_access_token'] = 'signed-in-access-token';
@@ -150,6 +157,11 @@ const postBtn = () => buttons().find(b => /Post Job|to continue/.test(b.textCont
 async function click(el, label) { if (!el) throw new Error('missing ' + label + '\n' + bodyText().slice(0, 400)); await act(async () => { fireEvent.click(el); }); await settle(60); }
 async function openBooking(hh, mm) { setClock(hh, mm); await mount(); await click(screen.getAllByText('Mount TV')[0], 'Mount TV'); }
 (async () => {
+  // New device (no saved address): booking asks for an address before anything else.
+  seedAddresses = false;
+  await openBooking(9, 30);
+  assert(postBtn() && postBtn().disabled && /Add an address to continue/.test(postBtn().textContent), 'with no saved address, Post asks for an address first (no sample address is used)');
+  seedAddresses = true;
   // 9:30 AM: 8–10 has started; the rest of today is offered.
   await openBooking(9, 30);
   assert(!!buttons().find(b => /As soon as possible/.test(b.textContent)), 'ASAP is its own option');
