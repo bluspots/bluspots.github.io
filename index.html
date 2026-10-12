@@ -3978,6 +3978,11 @@ function App() {
     let geo = null;
     if (draftGeo && draftGeo.confirmed && draftGeo.saved) {
       geo = { lat: draftGeo.result.lat, lng: draftGeo.result.lng, accuracy: draftGeo.result.accuracy, mapboxId: draftGeo.result.mapboxId || null, source: "mapbox", confirmedAt: draftGeo.result.confirmedAt || null };
+    } else if (draftGeo && draftGeo.confirmed && (() => {
+      const prev = editingAddressId ? addresses.find((a) => a.id === editingAddressId) : null;
+      return !!(prev && prev.geo && prev.geo.mapboxId && prev.geo.mapboxId === draftGeo.result.mapboxId && prev.street === draftAddress.street && prev.zip === draftAddress.zip);
+    })()) {
+      geo = { ...addresses.find((a) => a.id === editingAddressId).geo };
     } else if (draftGeo && draftGeo.confirmed) {
       setSavingAddress(true);
       const full = `${draftAddress.street}, ${draftAddress.city}, ${draftAddress.state} ${draftAddress.zip}`;

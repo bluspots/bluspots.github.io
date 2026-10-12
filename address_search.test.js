@@ -208,6 +208,26 @@ const savedList = () => JSON.parse(storedData['haven_addresses']).data;
   const saved = savedList().find(a => a.street === '400 West Church Street');
   assert(saved && saved.geo && saved.geo.lat === 28.539714 && saved.geo.lng === -81.383973 && saved.geo.accuracy === 'rooftop' && saved.geo.source === 'mapbox', 'the saved address keeps the confirmed point');
 
+  // Re-picking the same address for an entry that already has its point: no second paid lookup
+  {
+    const id = saved.id;
+    const editBtn = () => Array.from(document.querySelectorAll('[role="button"],button')).find(b => /400 West Church Street/.test(b.textContent));
+    await waitFor(() => !!editBtn(), 'saved address listed');
+    await act(async () => { fireEvent.click(editBtn()); }); await settle(60);
+    const edit = Array.from(document.querySelectorAll('button')).find(b => /^Edit/.test(b.textContent.trim()));
+    if (edit) { await act(async () => { fireEvent.click(edit); }); await settle(60); }
+    if (input()) {
+      await typeQuery('400 W Church St');
+      await act(async () => { fireEvent.click(options()[0]); }); await settle(60);
+      await act(async () => { fireEvent.click(btn(/^Yes, this is the place$/)); }); await settle(40);
+      const b2 = mapbox.length;
+      await act(async () => { fireEvent.click(btn(/^Save changes$/)); }); await settle(200);
+      assert(mapbox.slice(b2).filter(u => /permanent=true/.test(u)).length === 0, 're-picking the same address reuses its stored point (no second paid lookup)');
+      assert(savedList().find(a => a.id === id).geo.lat === 28.539714, 'the stored point is kept');
+    } else {
+      assert(false, 'could not reopen the saved address for editing');
+    }
+  }
   // approximate match + unit + edit clears
   await openForm();
   await typeQuery('400 W Church St');
