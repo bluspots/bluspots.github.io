@@ -21,7 +21,7 @@ The app connects to Supabase automatically with the shipped public config (no de
 
 ```bash
 npm install
-npm run build      # generates index.html from home_services_app.jsx
+npm run build      # generates prototype.html, then compiles index.html from it
 npm test           # runs the audit suite (jsdom, ~140+ assertions)
 npm run boot-check  # boots the actual shipped script block
 npm run verify      # does all three, in order
@@ -33,15 +33,21 @@ the app itself — only to run the test suite locally.
 
 ## Architecture
 
-**`home_services_app.jsx` is the single source of truth.** It's compiled
-in-browser at runtime via Babel Standalone (loaded from CDN alongside
-React and jsPDF — see `_shell_pre.txt`). There is no build step in the
-traditional sense; `build.sh` just stitches the JSX into a self-contained
-HTML file:
+**`home_services_app.jsx` is the single source of truth.** `build.sh`
+stitches the source files into a self-contained page, then compiles it for
+production:
 
 ```
-_shell_pre.txt  +  home_services_app.jsx  +  _shell_post.txt  →  index.html
+_shell_pre.txt  +  source files  +  _shell_post.txt  →  prototype.html  (JSX; Babel in the browser)
+prototype.html  →  tools/compile_html.js (esbuild)   →  index.html      (what GitHub Pages serves)
 ```
+
+`index.html` has the JSX compiled ahead of time and does not load Babel, so
+the phone doesn't spend seconds compiling on every launch. `npm install`
+(esbuild) is needed once before building. `npm run verify` runs every check
+on the compiled page too (`tools/compiled_suite.js`). When a merge conflicts
+in `index.html` or `prototype.html`, resolve the source files and rerun the
+build; never resolve the generated files by hand.
 
 **Do not hand-edit `index.html` directly.** Any change belongs in
 `home_services_app.jsx` (or the two shell templates for the surrounding
