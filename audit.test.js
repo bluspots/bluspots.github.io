@@ -393,6 +393,11 @@ function selectNonSurgeTimeWindow(){
     if (el) { act(()=>{ el.click(); }); return true; }
     return false;
   };
+  // Specific appointment windows (#62): pick the first window offered
+  // (never ASAP, which adds a surge fee).
+  const group = Array.from(document.querySelectorAll('[role="group"][aria-label="Arrival window"]')).pop();
+  const first = group && group.querySelector('button');
+  if (first) { act(()=>{ first.click(); }); return; }
   if (tryClick('This morning')) return;
   if (tryClick('This afternoon')) return;
   if (tryClick('This evening')) return;
@@ -407,6 +412,8 @@ function getContainerRoot(){
 }
 function getPostJobButton(){
   const root = getContainerRoot();
+  // Posting needs a chosen time (#62). Choose the first window if none is set.
+  if (!Array.from(root.querySelectorAll('button')).some(b => /Post Job/.test(b.textContent||'')) && document.querySelector('[role="group"][aria-label="Arrival window"]')) selectNonSurgeTimeWindow();
   const btns = Array.from(root.querySelectorAll('button'));
   const enabled = btns.filter(b => {
     const hasText = typeof b.textContent==='string' && /Post Job/.test(b.textContent);
@@ -707,6 +714,7 @@ async function waitForPostedJob(before){
 }
 async function clickPostJobAndWait(){
   const before = storedJobCount();
+  if (!existsRegex(/Post Job/)) selectNonSurgeTimeWindow();
   clickRegex(/Post Job/);
   await waitForPostedJob(before);
 }
@@ -1180,7 +1188,7 @@ await stepAsync('8–10. Notification Center still works with a seeded message n
 step('11. Regression — tab persistence and draft booking still work', () => {
     clickTab('Home'); click('Assemble bed');
     clickTab('Bookings');
-    assert(existsRegex(/Post Job/), 'Draft booking still persists across a tab switch');
+    assert(existsRegex(/Post Job|Pick a time to continue/), 'Draft booking still persists across a tab switch');
     click('← Back');
     assert(existsRegex('Discard draft?'), 'Discard confirmation still works');
     click('Discard Draft');

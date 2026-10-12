@@ -3,7 +3,7 @@
 // from job data — a missing field breaks a receipt silently). If a feature
 // needs a new job field, add it here first, then use it via postJob/updateJob.
 function makeJob({
-  taskId=null, custom=null, tpId=null, photos=[], desc="", status="posted",
+  taskId=null, custom=null, tpId=null, reqWindow=null, photos=[], desc="", status="posted",
   pro=null, msgs=[], surge=0, justAccepted=false, emergency=false, emergencyFee=0,
   addressText="—", addressLabel="", paymentBrand="Card", paymentLast4="----",
   completedAt=null, rated=false, stars=0, reviewTxt="", hireAgain=null,
@@ -19,7 +19,7 @@ function makeJob({
 }={}){
   return {
     id:Date.now(), // known limitation: two jobs in the same millisecond would collide — impossible via UI, fix when a backend exists
-    taskId, custom, tpId, photos, desc, status, pro, msgs, surge, justAccepted,
+    taskId, custom, tpId, reqWindow, photos, desc, status, pro, msgs, surge, justAccepted,
     emergency, emergencyFee, addressText, addressLabel, paymentBrand, paymentLast4,
     completedAt, rated, stars, reviewTxt, hireAgain,
     cancelStatus, cancellationRequestedAt,

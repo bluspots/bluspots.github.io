@@ -85,6 +85,7 @@ const TIME_PREFS=[
   {id:4,label:"This evening",  sub:"Today · 5:00 – 9:00 PM",      surge:0},
   {id:5,label:"Tomorrow AM",   sub:"Tomorrow · 8:00 AM – 12:00 PM",surge:0},
   {id:6,label:"Tomorrow PM",   sub:"Tomorrow · 12:00 – 5:00 PM",  surge:0},
+  {id:7,label:"Requested time",sub:"",                            surge:0},
 ];
 // Emergency jobs use their own short-window timing instead of normal scheduling.
 const EMERGENCY_TIME_PREFS=[
@@ -93,6 +94,22 @@ const EMERGENCY_TIME_PREFS=[
   {id:103,label:"Within 6 hours",  sub:"Response within 6 hours",surge:0},
 ];
 const ALL_TIME_PREFS=[...TIME_PREFS,...EMERGENCY_TIME_PREFS];
+// Specific appointment windows (founder-approved Option 1). Two-hour
+// windows over the next seven days; ASAP and emergency are separate. A
+// window is offered only until it starts. These are the times Haven offers,
+// not Pro availability. The customer REQUESTS a window; it is "Confirmed"
+// only when the backend records a confirmation (HB-01, not built yet).
+const APPT_WINDOW_STARTS=[8,10,12,14,16];
+const APPT_DAYS_AHEAD=7;
+const APPT_TIME_PREF_ID=7; // TIME_PREFS entry for a requested window
+// The backend does not receive the requested time yet (GROKBOT_BACKEND_HANDOFF HB-01).
+const HAVEN_REQUESTED_TIME_SHARED_WITH_PROS=false;
+const fmtHour=h=>{const ap=h<12?"AM":"PM";const hh=h%12===0?12:h%12;return `${hh} ${ap}`;};
+const fmtWindow=start=>{const end=start+2;const sameHalf=(start<12)===(end<12)&&end!==12;return sameHalf?`${start%12===0?12:start%12}–${fmtHour(end)}`:`${fmtHour(start)}–${fmtHour(end)}`;};
+const dayKey=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+const dayFromKey=k=>{const [y,m,dd]=String(k).split("-").map(Number);return new Date(y,(m||1)-1,dd||1);};
+const windowOpen=(day,start,now=new Date())=>{const t=new Date(day);t.setHours(start,0,0,0);return t.getTime()>now.getTime();};
+const reqWindowValid=(w,now=new Date())=>!!w&&APPT_WINDOW_STARTS.includes(w.start)&&windowOpen(dayFromKey(w.day),w.start,now);
 
 const JOB_CATS=[...CATS.filter(c=>c!=="All"),"Other"];
 
@@ -301,6 +318,12 @@ export default function App(){
 
   const [tid,setTid]       = useState(null);
   const [tpid,setTpid]     = useState(null);
+  const [reqWindow,setReqWindow] = useState(null); // {day:"YYYY-MM-DD", start:8}
+  const [apptDay,setApptDay] = useState(null);
+  // A requested window that has started (e.g. the screen sat open) is dropped.
+  useEffect(()=>{
+    if(reqWindow&&!reqWindowValid(reqWindow)){ setReqWindow(null); if(tpid===APPT_TIME_PREF_ID) setTpid(null); }
+  });
   const [photos,setPhotos] = useState([]);
   const [desc,setDesc]     = useState("");
   const [emergency,setEmergency] = useState(false);
@@ -974,6 +997,7 @@ export default function App(){
   },[scr,tab]);
 
   const tp          = ALL_TIME_PREFS.find(t=>t.id===tpid);
+  const timeChosen  = !!tpid && (tpid!==APPT_TIME_PREF_ID || reqWindowValid(reqWindow));
   const surge       = tp?.surge||0;
   const browsedTask = TASKS.find(t=>t.id===tid);
   const customTask  = ctitle?{id:null,e:"🔧",n:ctitle,p:parseInt(cprice)||0,t:"Varies",c:ccat}:null;
@@ -1503,7 +1527,9 @@ export default function App(){
       const d=(parsed&&typeof parsed==="object"&&"data" in parsed)?parsed.data:parsed;
       if(!d||typeof d!=="object")return;
       if(d.tid!=null)setTid(d.tid);
-      if(d.tpid!=null)setTpid(d.tpid);
+      // Old drafts may hold a retired window (This morning…): the customer picks again.
+      if(d.tpid===1||d.tpid>=101)setTpid(d.tpid);
+      else if(d.tpid===APPT_TIME_PREF_ID&&reqWindowValid(d.reqWindow)){ setTpid(d.tpid); setReqWindow(d.reqWindow); }
       if(typeof d.ctitle==="string")setCtitle(d.ctitle);
       if(typeof d.ccat==="string")setCcat(d.ccat);
       if(typeof d.cprice==="string")setCprice(d.cprice);
@@ -1519,12 +1545,12 @@ export default function App(){
     try{
       const currentlyDraft = tid!==null || ctitle.trim()!=="";
       if(currentlyDraft){
-        localStorage.setItem("haven_draft",JSON.stringify({__v:1,data:{tid,tpid,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId}}));
+        localStorage.setItem("haven_draft",JSON.stringify({__v:1,data:{tid,tpid,reqWindow,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId}}));
       }else{
         localStorage.removeItem("haven_draft");
       }
     }catch{}
-  },[tid,tpid,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId]);
+  },[tid,tpid,reqWindow,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId]);
   // Bottom-tab-bar tap handler ONLY — every other internal "return to root"
   // call site (goHome/goBookings/goProfile, used as fixed-destination back
   // targets from many screens) still goes through the untouched goTab above,
@@ -1575,13 +1601,14 @@ export default function App(){
     navFn();
   };
   const resetBookingSelections=()=>{
+    setReqWindow(null);setApptDay(null);
     setSelectedAddressId(primaryHome?.id);
     setSelectedCardId((cards.find(c=>c.isDefault)||cards[0])?.id);
     setShowAddressPicker(false);setShowCardPicker(false);
     setLocationPermission("never_requested");setDetectedCity(null);setLocationWarningDismissed(false);
     isPostingRef.current=false; // re-arm the double-submission guard for this fresh draft
   };
-  const openTask   =(id)=>{setTid(id);setTpid(2);setDesc("");setEmergency(false);resetBookingSelections();goTo("task");};
+  const openTask   =(id)=>{setTid(id);setTpid(null);setDesc("");setEmergency(false);resetBookingSelections();goTo("task");};
   const photoInputRef = useRef(null);
   const isPostingRef = useRef(false); // synchronous guard against rapid-double-tap creating duplicate jobs
   const addPhoto   =()=>{ photoInputRef.current?.click(); };
@@ -1748,11 +1775,12 @@ export default function App(){
   };
   const bookDiagnosis=()=>{
     if(!diagResult)return;
-    setTid(diagResult.task.id);setTpid(2);setDesc(diagInput);setEmergency(false);resetBookingSelections();goTo("task");
+    setTid(diagResult.task.id);setTpid(null);setDesc(diagInput);setEmergency(false);resetBookingSelections();goTo("task");
   };
 
   const postJob=async()=>{
     if(!currentTask||!tpid)return;
+    if(tpid===APPT_TIME_PREF_ID&&!reqWindowValid(reqWindow))return;
     if(currentTask.propertyScoped&&effectiveTaskPrice==null)return; // missing property data — never post with a guessed price
     if(isPostingRef.current)return; // already posted this draft — a rapid second tap must not create a duplicate job
     isPostingRef.current=true;
@@ -1772,7 +1800,7 @@ export default function App(){
     const nj=makeJob({
       taskId:tid,
       custom:tid?null:{title:ctitle,cat:ccat,price:parseInt(cprice)||0},
-      tpId:tpid,photos:[...photos],desc,surge,
+      tpId:tpid,reqWindow:tpid===APPT_TIME_PREF_ID&&reqWindowValid(reqWindow)?reqWindow:null,photos:[...photos],desc,surge,
       emergency,emergencyFee:emergency?EMERGENCY_FEE:0,
       addressText:selectedAddress?formatAddress(selectedAddress):"—",addressLabel:selectedAddress?.label||"",
       paymentBrand:selectedCard?.brand||"Card",paymentLast4:selectedCard?.last4||"----",
@@ -2099,7 +2127,7 @@ export default function App(){
             <div style={{fontWeight:700,fontSize:13,color:isDark?"#FDBA74":"#C2410C"}}>Urgent</div>
             <div style={{fontSize:10,color:isDark?"#FDBA74":"#C2410C",opacity:isDark?.75:1,marginTop:1}}>Fast help</div>
           </button>
-          <button onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+          <button onClick={()=>{setTid(null);setTpid(null);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
             style={{font:"inherit",background:SELBG,border:`1.5px solid ${SELBORDER}`,borderRadius:16,padding:"16px 12px",cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center",minHeight:88}}>
             <div style={{fontSize:22,marginBottom:6}}>✏️</div>
             <div style={{fontWeight:700,fontSize:13,color:NT}}>Not Listed?</div>
@@ -2190,7 +2218,7 @@ export default function App(){
                     <div style={{fontWeight:800,fontSize:priceInfo.isEstimate?15:19,color:AMT,flexShrink:0,textAlign:"right"}}>{priceInfo.text}</div>
                   </div>
                 )}
-                <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:0}}>Not what you meant? Post a custom job instead</button>
+                <button onClick={()=>{setTid(null);setTpid(null);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:"none",border:"none",color:TM,fontSize:12,cursor:"pointer",textDecoration:"underline",padding:0}}>Not what you meant? Post a custom job instead</button>
               </div>
             );
           })():intentResult.tier==="medium"?(
@@ -2209,7 +2237,7 @@ export default function App(){
                     </div>
                   );
                 })}
-                <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+                <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(null);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
                   style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
                   <div style={{fontSize:28,marginBottom:8}}>✏️</div>
                   <div style={{fontWeight:700,fontSize:13,color:ON,lineHeight:1.3,marginBottom:4}}>Post a custom job</div>
@@ -2228,7 +2256,7 @@ export default function App(){
                       const task=intent&&TASKS.find(t=>t.id===intent.taskId);
                       if(task){ openTask(task.id); return; }
                     }
-                    setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");
+                    setTid(null);setTpid(null);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");
                   }} style={{width:"100%",textAlign:"left",padding:"13px 16px",borderRadius:12,border:`1px solid ${BD}`,background:BG,color:TX,fontWeight:600,fontSize:14,cursor:"pointer",marginBottom:8}}>{opt.label}</button>
                 ))}
               </div>
@@ -2238,7 +2266,7 @@ export default function App(){
               <div style={{fontSize:48,marginBottom:12}}>🔍</div>
               <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:4}}>No exact matches for "{q}"</div>
               <div style={{fontSize:13,color:TS,lineHeight:1.5,marginBottom:20,maxWidth:260,marginLeft:"auto",marginRight:"auto"}}>Describe what's going on and we'll match you with the right pro.</div>
-              <button onClick={()=>{setTid(null);setTpid(2);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:ON,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
+              <button onClick={()=>{setTid(null);setTpid(null);setDesc(q);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}} style={{background:AM,border:"none",color:ON,padding:"12px 22px",borderRadius:14,fontWeight:700,cursor:"pointer",fontSize:14,marginBottom:10,display:"block",width:"100%"}}>Post a custom job</button>
               <button onClick={()=>{setQ("");clearGroup();setCat("All");}} style={{background:"none",border:"none",color:TS,fontWeight:600,cursor:"pointer",fontSize:13,textDecoration:"underline"}}>Clear filters</button>
             </div>
           )
@@ -2256,7 +2284,7 @@ export default function App(){
               </div>
               );
             })}
-            <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(2);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
+            <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setTid(null);setTpid(null);setDesc("");setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);resetBookingSelections();goTo("custom");}}
               style={{background:N,borderRadius:18,padding:"16px 14px 14px",cursor:"pointer",display:"flex",flexDirection:"column",justifyContent:"center",alignItems:"center",textAlign:"center",minHeight:120}}>
               <div style={{fontSize:28,marginBottom:8}}>✏️</div>
               <div style={{fontWeight:700,fontSize:13,color:ON,lineHeight:1.3,marginBottom:4}}>Post a custom job</div>
@@ -2378,7 +2406,7 @@ export default function App(){
                 <div style={{width:50,height:50,borderRadius:25,background:"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{jt?.e||"🔧"}</div>
                 <div style={{flex:1}}>
                   <div style={{fontWeight:700,fontSize:15,color:TX}}>{jt?.n||"Custom job"}</div>
-                  <div style={{fontSize:13,color:TS,marginTop:2}}>{jtp?jtp.label:"—"} · ${jTotal}</div>
+                  <div style={{fontSize:13,color:TS,marginTop:2}}>{j.reqWindow?<><span style={{fontWeight:700,color:jobTimeConfirmed(j)?SC:AMT}}>{jobTimeConfirmed(j)?"Confirmed":"Requested"}</span> {windowLabel(j.reqWindow)}</>:(jtp?jtp.label:"—")} · ${jTotal}</div>
                   {j.desc&&<div style={{fontSize:12,color:TM,marginTop:3,lineHeight:1.4,fontStyle:"italic"}}>"{j.desc.slice(0,55)}{j.desc.length>55?"…":""}"</div>}
                 </div>
                 <span style={{color:TM,fontSize:20,flexShrink:0}}>›</span>
@@ -2524,6 +2552,58 @@ export default function App(){
           })}
         </div>
         {selected&&<div style={{fontSize:12,color:isEmergency?"#C2410C":TM}}>{selected.sub}</div>}
+      </div>
+    );
+  };
+  // ── Appointment time: ASAP or a specific two-hour window ────────────────
+  const apptDays=()=>{ const now=new Date(); return Array.from({length:APPT_DAYS_AHEAD},(_,i)=>{ const d=new Date(now); d.setHours(0,0,0,0); d.setDate(d.getDate()+i); return d; }); };
+  const dayName=(d,i)=>i===0?"Today":i===1?"Tomorrow":d.toLocaleDateString("en-US",{weekday:"short"});
+  const longDay=key=>{ const d=dayFromKey(key); const t=new Date(); t.setHours(0,0,0,0); const diff=Math.round((d-t)/86400000); return diff===0?"Today":diff===1?"Tomorrow":d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}); };
+  const windowLabel=w=>w?`${longDay(w.day)} · ${fmtWindow(w.start)}`:"";
+  // "Requested" until a real backend confirmation exists (never today: HB-01).
+  const jobTimeConfirmed=j=>!!(j&&j.confirmedWindow);
+  const pickAsap=()=>{ setReqWindow(null); setTpid(1); };
+  const pickWindow=(day,start)=>{ setReqWindow({day,start}); setTpid(APPT_TIME_PREF_ID); };
+  const apptPicker=()=>{
+    const now=new Date(); const days=apptDays();
+    const openStarts=d=>APPT_WINDOW_STARTS.filter(h=>windowOpen(d,h,now));
+    const firstOpen=days.find(d=>openStarts(d).length>0)||days[1];
+    const selDay=apptDay||(reqWindow&&reqWindow.day)||dayKey(firstOpen);
+    const dayObj=days.find(d=>dayKey(d)===selDay)||firstOpen;
+    const asapOn=tpid===1&&!reqWindow;
+    return(
+      <div style={{marginBottom:16}}>
+        <button type="button" aria-pressed={asapOn} onClick={pickAsap} style={{all:"unset",boxSizing:"border-box",width:"100%",display:"flex",alignItems:"center",gap:10,padding:"12px 14px",borderRadius:14,border:`1.5px solid ${asapOn?CHIP_ON_EDGE:BD}`,background:asapOn?CHIP_ON:W,cursor:"pointer",marginBottom:12}}>
+          <span style={{fontSize:18}}>⚡</span>
+          <span style={{flex:1}}>
+            <span style={{display:"block",fontWeight:800,fontSize:14,color:asapOn?ON:TX}}>As soon as possible</span>
+            <span style={{display:"block",fontSize:12,color:asapOn?"rgba(255,255,255,.8)":TS,marginTop:2}}>The first available Pro accepts it</span>
+          </span>
+          <span style={{fontSize:12,fontWeight:800,color:asapOn?"#FFE8B0":"#D97706"}}>+${TIME_PREFS.find(p=>p.id===1).surge}</span>
+        </button>
+        <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",margin:"4px 0 8px"}}>Or request a preferred time</div>
+        <div role="group" aria-label="Day" className="sc" style={{display:"flex",gap:8,overflowX:"auto",margin:"0 -20px 10px",padding:"0 20px 2px"}}>
+          {days.map((d,i)=>{
+            const k=dayKey(d), off=openStarts(d).length===0, on=k===dayKey(dayObj);
+            return(
+              <button key={k} type="button" disabled={off} aria-pressed={on} aria-label={`${dayName(d,i)}, ${d.toLocaleDateString("en-US",{month:"long",day:"numeric"})}${off?", no times left":""}`} onClick={()=>setApptDay(k)} style={{flex:"0 0 auto",minWidth:62,padding:"8px 10px",borderRadius:14,border:`1.5px solid ${on?CHIP_ON_EDGE:BD}`,background:on?CHIP_ON:W,cursor:off?"default":"pointer",opacity:off?.45:1,textAlign:"center"}}>
+                <div style={{fontSize:12,fontWeight:800,color:on?ON:TX}}>{dayName(d,i)}</div>
+                <div style={{fontSize:11,color:on?"rgba(255,255,255,.8)":TS,marginTop:1}}>{off?"No times left":d.toLocaleDateString("en-US",{month:"short",day:"numeric"})}</div>
+              </button>
+            );
+          })}
+        </div>
+        <div role="group" aria-label="Arrival window" style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8}}>
+          {openStarts(dayObj).map(h=>{
+            const on=!!reqWindow&&reqWindow.day===dayKey(dayObj)&&reqWindow.start===h;
+            return <button key={h} type="button" aria-pressed={on} onClick={()=>pickWindow(dayKey(dayObj),h)} style={{padding:"12px 8px",borderRadius:12,border:`1.5px solid ${on?CHIP_ON_EDGE:BD}`,background:on?CHIP_ON:W,color:on?ON:TX,fontWeight:700,fontSize:14,cursor:"pointer"}}>{fmtWindow(h)}</button>;
+          })}
+        </div>
+        {reqWindow&&(
+          <div style={{fontSize:12,color:TS,lineHeight:1.5,marginTop:10}}>
+            <b style={{color:TX}}>Requested:</b> {windowLabel(reqWindow)}. This is your preferred window, not a guaranteed arrival time. {HAVEN_REQUESTED_TIME_SHARED_WITH_PROS?"Your Pro confirms the time when they accept.":"Sharing requested times with Pros is coming soon, so a Pro won't see this time yet."}
+          </div>
+        )}
       </div>
     );
   };
@@ -4241,7 +4321,7 @@ export default function App(){
 
             <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:8}}>{emergency?"Emergency timing":"When do you need it?"}</div>
             {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10}}>Urgent issues, handled within 6 hours.</div>}
-            {timeChips(emergency?EMERGENCY_TIME_PREFS:TIME_PREFS,emergency)}
+            {emergency?timeChips(EMERGENCY_TIME_PREFS,true):apptPicker()}
 
             {photoRow()}
 
@@ -4254,8 +4334,8 @@ export default function App(){
           </div>
         </div>
         <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
-          <button onClick={postJob} disabled={!selectedAddress||effectiveTaskPrice==null} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:(selectedAddress&&effectiveTaskPrice!=null)?AM:"#DDD9D2",color:(selectedAddress&&effectiveTaskPrice!=null)?ON:TM,fontWeight:800,fontSize:17,cursor:(selectedAddress&&effectiveTaskPrice!=null)?"pointer":"default",boxShadow:(selectedAddress&&effectiveTaskPrice!=null)?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
-            {!selectedAddress?"Add an address to continue":effectiveTaskPrice==null?"Add property details to continue":`Post Job — $${total}`}
+          <button onClick={postJob} disabled={!selectedAddress||effectiveTaskPrice==null||!timeChosen} style={{width:"100%",padding:18,borderRadius:18,border:"none",background:(selectedAddress&&effectiveTaskPrice!=null&&timeChosen)?AM:"#DDD9D2",color:(selectedAddress&&effectiveTaskPrice!=null&&timeChosen)?ON:TM,fontWeight:800,fontSize:17,cursor:(selectedAddress&&effectiveTaskPrice!=null)?"pointer":"default",boxShadow:(selectedAddress&&effectiveTaskPrice!=null)?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
+            {!selectedAddress?"Add an address to continue":effectiveTaskPrice==null?"Add property details to continue":!timeChosen?"Pick a time to continue":`Post Job — $${total}`}
           </button>
         </div>
       </div>
@@ -4264,7 +4344,7 @@ export default function App(){
 
   // ── CUSTOM JOB ─────────────────────────────────────────────────────────────
   const customScreen=()=>{
-    const canPost = ctitle.trim() && cprice && selectedAddress;
+    const canPost = ctitle.trim() && cprice && selectedAddress && timeChosen;
     return(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden"}}>
       <div className="sc" style={{flex:1,overflowY:"auto",background:BG}}>
@@ -4302,7 +4382,7 @@ export default function App(){
 
           <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:8}}>{emergency?"Emergency timing":"When do you need it?"}</div>
           {emergency&&<div style={{fontSize:12,color:"#C2410C",marginBottom:10}}>Urgent issues, handled within 6 hours.</div>}
-          {timeChips(emergency?EMERGENCY_TIME_PREFS:TIME_PREFS,emergency)}
+          {emergency?timeChips(EMERGENCY_TIME_PREFS,true):apptPicker()}
 
           {photoRow()}
 
@@ -4317,7 +4397,7 @@ export default function App(){
       <div style={{flexShrink:0,padding:"14px 20px 22px",background:W,borderTop:`1px solid ${BD}`}}>
         <button onClick={postJob} disabled={!canPost}
           style={{width:"100%",padding:18,borderRadius:18,border:"none",background:canPost?AM:"#DDD9D2",color:canPost?ON:TM,fontWeight:800,fontSize:17,cursor:canPost?"pointer":"default",boxShadow:canPost?`0 6px 20px rgba(245,158,11,.35)`:"none"}}>
-          {canPost?`Post Job — $${total}`:!selectedAddress?"Add an address to continue":"Add a title & budget to continue"}
+          {canPost?`Post Job — $${total}`:!selectedAddress?"Add an address to continue":!(ctitle.trim()&&cprice)?"Add a title & budget to continue":"Pick a time to continue"}
         </button>
       </div>
     </div>
@@ -4346,7 +4426,7 @@ export default function App(){
               <div style={{width:52,height:52,borderRadius:26,background:"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0}}>{vjTask?vjTask.e:"🔧"}</div>
               <div><div style={{fontWeight:700,fontSize:16,color:TX}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontWeight:800,fontSize:20,color:AMT,marginTop:2}}>${vjTotal}</div></div>
             </div>
-            {[["When",vjTp?vjTp.label:"—"],["Window",vjTp?vjTp.sub:"—"],["Photos",vj.photos?.length>0?`${vj.photos.length} added`:"None"]].map(([l,v])=>(
+            {[["When",vj.reqWindow?(jobTimeConfirmed(vj)?"Confirmed":"Requested"):(vjTp?vjTp.label:"—")],["Window",vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.sub:"—")],["Photos",vj.photos?.length>0?`${vj.photos.length} added`:"None"]].map(([l,v])=>(
               <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:TX}}>{v}</span></div>
             ))}
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5,fontStyle:"italic"}}>"{vj.desc}"</div></div>}
@@ -4534,7 +4614,7 @@ export default function App(){
               <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Booking Summary</span>
               {vj.emergency&&<span style={{fontSize:11,fontWeight:700,color:"#C2410C",background:"#FFF1EE",padding:"4px 10px",borderRadius:20}}>🚨 Emergency priority</span>}
             </div>
-            {[["Service",vjTask?vjTask.n:"Custom job"],["Time",vjTp?vjTp.label:"—"],["Photos",vj.photos?.length>0?`${vj.photos.length} shared`:"None"],
+            {[["Service",vjTask?vjTask.n:"Custom job"],["Time",vj.reqWindow?`${jobTimeConfirmed(vj)?"Confirmed":"Requested"}: ${windowLabel(vj.reqWindow)}`:(vjTp?vjTp.label:"—")],["Photos",vj.photos?.length>0?`${vj.photos.length} shared`:"None"],
               ...(vjReceipt&&vjReceipt.priorityFeeCents>0?[["Emergency fee",`+${receiptMoney(vjReceipt.priorityFeeCents)}`]]:[]),
               ...(vjReceipt?[["Total",receiptMoney(vjReceipt.totalCents)]]:[])].map(([l,v])=>(
               <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:l==="Total"?AMT:TX}}>{v}</span></div>
@@ -4823,7 +4903,7 @@ export default function App(){
         </div>
         <div style={{background:"#FEF3C7",borderBottom:`1px solid ${BD}`,padding:"10px 20px",display:"flex",gap:10,alignItems:"center",flexShrink:0}}>
           <span style={{fontSize:18}}>{vjTask?vjTask.e:"🔧"}</span>
-          <div><div style={{fontSize:12,fontWeight:700,color:"#92400E"}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontSize:11,color:TS}}>{vjTp?vjTp.label:"—"} · ${vjTotal}</div></div>
+          <div><div style={{fontSize:12,fontWeight:700,color:"#92400E"}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontSize:11,color:TS}}>{vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.label:"—")} · ${vjTotal}</div></div>
         </div>
         {locked&&<div style={{background:"#FFF1F2",borderBottom:"1px solid #FCC",padding:"10px 20px",textAlign:"center",flexShrink:0}}><span style={{fontSize:12,color:"#E11D48",fontWeight:600}}>🔒 Chat closed — job completed successfully.</span></div>}
         <div className="sc" role="log" aria-live="polite" aria-label="Conversation messages" style={{flex:1,overflowY:"auto",padding:"16px 20px"}}>
