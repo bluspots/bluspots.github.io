@@ -2,12 +2,12 @@
   "name": "haven-customer-app",
   "version": "0.1.0",
   "private": true,
-  "description": "Haven — home services marketplace customer app. Single-file React PWA prototype (home_services_app.jsx), compiled in-browser via Babel Standalone, no bundler. These devDependencies are for the local audit test suite only — the shipped app itself loads React/ReactDOM/Babel/jsPDF from CDN (see _shell_pre.txt), not from node_modules.",
+  "description": "Haven \u2014 home services marketplace customer app. Single-file React PWA prototype (home_services_app.jsx), compiled in-browser via Babel Standalone, no bundler. These devDependencies are for the local audit test suite only \u2014 the shipped app itself loads React/ReactDOM/Babel/jsPDF from CDN (see _shell_pre.txt), not from node_modules.",
   "scripts": {
     "build": "bash build.sh",
     "test": "node audit.test.js && node verification_claims.test.js && node dark_mode_contrast.test.js",
     "boot-check": "node boot_check.js",
-    "verify": "npm run build && npm run boot-check && npm test && node signout_confirmation.test.js && node scroll_restore.test.js && node edge_swipe_touch.test.js && node fullscreen_layout.test.js && node tappable_a11y.test.js && node profile_name.test.js && node star_rating.test.js && node audit_fixes.test.js && node statusbar_tap.test.js && node duration_estimates.test.js && node dark_selected_chips.test.js && node splash.test.js && node myhome_properties.test.js && node time_windows.test.js && node launch_images.test.js && node authentic_job_details.test.js && node production_build.test.js && node tools/compiled_suite.js"
+    "verify": "npm run build && npm run boot-check && npm test && node signout_confirmation.test.js && node scroll_restore.test.js && node edge_swipe_touch.test.js && node fullscreen_layout.test.js && node tappable_a11y.test.js && node profile_name.test.js && node star_rating.test.js && node audit_fixes.test.js && node statusbar_tap.test.js && node duration_estimates.test.js && node dark_selected_chips.test.js && node splash.test.js && node myhome_properties.test.js && node time_windows.test.js && node launch_images.test.js && node payments_unavailable.test.js && node authentic_job_details.test.js && node production_build.test.js && node tools/compiled_suite.js"
   },
   "devDependencies": {
     "@babel/core": "8.0.1",

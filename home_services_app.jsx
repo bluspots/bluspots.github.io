@@ -197,10 +197,19 @@ const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
 // "Reset Prototype Data". Cards only ever hold safe prototype display
 // fields (brand, last four digits, expiration, default flag) — never a
 // full card number, CVV, or any real payment credential.
-const DEFAULT_CARDS=[
-  {id:1,brand:"Visa",last4:"4242",exp:"08/28",isDefault:true},
-  {id:2,brand:"Mastercard",last4:"8821",exp:"02/27",isDefault:false},
+// Payments aren't connected to a provider yet (HB-07): Haven doesn't charge,
+// store or verify cards. Until it does, the app shows payments as not
+// available, never lists a card as a payment method, and never sends card
+// details on a job.
+const HAVEN_PAYMENTS_AVAILABLE=false;
+// The two sample cards earlier builds put on every new device. Only an exact,
+// unedited match is removed from a device; anything else stays stored as is.
+const SAMPLE_CARDS=[
+  {id:1,brand:"Visa",last4:"4242",exp:"08/28"},
+  {id:2,brand:"Mastercard",last4:"8821",exp:"02/27"},
 ];
+const isSampleCard=c=>SAMPLE_CARDS.some(x=>x.id===c.id&&x.brand===c.brand&&x.last4===c.last4&&x.exp===c.exp);
+const DEFAULT_CARDS=[];
 const DEFAULT_ADDRESSES=[
   {id:1,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
   {id:2,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
@@ -830,7 +839,8 @@ export default function App(){
           last4:typeof c.last4==="string"?c.last4:"----",
           exp:typeof c.exp==="string"?c.exp:"",
           isDefault:!!c.isDefault,
-        }));
+        }))
+        .filter(c=>!isSampleCard(c));
       if(cleaned.length===0)return cleaned;
       const defaults=cleaned.filter(c=>c.isDefault);
       if(defaults.length>1){
@@ -843,14 +853,6 @@ export default function App(){
     },
   });
   const [expandedCard,setExpandedCard]=useState(null);
-  const [addingCard,setAddingCard]=useState(false);
-  const [newCardNum,setNewCardNum]=useState("");
-  const [newCardExp,setNewCardExp]=useState("");
-  const [newCardCvv,setNewCardCvv]=useState("");
-  const [newCardAddr,setNewCardAddr]=useState("");
-  const [newCardCity,setNewCardCity]=useState("");
-  const [newCardState,setNewCardState]=useState("");
-  const [newCardZip,setNewCardZip]=useState("");
   // Addresses — canonical property/address model. Exactly one entry has
   // isPrimary:true; that entry IS "My Home" (no separate home/draftHome
   // state exists anymore — My Home reads/writes this same array so the two
@@ -1729,14 +1731,6 @@ export default function App(){
   // Payment methods
   const setCardDefault=id=>{setCards(cs=>cs.map(c=>({...c,isDefault:c.id===id})));setExpandedCard(null);};
   const removeCard=id=>{setCards(cs=>cs.filter(c=>c.id!==id));setExpandedCard(null);};
-  const addCard=()=>{
-    if(newCardNum.trim().length<4)return;
-    const last4=newCardNum.trim().slice(-4);
-    // Only brand, last 4, expiry, and default status are ever persisted —
-    // CVV and billing address are used for this prototype form only and discarded.
-    setCards(cs=>[...cs,{id:Date.now(),brand:"Card",last4,exp:newCardExp.trim()||"—",isDefault:cs.length===0}]);
-    setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");setAddingCard(false);
-  };
 
   // Addresses
   const removeAddr=id=>{
@@ -1808,7 +1802,8 @@ export default function App(){
       tpId:tpid,reqWindow:tpid===APPT_TIME_PREF_ID&&reqWindowValid(reqWindow)?reqWindow:null,photos:[...photos],desc,surge,
       emergency,emergencyFee:emergency?EMERGENCY_FEE:0,
       addressText:selectedAddress?formatAddress(selectedAddress):"—",addressLabel:selectedAddress?.label||"",
-      paymentBrand:selectedCard?.brand||"Card",paymentLast4:selectedCard?.last4||"----",
+      // No payment provider yet: the job carries the existing "no card" placeholder, never a card.
+      paymentBrand:HAVEN_PAYMENTS_AVAILABLE?(selectedCard?.brand||"Card"):"Card",paymentLast4:HAVEN_PAYMENTS_AVAILABLE?(selectedCard?.last4||"----"):"----",
       jobPreferences:jobPrefs.filter(p=>p.enabled).map(p=>p.label),
       lockedPrice:tid?effectiveTaskPrice:null, // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
       requiresDiagnosis:requiresDiagnosisLocal,
@@ -2661,11 +2656,11 @@ export default function App(){
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
           <span style={{fontSize:16}}>💳</span>
-          <span style={{fontSize:13,color:TX,fontWeight:600}}>{selectedCard?`${selectedCard.brand} •••• ${selectedCard.last4}`:"No card saved"}</span>
+          <span style={{fontSize:13,color:HAVEN_PAYMENTS_AVAILABLE?TX:TS,fontWeight:600}}>{!HAVEN_PAYMENTS_AVAILABLE?"Payment isn't collected in the app yet":selectedCard?`${selectedCard.brand} •••• ${selectedCard.last4}`:"No card saved"}</span>
         </div>
-        {cards.length>1&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setShowCardPicker(v=>!v);setShowAddressPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Change</span>}
+        {HAVEN_PAYMENTS_AVAILABLE&&cards.length>1&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setShowCardPicker(v=>!v);setShowAddressPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Change</span>}
       </div>
-      {showCardPicker&&(
+      {HAVEN_PAYMENTS_AVAILABLE&&showCardPicker&&(
         <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
           {cards.map(c=>(
             <div role="button" tabIndex={0} onKeyDown={keyActivate} key={c.id} onClick={()=>{setSelectedCardId(c.id);setShowCardPicker(false);}}
@@ -3827,7 +3822,16 @@ export default function App(){
 
   // ── PAYMENT METHODS ───────────────────────────────────────────────────────
   const cardColors={Visa:N,Mastercard:"#C2410C",Card:"#5B21B6"};
-  const paymentScreen=()=>(
+  const paymentScreen=()=>!HAVEN_PAYMENTS_AVAILABLE?(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Payment methods",()=>backFrom("payment",{scr:"home",tab:"profile"}))}
+      <div role="status" className="sc" style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
+        <div style={{fontSize:32,marginBottom:12}}>💳</div>
+        <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:6}}>Payments aren't available yet</div>
+        <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:300}}>Haven doesn't take card payments in the app yet, so there's nothing to add here and you won't be charged through the app.</div>
+      </div>
+    </div>
+  ):(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       {subHeader("Payment methods",()=>backFrom("payment",{scr:"home",tab:"profile"}))}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
@@ -3855,49 +3859,10 @@ export default function App(){
             </div>
           );
         })}
-        {addingCard?(
-          <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Card number</div>
-            <input value={newCardNum} onChange={e=>setNewCardNum(e.target.value.replace(/\D/g,"").slice(0,16))} placeholder="1234 5678 9012 3456" inputMode="numeric"
-              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,marginBottom:12,outline:"none"}}/>
-
-            <div style={{display:"flex",gap:10,marginBottom:12}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Expiry</div>
-                <input value={newCardExp} onChange={e=>setNewCardExp(e.target.value)} placeholder="MM/YY"
-                  style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,outline:"none"}}/>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>CVV</div>
-                <input value={newCardCvv} onChange={e=>setNewCardCvv(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="123" inputMode="numeric"
-                  style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,outline:"none"}}/>
-              </div>
-            </div>
-
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Billing address</div>
-            <input value={newCardAddr} onChange={e=>setNewCardAddr(e.target.value)} placeholder="Street address"
-              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,marginBottom:10,outline:"none"}}/>
-            <div style={{display:"flex",gap:8,marginBottom:14}}>
-              <input value={newCardCity} onChange={e=>setNewCardCity(e.target.value)} placeholder="City"
-                style={{flex:2,minWidth:0,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 10px",fontSize:13,color:TX,outline:"none"}}/>
-              <input value={newCardState} onChange={e=>setNewCardState(e.target.value.slice(0,2).toUpperCase())} placeholder="ST"
-                style={{width:52,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 8px",fontSize:13,color:TX,outline:"none",textAlign:"center"}}/>
-              <input value={newCardZip} onChange={e=>setNewCardZip(e.target.value.replace(/\D/g,"").slice(0,5))} placeholder="ZIP" inputMode="numeric"
-                style={{width:68,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 8px",fontSize:13,color:TX,outline:"none"}}/>
-            </div>
-
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>{setAddingCard(false);setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");}} style={{flex:1,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Cancel</button>
-              <button onClick={addCard} disabled={newCardNum.length<4} style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background:newCardNum.length>=4?AM:"#DDD9D2",color:ON,fontWeight:700,fontSize:13,cursor:newCardNum.length>=4?"pointer":"default"}}>Add card</button>
-            </div>
-          </div>
-        ):(
-          <button onClick={()=>setAddingCard(true)} style={{width:"100%",padding:15,borderRadius:16,border:`1.5px dashed ${BD}`,background:"transparent",color:NT,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:14}}>+ Add payment method</button>
-        )}
-        <div style={{display:"flex",gap:8,alignItems:"flex-start",justifyContent:"center",padding:"0 8px"}}>
-          <span style={{fontSize:13,flexShrink:0}}>🔒</span>
-          <span style={{fontSize:11,color:TM,lineHeight:1.5,textAlign:"center"}}>Payments are securely processed. Your full card information is never displayed.</span>
-        </div>
+        {/* No card-entry form: card numbers and CVVs are never typed into Haven.
+            When payments are connected, cards are added in the payment
+            provider's own secure form (HB-07). */}
+        <div style={{fontSize:12,color:TS,textAlign:"center",lineHeight:1.5,padding:"4px 8px"}}>Cards are added through Haven's payment provider, never typed into the app.</div>
       </div>
     </div>
   );

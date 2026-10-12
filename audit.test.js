@@ -196,6 +196,8 @@ const { render, screen, fireEvent, cleanup, within } = require('@testing-library
 const { act } = require('react-dom/test-utils');
 const babel = require('@babel/core');
 const fs = require('fs');
+// HB-07: card screens exist only once payments are connected.
+const PAYMENTS_ON = /const HAVEN_PAYMENTS_AVAILABLE=true;/.test(fs.readFileSync('home_services_app.jsx', 'utf8'));
 const React = require('react');
 
 let pass = 0, fail = 0;
@@ -1032,7 +1034,9 @@ step('4. Existing systems unaffected — default card, primary property, state d
   click('Mount TV'); click('← Back');
   forceProfileRoot();
   click('Payment Methods');
-  assert(existsRegex('Default'), 'Default card badge still present');
+  // HB-07: payments off -> the screen is the "not available" state, never a card.
+  if (PAYMENTS_ON) assert(existsRegex('Default'), 'Default card badge still present');
+  else assert(existsRegex("Payments aren't available yet") && !existsRegex(/•••• \d{4}/), 'Payment Methods shows payments as not available, with no card');
   click('‹');
   click('Saved Addresses');
   assert(existsRegex(/🏠 Primary/), 'Primary property badge still present');
@@ -1276,7 +1280,8 @@ async function runPersistenceAndCorruptStorageChecks(){
     click('Profile'); click('Saved Addresses');
     assert(existsRegex(/🏠 Primary/), 'Default seed address data (post-reset) survived the remount with a valid Primary');
     click('‹'); click('Payment Methods');
-    assert(existsRegex('Default'), 'Default seed card data (post-reset) survived the remount with a valid Default');
+    if (PAYMENTS_ON) assert(existsRegex('Default'), 'Default seed card data (post-reset) survived the remount with a valid Default');
+    else assert(existsRegex("Payments aren't available yet") && !/4242|8821/.test(storedData['haven_cards']||''), 'After reset no sample card comes back (payments not available)');
 
     act(()=>{ cleanup(); });
   });
@@ -1316,7 +1321,8 @@ async function runPersistenceAndCorruptStorageChecks(){
     click('Profile'); click('Saved Addresses');
     assert(screen.queryAllByText(/🏠 Primary/).length===1, 'Duplicate-primary data resolved to exactly one Primary, deterministically — not left ambiguous or crashing');
     click('‹'); click('Payment Methods');
-    assert(screen.queryAllByText('Default').length===1, 'Duplicate-default data resolved to exactly one Default');
+    if (PAYMENTS_ON) assert(screen.queryAllByText('Default').length===1, 'Duplicate-default data resolved to exactly one Default');
+    else { const cs = JSON.parse(storedData['haven_cards']).data; assert(cs.length===2 && cs.filter(c=>c.isDefault).length===1, 'Duplicate-default card data resolved to exactly one default (checked in storage; payments not available)'); }
     click('‹'); clickTab('Bookings');
     assert(!existsRegex('undefined') && !existsRegex('NaN'), 'Invalid/duplicate/malformed job entries produced no leaked error text in the UI');
     act(()=>{ cleanup(); });
