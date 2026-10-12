@@ -56,6 +56,8 @@ const { render, screen, fireEvent, cleanup } = require('@testing-library/react')
 const { act } = require('react-dom/test-utils');
 const babel = require('@babel/core');
 const fs = require('fs');
+// HB-07: card screens exist only once payments are connected.
+const PAYMENTS_ON = /const HAVEN_PAYMENTS_AVAILABLE=true;/.test(fs.readFileSync('home_services_app.jsx', 'utf8'));
 const React = require('react');
 
 let pass = 0, fail = 0;
@@ -261,10 +263,11 @@ function styleOfText(re) {
     assert(btn && hex(parseColor(btn.style.color)) === '#FFFFFF', 'Settings Sign out button text is white on red');
   });
 
-  await step('Payment methods is readable in dark mode (default card, + Add payment method)', async () => {
+  // HB-07: payments aren't connected, so this screen is the "not available" state.
+  await step('Payment methods is readable in dark mode (payments not available yet)', async () => {
     await clickText(/^Profile$/, 'Profile tab');
     await clickText(/^Payment Methods$/, 'Payment Methods');
-    await waitFor(() => /Add payment method/.test(bodyText()), 'payment methods');
+    await waitFor(() => PAYMENTS_ON ? /Add payment method/.test(bodyText()) : /Payments aren't available yet/.test(bodyText()), 'payment methods');
     checkScreen('Payment methods');
   });
 
@@ -309,10 +312,15 @@ function styleOfText(re) {
     checkScreen('Settings');
     await clickText(/^Profile$/, 'Profile tab');
     await clickText(/^Payment Methods$/, 'Payment Methods');
-    await waitFor(() => /Add payment method/.test(bodyText()), 'payment methods (light)');
+    // HB-07: with payments off there are no card badges to check; the badge
+    // colour check runs again once payments are switched on.
+    const paymentsOn = PAYMENTS_ON;
+    await waitFor(() => paymentsOn ? /Add payment method/.test(bodyText()) : /Payments aren't available yet/.test(bodyText()), 'payment methods (light)');
     checkScreen('Payment methods');
-    const mast = lastByText(/^MAST$/);
-    assert(mast && hex(parseColor(mast.style.backgroundColor)) === '#C2410C', 'Mastercard badge uses the deeper orange');
+    if (paymentsOn) {
+      const mast = lastByText(/^MAST$/);
+      assert(mast && hex(parseColor(mast.style.backgroundColor)) === '#C2410C', 'Mastercard badge uses the deeper orange');
+    }
     await clickText(/^Profile$/, 'Profile tab');
     await clickText(/^Saved Addresses$/, 'Saved Addresses');
     await waitFor(() => /Add address/.test(bodyText()), 'saved addresses (light)');

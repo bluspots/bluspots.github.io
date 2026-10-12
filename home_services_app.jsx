@@ -194,10 +194,19 @@ const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
 // "Reset Prototype Data". Cards only ever hold safe prototype display
 // fields (brand, last four digits, expiration, default flag) — never a
 // full card number, CVV, or any real payment credential.
-const DEFAULT_CARDS=[
-  {id:1,brand:"Visa",last4:"4242",exp:"08/28",isDefault:true},
-  {id:2,brand:"Mastercard",last4:"8821",exp:"02/27",isDefault:false},
+// Payments aren't connected to a provider yet (HB-07): Haven doesn't charge,
+// store or verify cards. Until it does, the app shows payments as not
+// available, never lists a card as a payment method, and never sends card
+// details on a job.
+const HAVEN_PAYMENTS_AVAILABLE=false;
+// The two sample cards earlier builds put on every new device. Only an exact,
+// unedited match is removed from a device; anything else stays stored as is.
+const SAMPLE_CARDS=[
+  {id:1,brand:"Visa",last4:"4242",exp:"08/28"},
+  {id:2,brand:"Mastercard",last4:"8821",exp:"02/27"},
 ];
+const isSampleCard=c=>SAMPLE_CARDS.some(x=>x.id===c.id&&x.brand===c.brand&&x.last4===c.last4&&x.exp===c.exp);
+const DEFAULT_CARDS=[];
 const DEFAULT_ADDRESSES=[
   {id:1,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
   {id:2,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
@@ -827,7 +836,8 @@ export default function App(){
           last4:typeof c.last4==="string"?c.last4:"----",
           exp:typeof c.exp==="string"?c.exp:"",
           isDefault:!!c.isDefault,
-        }));
+        }))
+        .filter(c=>!isSampleCard(c));
       if(cleaned.length===0)return cleaned;
       const defaults=cleaned.filter(c=>c.isDefault);
       if(defaults.length>1){
@@ -1803,7 +1813,8 @@ export default function App(){
       tpId:tpid,reqWindow:tpid===APPT_TIME_PREF_ID&&reqWindowValid(reqWindow)?reqWindow:null,photos:[...photos],desc,surge,
       emergency,emergencyFee:emergency?EMERGENCY_FEE:0,
       addressText:selectedAddress?formatAddress(selectedAddress):"—",addressLabel:selectedAddress?.label||"",
-      paymentBrand:selectedCard?.brand||"Card",paymentLast4:selectedCard?.last4||"----",
+      // No payment provider yet: the job carries the existing "no card" placeholder, never a card.
+      paymentBrand:HAVEN_PAYMENTS_AVAILABLE?(selectedCard?.brand||"Card"):"Card",paymentLast4:HAVEN_PAYMENTS_AVAILABLE?(selectedCard?.last4||"----"):"----",
       jobPreferences:jobPrefs.filter(p=>p.enabled).map(p=>p.label),
       lockedPrice:tid?effectiveTaskPrice:null, // catalog tasks lock in the (possibly property-aware) price; custom jobs already store their own price on custom.price
       requiresDiagnosis:requiresDiagnosisLocal,
@@ -2655,11 +2666,11 @@ export default function App(){
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center"}}>
         <div style={{display:"flex",gap:10,alignItems:"center"}}>
           <span style={{fontSize:16}}>💳</span>
-          <span style={{fontSize:13,color:TX,fontWeight:600}}>{selectedCard?`${selectedCard.brand} •••• ${selectedCard.last4}`:"No card saved"}</span>
+          <span style={{fontSize:13,color:HAVEN_PAYMENTS_AVAILABLE?TX:TS,fontWeight:600}}>{!HAVEN_PAYMENTS_AVAILABLE?"Payment isn't collected in the app yet":selectedCard?`${selectedCard.brand} •••• ${selectedCard.last4}`:"No card saved"}</span>
         </div>
-        {cards.length>1&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setShowCardPicker(v=>!v);setShowAddressPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Change</span>}
+        {HAVEN_PAYMENTS_AVAILABLE&&cards.length>1&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={()=>{setShowCardPicker(v=>!v);setShowAddressPicker(false);}} style={{fontSize:12,color:NT,fontWeight:700,cursor:"pointer"}}>Change</span>}
       </div>
-      {showCardPicker&&(
+      {HAVEN_PAYMENTS_AVAILABLE&&showCardPicker&&(
         <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
           {cards.map(c=>(
             <div role="button" tabIndex={0} onKeyDown={keyActivate} key={c.id} onClick={()=>{setSelectedCardId(c.id);setShowCardPicker(false);}}
@@ -3821,7 +3832,16 @@ export default function App(){
 
   // ── PAYMENT METHODS ───────────────────────────────────────────────────────
   const cardColors={Visa:N,Mastercard:"#C2410C",Card:"#5B21B6"};
-  const paymentScreen=()=>(
+  const paymentScreen=()=>!HAVEN_PAYMENTS_AVAILABLE?(
+    <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+      {subHeader("Payment methods",()=>backFrom("payment",{scr:"home",tab:"profile"}))}
+      <div role="status" className="sc" style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
+        <div style={{fontSize:32,marginBottom:12}}>💳</div>
+        <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:6}}>Payments aren't available yet</div>
+        <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:300}}>Haven doesn't take card payments in the app yet, so there's nothing to add here and you won't be charged through the app.</div>
+      </div>
+    </div>
+  ):(
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       {subHeader("Payment methods",()=>backFrom("payment",{scr:"home",tab:"profile"}))}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
