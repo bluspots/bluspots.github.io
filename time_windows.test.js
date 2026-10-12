@@ -164,6 +164,7 @@ async function openBooking(hh, mm) { setClock(hh, mm); await mount(); await clic
   assert(windowGroup().querySelectorAll('button')[1].getAttribute('aria-pressed') === 'true', 'the chosen window is marked selected');
   assert(/Requested: Tomorrow · 10 AM–12 PM/.test(bodyText()), 'the pick reads "Requested: Tomorrow · 10 AM–12 PM"');
   assert(/a Pro won't see this time yet/.test(bodyText()) && !/Pro confirms the time/.test(bodyText()), 'says plainly that Pros cannot see the time yet (backend pending)');
+  assert(/preferred window, not a guaranteed arrival time/.test(bodyText()) && /Or request a preferred time/.test(bodyText()), 'makes clear it is a preferred window, not a guaranteed arrival time');
   assert(!postBtn().disabled && /Post Job/.test(postBtn().textContent), 'Post is ready once a time is chosen');
   await click(buttons().find(b => /As soon as possible/.test(b.textContent)), 'ASAP');
   assert(!/Requested:/.test(bodyText()) && buttons().find(b => /As soon as possible/.test(b.textContent)).getAttribute('aria-pressed') === 'true', 'ASAP replaces the requested window');

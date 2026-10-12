@@ -2781,6 +2781,8 @@ async function runReceiptTotalsChecks(){
     tipAmount: 20, tipStatus: 'paid',
     materials: [{ description: 'Local demo part', qty: 1, amount: 99 }],
     paymentBrand: 'Visa', paymentLast4: '4242',
+    // My Home lists a job under the home whose address it was booked to (#60).
+    addressText: '123 Market Street, Apt 4B, San Francisco, CA 94103', addressLabel: 'Home',
     ...fields,
   });
   const mountCompleted = async (job, { backend = true } = {}) => {
