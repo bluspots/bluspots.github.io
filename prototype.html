@@ -2140,10 +2140,26 @@ const SAMPLE_CARDS=[
 ];
 const isSampleCard=c=>SAMPLE_CARDS.some(x=>x.id===c.id&&x.brand===c.brand&&x.last4===c.last4&&x.exp===c.exp);
 const DEFAULT_CARDS=[];
-const DEFAULT_ADDRESSES=[
-  {id:1,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
-  {id:2,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
+// The two sample addresses earlier builds put on every new device (MAP-03).
+// New devices start with none. On an existing device a sample is removed only
+// while it is still exactly the sample: same id and every field unchanged, no
+// map confirmation, and no job saved at that address (jobs link to a property
+// by its address text, so removing it would detach that history). Anything
+// else stays stored as is.
+const SAMPLE_ADDRESSES=[
+  {id:1,label:"Home",street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
+  {id:2,label:"Work",street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
 ];
+const SAMPLE_ADDRESS_FIELDS=["label","street","unit","city","state","zip","accessNotes","propertyType","yearBuilt","sqft","beds","baths"];
+const addressLine=a=>`${a.street}${a.unit?", "+a.unit:""}, ${a.city}, ${a.state} ${a.zip}`;
+const isUntouchedSampleAddress=(a,jobs)=>{
+  const s=SAMPLE_ADDRESSES.find(x=>x.id===a.id);
+  if(!s||a.geo) return false;
+  if(!SAMPLE_ADDRESS_FIELDS.every(f=>(a[f]||"")===s[f])) return false;
+  const line=addressLine(s);
+  return !(Array.isArray(jobs)&&jobs.some(j=>j&&j.addressText===line));
+};
+const DEFAULT_ADDRESSES=[];
 
  
 
@@ -2805,6 +2821,9 @@ function App(){
             ?{lat:a.geo.lat,lng:a.geo.lng,accuracy:typeof a.geo.accuracy==="string"?a.geo.accuracy:"unknown",mapboxId:a.geo.mapboxId||null,source:"mapbox",confirmedAt:a.geo.confirmedAt||null}
             :null,
         }));
+      // MAP-03: drop the old untouched sample addresses (see SAMPLE_ADDRESSES).
+      const kept=cleaned.filter(a=>!isUntouchedSampleAddress(a,jobs));
+      if(kept.length!==cleaned.length){ cleaned.length=0; cleaned.push(...kept); }
       if(cleaned.length===0)return cleaned; // zero properties is valid — booking will require adding one
       const primaries=cleaned.filter(a=>a.isPrimary);
       if(primaries.length>1){
@@ -5970,6 +5989,12 @@ function App(){
     <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
       {subHeader("Saved addresses",()=>backFrom("addresses",{scr:"home",tab:"profile"}))}
       <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
+        {sortedAddresses.length===0&&(
+          <div role="status" style={{background:W,borderRadius:18,padding:"18px 16px",marginBottom:12,textAlign:"center",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+            <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:4}}>No saved addresses yet</div>
+            <div style={{fontSize:13,color:TS,lineHeight:1.5}}>Add the address where you need work done. You'll confirm it on a map.</div>
+          </div>
+        )}
         {sortedAddresses.map(a=>{
           const open=expandedAddr===a.id;
           return(

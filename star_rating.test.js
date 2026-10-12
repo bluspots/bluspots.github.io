@@ -106,7 +106,15 @@ global.supabase = global.window.supabase = {
   }),
 };
 
+// The customer's own saved addresses for these tests. Builds before MAP-03
+// created two sample addresses on every device; the app no longer does, so
+// the tests seed the addresses they use (customer-created ids, not 1/2).
+const TEST_SAVED_ADDRESSES=[
+  {id:1700000000101,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
+  {id:1700000000102,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
+];
 function seedExtra() {
+  storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: TEST_SAVED_ADDRESSES.map(a => ({ ...a })) });
   const now = Date.now();
   storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [
     { status: 'complete', taskId: 1, tpId: 2, lockedPrice: 65, acceptedAt: now - 7200000, completedAt: now - 3600000, id: now - 3600000,
