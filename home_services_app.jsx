@@ -4520,7 +4520,16 @@ export default function App(){
         <div className="sc" style={{flex:1,overflowY:"auto"}}>
           <div style={{margin:"14px 20px 0",background:W,borderRadius:20,padding:"16px 18px",boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:14,alignItems:"center"}}>
             <div style={{width:52,height:52,borderRadius:26,background:emBg,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{info.em}</div>
-            <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{info.label}</div><div style={{fontSize:13,color:TS}}>{vjPname} {info.sub}</div></div>
+            {(()=>{
+              // Materials requested: the line is about the customer's action, not the
+              // Pro's ("Grace review and approve" read wrong), and an approval is only
+              // asked for once the Pro's list has actually arrived (HB-09).
+              const matReq=vj.status==="materials_requested";
+              const hasList=!!(vj.materialsRequest&&Array.isArray(vj.materialsRequest.items)&&vj.materialsRequest.items.length);
+              const label=matReq&&!hasList?"Materials requested":info.label;
+              const sub=matReq?(hasList?"Review and approve the list below":"Waiting for your Pro's list"):`${vjPname} ${info.sub}`;
+              return <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{label}</div><div style={{fontSize:13,color:TS}}>{sub}</div></div>;
+            })()}
           </div>
           <div style={{margin:"12px 20px",borderRadius:20,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>{trackMap()}</div>
           {/* Materials approval card — shown only while awaiting customer decision */}

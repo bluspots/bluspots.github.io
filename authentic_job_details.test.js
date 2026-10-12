@@ -159,6 +159,7 @@ const approveBtn = () => Array.from(document.querySelectorAll('button')).find(b 
   await waitFor(() => /The list hasn't arrived yet/.test(bodyText()), 'materials waiting note');
   assert(/Your Pro asked to buy materials\. The list hasn't arrived yet\./.test(bodyText()), 'a request with no list says the list has not arrived');
   assert(!approveBtn() && !/Estimated total/.test(bodyText()) && !/Decline and end job/.test(bodyText()), 'no invented items, prices, Approve or Decline');
+  assert(/Materials requested/.test(bodyText()) && /Waiting for your Pro's list/.test(bodyText()) && !/Materials needed — your approval/.test(bodyText()), 'the status header asks for no approval until the list arrives');
   assert(!(storedJob().materialsRequest && storedJob().materialsRequest.items && storedJob().materialsRequest.items.length), 'nothing invented is saved on the job');
 
   // (3) a real list from the Pro
@@ -166,6 +167,7 @@ const approveBtn = () => Array.from(document.querySelectorAll('button')).find(b 
     materials_items: [{ name: 'Wall anchors', qty: 2, cost_cents: 450 }], materials_estimate_cents: 900 });
   await waitFor(() => /Wall anchors/.test(bodyText()), 'real materials list');
   assert(/Wall anchors/.test(bodyText()) && /\$9\.00/.test(bodyText()) && !!approveBtn(), 'the Pro\'s real list shows with its total and Approve');
+  assert(/Review and approve the list below/.test(bodyText()) && !/(Grace|Haven) review and approve/.test(bodyText()), 'the header reads as the customer\'s action, not "<Pro> review and approve"');
 
   // (1) backend completion keeps only real details
   await openJob({ id: JOB_UUID, status: 'complete', customer_id: CUSTOMER_ID, pro_id: PRO_UUID });
