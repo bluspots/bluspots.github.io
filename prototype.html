@@ -136,22 +136,6 @@ const VALID_JOB_STATUSES=new Set([
 ]);
 const TERMINAL_STATUSES=new Set(["complete","inspection_completed","materials_declined"]);
 
-function getCompletionDetails(category,taskPrice){
-  const templates=COMPLETION_TEMPLATES[category];
-  const chosen=(templates&&templates.length)?templates[Math.floor(Math.random()*templates.length)]:DEFAULT_COMPLETION_TEMPLATE;
-  // Simulation cap for generated example materials — keeps examples reasonable.
-  const maxMaterialsCost=Math.max(0,Math.floor((taskPrice||0)*0.35));
-  const materials=[]; let materialsCost=0;
-  for(const m of chosen.materialsTemplate){
-    if(materialsCost+m.amount<=maxMaterialsCost){ materials.push({...m}); materialsCost+=m.amount; }
-  }
-  return {
-    workPerformed:chosen.workPerformed,
-    materials, // materials are ADDITIVE on top of labor — not carved from it
-    laborAmount:(taskPrice||0),
-    proNotes:chosen.notes,
-  };
-}
 // Property-aware pricing — deliberately separate from intent matching and
 // from the property record itself. A propertyScoped task's own "p" field
 // is only ever a fallback reference price (shown before any property is
@@ -281,90 +265,6 @@ const PROS=[
   {i:"SK",n:"Sarah K.", r:4.99,j:189,s:"Smart Home Pro", col:"#5B21B6",memberSince:"2021",
     trustScore:99,onTimeRate:100,hireAgainRate:98,completionRate:99,responseTime:"3 min"},
 ];
-// Simulated job-completion detail (work performed, materials, pro notes),
-// keyed by category so a plumbing job and an electrical job get distinct,
-// contextually appropriate content rather than generic boilerplate — same
-// spirit as PRO_REPLIES being a real (if simulated) pool rather than one
-// fixed string. IMPORTANT: materials are ADDITIVE — listed materials are
-// additional approved costs shown on the receipt ON TOP of the labor price.
-// Labor remains the full task/service price; Haven takes 0% of materials.
-const COMPLETION_TEMPLATES={
-  Plumbing:[{
-    workPerformed:["Diagnosed the source of the issue","Replaced the affected component","Tested water pressure and flow","Checked for leaks at all connections","Cleaned the work area"],
-    materialsTemplate:[{description:"Replacement cartridge",qty:1,amount:28},{description:"Compression fitting",qty:2,amount:9}],
-    notes:"Found the original part had worn past a simple repair, so replaced it outright rather than patching — should hold up long-term. Tested under full pressure before wrapping up; no drips at any connection.",
-  }],
-  Electrical:[{
-    workPerformed:["Shut off power at the breaker before starting","Diagnosed the wiring issue","Replaced the faulty component","Tested the circuit under load","Restored power and confirmed normal operation"],
-    materialsTemplate:[{description:"Outlet/switch (code-rated)",qty:1,amount:14},{description:"Wire nuts and connectors",qty:1,amount:6}],
-    notes:"Everything tested normal after the repair — no flickering, no warm-to-the-touch spots. Recommend keeping an eye on it for the next week just as routine follow-up, but I don't expect any issues.",
-  }],
-  Appliance:[{
-    workPerformed:["Diagnosed the malfunction","Replaced the failed part","Ran a full test cycle","Checked for leaks and unusual noise","Confirmed normal operation before leaving"],
-    materialsTemplate:[{description:"Replacement part (OEM-equivalent)",qty:1,amount:32}],
-    notes:"Ran a complete cycle after the repair to confirm everything's back to normal — no error codes, no unusual noise. Should be good to go.",
-  }],
-  Installation:[{
-    workPerformed:["Confirmed placement and measurements","Completed the installation","Secured all mounting points","Tested for stability and proper function","Cleaned up packaging and work area"],
-    materialsTemplate:[{description:"Mounting hardware kit",qty:1,amount:18}],
-    notes:"Double-checked everything was level and securely mounted before finishing. Let me know if you'd like anything adjusted.",
-  }],
-  Assembly:[{
-    workPerformed:["Unpacked and inventoried all parts","Assembled per manufacturer specifications","Tightened and checked all hardware","Tested stability","Cleared away packaging"],
-    materialsTemplate:[],
-    notes:"All hardware fully tightened and checked for stability. Packaging removed — let me know if you'd like it kept for a return.",
-  }],
-  Cleaning:[{
-    workPerformed:["Dusted and wiped all surfaces","Vacuumed and mopped floors","Cleaned kitchen and bathroom fixtures","Emptied trash and replaced liners","Final walkthrough for quality"],
-    materialsTemplate:[],
-    notes:"Focused extra attention on the kitchen and bathrooms as usual. Everything's ready to go.",
-  }],
-  Landscaping:[{
-    workPerformed:["Assessed the yard/area","Completed the requested work","Cleared and bagged debris","Edged and tidied borders","Final walkthrough"],
-    materialsTemplate:[],
-    notes:"Yard's in good shape. Let me know if you'd like this set up as a recurring visit.",
-  }],
-  Painting:[{
-    workPerformed:["Prepped surfaces (patched, sanded, taped)","Applied primer where needed","Applied two coats of paint","Removed tape and protected surfaces","Cleaned up work area"],
-    materialsTemplate:[{description:"Paint (per gallon)",qty:1,amount:34},{description:"Painter's tape and supplies",qty:1,amount:7}],
-    notes:"Two full coats for even coverage. Give it about 24 hours before hanging anything or wiping down the walls.",
-  }],
-  Flooring:[{
-    workPerformed:["Inspected the affected area","Completed the repair/installation","Checked for levelness and secure fit","Cleaned the area","Final inspection"],
-    materialsTemplate:[{description:"Flooring materials/adhesive",qty:1,amount:22}],
-    notes:"Everything's level and secure. Give any adhesive a full 24 hours before heavy foot traffic in that area.",
-  }],
-  "Smart Home":[{
-    workPerformed:["Confirmed compatibility and placement","Completed the installation and wiring","Paired the device with your network/app","Tested all functions","Walked through basic usage"],
-    materialsTemplate:[{description:"Mounting/wiring hardware",qty:1,amount:12}],
-    notes:"Device is paired and tested — all functions working as expected. Happy to answer any questions about the app setup.",
-  }],
-  Maintenance:[{
-    workPerformed:["Inspected the system/area","Performed the requested maintenance","Checked for any additional issues","Tested normal operation","Cleaned up work area"],
-    materialsTemplate:[{description:"Filter/consumable part",qty:1,amount:15}],
-    notes:"Everything's in good working order. I noted the date so you'll have a record for next time this is due.",
-  }],
-  "Pest Control":[{
-    workPerformed:["Inspected the affected areas","Identified entry points and activity","Applied treatment","Sealed accessible entry points where possible","Provided prevention recommendations"],
-    materialsTemplate:[{description:"Treatment product",qty:1,amount:19}],
-    notes:"Treated all active areas and the main entry points I could find. You may see some activity for a few days as the treatment takes effect — that's normal.",
-  }],
-  Moving:[{
-    workPerformed:["Confirmed the scope with you before starting","Carefully wrapped/protected items as needed","Completed the move","Placed items in requested locations","Final walkthrough"],
-    materialsTemplate:[],
-    notes:"Everything moved without any damage. Let me know if anything needs to be repositioned.",
-  }],
-  Repair:[{
-    workPerformed:["Diagnosed the issue","Completed the repair","Tested for proper function","Inspected surrounding area for related wear","Cleaned up work area"],
-    materialsTemplate:[{description:"Repair parts/hardware",qty:1,amount:16}],
-    notes:"Fixed and tested — working normally now. Let me know if you notice anything else in that area.",
-  }],
-};
-const DEFAULT_COMPLETION_TEMPLATE={
-  workPerformed:["Assessed the job on arrival","Completed the requested work","Tested the result","Cleaned up the work area"],
-  materialsTemplate:[],
-  notes:"Completed as requested — let me know if you have any questions.",
-};
 
 // Brand + semantic colors — constant across light/dark themes (see App() for
 // the theme-dependent surface/text/border tokens: BG, W, TX, TS, TM, BD, SL).
@@ -1855,7 +1755,7 @@ function makeJob({
   tipAmount=0, tipStatus="notAdded", tippedAt=null, // notAdded | processing | paid | failed
   acceptedAt=null, // when status became en_route — anchors the arrival-window/ETA simulation
   jobPreferences=[], // snapshot of enabled preference labels at booking time — the shape a future Pro-app surface would read
-  workPerformed=[], materials=[], proNotes="", // populated once, at completion — see getCompletionDetails()
+  workPerformed=[], materials=[], proNotes="", // only what the Pro reports (backend); never generated
   lockedPrice=null, // the actual labor price agreed to at booking time (property-aware for scoped tasks like Deep/Standard/Move-Out Cleaning). null for older jobs or non-scoped tasks — those fall back to the catalog's reference price, which is safe since it was never property-dependent to begin with.
   requiresDiagnosis=false, // computed once at creation for diagnosis categories; used for materials-decline outcome
   materialsRequest=null,   // {items:[{description,qty,amount}], estimatedTotal} — shown while awaiting approval
@@ -3131,10 +3031,12 @@ function App(){
           return {job:{...j,status:"in_progress",justAccepted:false},accepted:null,arrived:null,track:j.id};
         }
         if(remoteStatus==="complete" && (j.status==="posted"||j.status==="en_route"||j.status==="arrived"||j.status==="diagnosing"||j.status==="materials_requested"||j.status==="materials_approved"||j.status==="in_progress")){
-          const cat=j.taskId?(TASKS.find(t=>t.id===j.taskId)?.c):j.custom?.cat;
-          const task=j.taskId?TASKS.find(t=>t.id===j.taskId):null;
-          const price=j.taskId?(j.lockedPrice??(task?task.p:0)):(j.custom?.price||0);
-          const {workPerformed,materials,proNotes}=getCompletionDetails(cat,price);
+          // Only what the Pro actually reported. Nothing is generated: the
+          // backend doesn't send work notes yet (HB-03), so these stay empty
+          // and the receipt leaves those sections out.
+          const workPerformed=Array.isArray(j.workPerformed)?j.workPerformed:[];
+          const materials=Array.isArray(j.materials)?j.materials:[];
+          const proNotes=typeof j.proNotes==="string"?j.proNotes:"";
           return {job:{...j,status:"complete",justAccepted:false,completedAt:Date.now(),workPerformed,materials,proNotes},accepted:null,arrived:null,track:j.id,completed:j.id,proName:j.pro?.n||"Your pro"};
         }
         // Map materials metadata if present
@@ -6466,15 +6368,16 @@ function App(){
           {/* Materials approval card — shown only while awaiting customer decision */}
           {vj.status==="materials_requested"&&(()=>{
             const jt=vjTask?{n:vjTask.n,c: (TASKS.find(t=>t.id===vj.taskId)?.c)}:(vj.custom?{n:vj.custom.title,c:vj.custom.cat}:null);
-            // Fallback demo materials from completion template when no explicit request attached
-            const computeFallback=()=>{
-              const category=vj.taskId?(TASKS.find(t=>t.id===vj.taskId)?.c):vj.custom?.cat;
-              const price=vjTask?(vj.lockedPrice??vjTask.p):(vj.custom?.price||0);
-              const {materials}=getCompletionDetails(category,price);
-              const est=materials.reduce((s,m)=>s+(m.amount*(m.qty||1)),0);
-              return {items:materials,estimatedTotal:est};
-            };
-            const req=vj.materialsRequest||computeFallback();
+            // Only the Pro's real request. If it hasn't arrived, say so; never
+            // show a made-up list or let the customer approve unseen items (HB-09).
+            const req=vj.materialsRequest&&Array.isArray(vj.materialsRequest.items)&&vj.materialsRequest.items.length?vj.materialsRequest:null;
+            if(!req) return(
+              <div role="status" style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+                <div style={{fontSize:11,fontWeight:800,color:TM,letterSpacing:.8,textTransform:"uppercase",marginBottom:8}}>Materials request</div>
+                <div style={{fontSize:14,fontWeight:700,color:TX,marginBottom:6}}>{jt?.n||"Your job"}</div>
+                <div style={{fontSize:12,color:TS,lineHeight:1.5}}>Your Pro asked to buy materials. The list hasn't arrived yet. It will show here for your approval as soon as it does.</div>
+              </div>
+            );
             const estTotal=req.items.reduce((s,m)=>s+(m.amount*(m.qty||1)),0);
             return(
               <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
