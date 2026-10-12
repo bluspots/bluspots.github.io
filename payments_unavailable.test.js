@@ -191,6 +191,9 @@ const storedCards = () => { const raw = storedData['haven_cards']; return raw ? 
   assert(inserted.payment_snapshot && inserted.payment_snapshot.brand === 'Card' && inserted.payment_snapshot.last4 === '----', 'the job carries the existing "no card" placeholder (got ' + JSON.stringify(inserted.payment_snapshot) + ')');
   const posted = JSON.parse(storedData['haven_jobs']).data.slice(-1)[0];
   assert(posted.paymentLast4 === '----', 'the saved job has no card digits');
+  // #73 tightening: no card-entry form exists in the app at all.
+  const appSrc = fs.readFileSync('home_services_app.jsx', 'utf8');
+  assert(!/newCardNum|newCardCvv|placeholder="1234 5678 9012 3456"|placeholder="123"/.test(appSrc) && !/securely processed/.test(appSrc), 'the app has no card-number or CVV field and no "securely processed" claim');
   cleanup();
   console.log(`--- Payments unavailable: ${pass} passing, ${fail} failing ---`);
   process.exit(fail ? 1 : 0);

@@ -850,14 +850,6 @@ export default function App(){
     },
   });
   const [expandedCard,setExpandedCard]=useState(null);
-  const [addingCard,setAddingCard]=useState(false);
-  const [newCardNum,setNewCardNum]=useState("");
-  const [newCardExp,setNewCardExp]=useState("");
-  const [newCardCvv,setNewCardCvv]=useState("");
-  const [newCardAddr,setNewCardAddr]=useState("");
-  const [newCardCity,setNewCardCity]=useState("");
-  const [newCardState,setNewCardState]=useState("");
-  const [newCardZip,setNewCardZip]=useState("");
   // Addresses — canonical property/address model. Exactly one entry has
   // isPrimary:true; that entry IS "My Home" (no separate home/draftHome
   // state exists anymore — My Home reads/writes this same array so the two
@@ -1734,14 +1726,6 @@ export default function App(){
   // Payment methods
   const setCardDefault=id=>{setCards(cs=>cs.map(c=>({...c,isDefault:c.id===id})));setExpandedCard(null);};
   const removeCard=id=>{setCards(cs=>cs.filter(c=>c.id!==id));setExpandedCard(null);};
-  const addCard=()=>{
-    if(newCardNum.trim().length<4)return;
-    const last4=newCardNum.trim().slice(-4);
-    // Only brand, last 4, expiry, and default status are ever persisted —
-    // CVV and billing address are used for this prototype form only and discarded.
-    setCards(cs=>[...cs,{id:Date.now(),brand:"Card",last4,exp:newCardExp.trim()||"—",isDefault:cs.length===0}]);
-    setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");setAddingCard(false);
-  };
 
   // Addresses
   const removeAddr=id=>{
@@ -3869,49 +3853,10 @@ export default function App(){
             </div>
           );
         })}
-        {addingCard?(
-          <div style={{background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Card number</div>
-            <input value={newCardNum} onChange={e=>setNewCardNum(e.target.value.replace(/\D/g,"").slice(0,16))} placeholder="1234 5678 9012 3456" inputMode="numeric"
-              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,marginBottom:12,outline:"none"}}/>
-
-            <div style={{display:"flex",gap:10,marginBottom:12}}>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Expiry</div>
-                <input value={newCardExp} onChange={e=>setNewCardExp(e.target.value)} placeholder="MM/YY"
-                  style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,outline:"none"}}/>
-              </div>
-              <div style={{flex:1}}>
-                <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>CVV</div>
-                <input value={newCardCvv} onChange={e=>setNewCardCvv(e.target.value.replace(/\D/g,"").slice(0,4))} placeholder="123" inputMode="numeric"
-                  style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,outline:"none"}}/>
-              </div>
-            </div>
-
-            <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:8}}>Billing address</div>
-            <input value={newCardAddr} onChange={e=>setNewCardAddr(e.target.value)} placeholder="Street address"
-              style={{width:"100%",border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 12px",fontSize:14,color:TX,marginBottom:10,outline:"none"}}/>
-            <div style={{display:"flex",gap:8,marginBottom:14}}>
-              <input value={newCardCity} onChange={e=>setNewCardCity(e.target.value)} placeholder="City"
-                style={{flex:2,minWidth:0,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 10px",fontSize:13,color:TX,outline:"none"}}/>
-              <input value={newCardState} onChange={e=>setNewCardState(e.target.value.slice(0,2).toUpperCase())} placeholder="ST"
-                style={{width:52,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 8px",fontSize:13,color:TX,outline:"none",textAlign:"center"}}/>
-              <input value={newCardZip} onChange={e=>setNewCardZip(e.target.value.replace(/\D/g,"").slice(0,5))} placeholder="ZIP" inputMode="numeric"
-                style={{width:68,border:`1.5px solid ${BD}`,borderRadius:10,padding:"10px 8px",fontSize:13,color:TX,outline:"none"}}/>
-            </div>
-
-            <div style={{display:"flex",gap:8}}>
-              <button onClick={()=>{setAddingCard(false);setNewCardNum("");setNewCardExp("");setNewCardCvv("");setNewCardAddr("");setNewCardCity("");setNewCardState("");setNewCardZip("");}} style={{flex:1,padding:"10px 0",borderRadius:10,border:`1.5px solid ${BD}`,background:BG,color:TS,fontWeight:600,fontSize:13,cursor:"pointer"}}>Cancel</button>
-              <button onClick={addCard} disabled={newCardNum.length<4} style={{flex:1,padding:"10px 0",borderRadius:10,border:"none",background:newCardNum.length>=4?AM:"#DDD9D2",color:ON,fontWeight:700,fontSize:13,cursor:newCardNum.length>=4?"pointer":"default"}}>Add card</button>
-            </div>
-          </div>
-        ):(
-          <button onClick={()=>setAddingCard(true)} style={{width:"100%",padding:15,borderRadius:16,border:`1.5px dashed ${BD}`,background:"transparent",color:NT,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:14}}>+ Add payment method</button>
-        )}
-        <div style={{display:"flex",gap:8,alignItems:"flex-start",justifyContent:"center",padding:"0 8px"}}>
-          <span style={{fontSize:13,flexShrink:0}}>🔒</span>
-          <span style={{fontSize:11,color:TM,lineHeight:1.5,textAlign:"center"}}>Payments are securely processed. Your full card information is never displayed.</span>
-        </div>
+        {/* No card-entry form: card numbers and CVVs are never typed into Haven.
+            When payments are connected, cards are added in the payment
+            provider's own secure form (HB-07). */}
+        <div style={{fontSize:12,color:TS,textAlign:"center",lineHeight:1.5,padding:"4px 8px"}}>Cards are added through Haven's payment provider, never typed into the app.</div>
       </div>
     </div>
   );

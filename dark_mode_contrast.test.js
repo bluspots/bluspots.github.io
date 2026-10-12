@@ -267,7 +267,7 @@ function styleOfText(re) {
   await step('Payment methods is readable in dark mode (payments not available yet)', async () => {
     await clickText(/^Profile$/, 'Profile tab');
     await clickText(/^Payment Methods$/, 'Payment Methods');
-    await waitFor(() => PAYMENTS_ON ? /Add payment method/.test(bodyText()) : /Payments aren't available yet/.test(bodyText()), 'payment methods');
+    await waitFor(() => PAYMENTS_ON ? /Cards are added through/.test(bodyText()) : /Payments aren't available yet/.test(bodyText()), 'payment methods');
     checkScreen('Payment methods');
   });
 
@@ -315,7 +315,7 @@ function styleOfText(re) {
     // HB-07: with payments off there are no card badges to check; the badge
     // colour check runs again once payments are switched on.
     const paymentsOn = PAYMENTS_ON;
-    await waitFor(() => paymentsOn ? /Add payment method/.test(bodyText()) : /Payments aren't available yet/.test(bodyText()), 'payment methods (light)');
+    await waitFor(() => paymentsOn ? /Cards are added through/.test(bodyText()) : /Payments aren't available yet/.test(bodyText()), 'payment methods (light)');
     checkScreen('Payment methods');
     if (paymentsOn) {
       const mast = lastByText(/^MAST$/);

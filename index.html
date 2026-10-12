@@ -3019,14 +3019,6 @@ function App() {
     }
   });
   const [expandedCard, setExpandedCard] = useState(null);
-  const [addingCard, setAddingCard] = useState(false);
-  const [newCardNum, setNewCardNum] = useState("");
-  const [newCardExp, setNewCardExp] = useState("");
-  const [newCardCvv, setNewCardCvv] = useState("");
-  const [newCardAddr, setNewCardAddr] = useState("");
-  const [newCardCity, setNewCardCity] = useState("");
-  const [newCardState, setNewCardState] = useState("");
-  const [newCardZip, setNewCardZip] = useState("");
   const [addresses, setAddresses] = usePersistedState("haven_addresses", DEFAULT_ADDRESSES, {
     version: 1,
     validate: (v) => {
@@ -3835,19 +3827,6 @@ function App() {
   const removeCard = (id) => {
     setCards((cs) => cs.filter((c) => c.id !== id));
     setExpandedCard(null);
-  };
-  const addCard = () => {
-    if (newCardNum.trim().length < 4) return;
-    const last4 = newCardNum.trim().slice(-4);
-    setCards((cs) => [...cs, { id: Date.now(), brand: "Card", last4, exp: newCardExp.trim() || "—", isDefault: cs.length === 0 }]);
-    setNewCardNum("");
-    setNewCardExp("");
-    setNewCardCvv("");
-    setNewCardAddr("");
-    setNewCardCity("");
-    setNewCardState("");
-    setNewCardZip("");
-    setAddingCard(false);
   };
   const removeAddr = (id) => {
     setAddresses((as) => {
@@ -5156,75 +5135,7 @@ function App() {
   const paymentScreen = () => !HAVEN_PAYMENTS_AVAILABLE ? /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, subHeader("Payment methods", () => backFrom("payment", { scr: "home", tab: "profile" })), /* @__PURE__ */ React.createElement("div", { role: "status", className: "sc", style: { flex: 1, overflowY: "auto", padding: 20, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 32, marginBottom: 12 } }, "💳"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 16, color: TX, marginBottom: 6 } }, "Payments aren't available yet"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5, maxWidth: 300 } }, "Haven doesn't take card payments in the app yet, so there's nothing to add here and you won't be charged through the app."))) : /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, subHeader("Payment methods", () => backFrom("payment", { scr: "home", tab: "profile" })), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: 20 } }, sortedCards.map((c) => {
     const open = expandedCard === c.id;
     return /* @__PURE__ */ React.createElement("div", { key: c.id, style: { background: c.isDefault ? SELBG : W, border: c.isDefault ? `1.5px solid ${SELBORDER}` : "1.5px solid transparent", borderRadius: 18, marginBottom: 12, boxShadow: "0 2px 10px rgba(28,43,58,.07)", overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { role: "button", tabIndex: 0, onKeyDown: keyActivate, "aria-expanded": open, onClick: () => setExpandedCard(open ? null : c.id), style: { padding: 16, display: "flex", alignItems: "center", gap: 14, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 44, height: 30, borderRadius: 6, background: cardColors[c.brand] || N, display: "flex", alignItems: "center", justifyContent: "center", color: ON, fontSize: 9, fontWeight: 800, flexShrink: 0 } }, c.brand.slice(0, 4).toUpperCase()), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 14, color: TX } }, c.brand, " •••• ", c.last4), c.isDefault && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: N, background: "#DBEAFE", padding: "2px 8px", borderRadius: 8 } }, "Default")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, marginTop: 2 } }, "Expires ", c.exp)), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 16, transform: open ? "rotate(90deg)" : "none", display: "inline-block" } }, "›")), open && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, padding: "0 16px 16px" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setCardDefault(c.id), disabled: c.isDefault, style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: c.isDefault ? BG : W, color: c.isDefault ? TM : N, fontWeight: 600, fontSize: 12, cursor: c.isDefault ? "default" : "pointer" } }, c.isDefault ? "Default card" : "Set as default"), /* @__PURE__ */ React.createElement("button", { onClick: () => removeCard(c.id), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "1.5px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Remove card")));
-  }), addingCard ? /* @__PURE__ */ React.createElement("div", { style: { background: W, borderRadius: 18, padding: 16, marginBottom: 12, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 8 } }, "Card number"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardNum,
-      onChange: (e) => setNewCardNum(e.target.value.replace(/\D/g, "").slice(0, 16)),
-      placeholder: "1234 5678 9012 3456",
-      inputMode: "numeric",
-      style: { width: "100%", border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, color: TX, marginBottom: 12, outline: "none" }
-    }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 8 } }, "Expiry"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardExp,
-      onChange: (e) => setNewCardExp(e.target.value),
-      placeholder: "MM/YY",
-      style: { width: "100%", border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, color: TX, outline: "none" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 8 } }, "CVV"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardCvv,
-      onChange: (e) => setNewCardCvv(e.target.value.replace(/\D/g, "").slice(0, 4)),
-      placeholder: "123",
-      inputMode: "numeric",
-      style: { width: "100%", border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, color: TX, outline: "none" }
-    }
-  ))), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 8 } }, "Billing address"), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardAddr,
-      onChange: (e) => setNewCardAddr(e.target.value),
-      placeholder: "Street address",
-      style: { width: "100%", border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 12px", fontSize: 14, color: TX, marginBottom: 10, outline: "none" }
-    }
-  ), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 14 } }, /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardCity,
-      onChange: (e) => setNewCardCity(e.target.value),
-      placeholder: "City",
-      style: { flex: 2, minWidth: 0, border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 10px", fontSize: 13, color: TX, outline: "none" }
-    }
-  ), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardState,
-      onChange: (e) => setNewCardState(e.target.value.slice(0, 2).toUpperCase()),
-      placeholder: "ST",
-      style: { width: 52, border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 8px", fontSize: 13, color: TX, outline: "none", textAlign: "center" }
-    }
-  ), /* @__PURE__ */ React.createElement(
-    "input",
-    {
-      value: newCardZip,
-      onChange: (e) => setNewCardZip(e.target.value.replace(/\D/g, "").slice(0, 5)),
-      placeholder: "ZIP",
-      inputMode: "numeric",
-      style: { width: 68, border: `1.5px solid ${BD}`, borderRadius: 10, padding: "10px 8px", fontSize: 13, color: TX, outline: "none" }
-    }
-  )), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => {
-    setAddingCard(false);
-    setNewCardNum("");
-    setNewCardExp("");
-    setNewCardCvv("");
-    setNewCardAddr("");
-    setNewCardCity("");
-    setNewCardState("");
-    setNewCardZip("");
-  }, style: { flex: 1, padding: "10px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: BG, color: TS, fontWeight: 600, fontSize: 13, cursor: "pointer" } }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: addCard, disabled: newCardNum.length < 4, style: { flex: 1, padding: "10px 0", borderRadius: 10, border: "none", background: newCardNum.length >= 4 ? AM : "#DDD9D2", color: ON, fontWeight: 700, fontSize: 13, cursor: newCardNum.length >= 4 ? "pointer" : "default" } }, "Add card"))) : /* @__PURE__ */ React.createElement("button", { onClick: () => setAddingCard(true), style: { width: "100%", padding: 15, borderRadius: 16, border: `1.5px dashed ${BD}`, background: "transparent", color: NT, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 14 } }, "+ Add payment method"), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, alignItems: "flex-start", justifyContent: "center", padding: "0 8px" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, flexShrink: 0 } }, "🔒"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: TM, lineHeight: 1.5, textAlign: "center" } }, "Payments are securely processed. Your full card information is never displayed."))));
+  }), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, textAlign: "center", lineHeight: 1.5, padding: "4px 8px" } }, "Cards are added through Haven's payment provider, never typed into the app.")));
   const addressesScreen = () => /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, subHeader("Saved addresses", () => backFrom("addresses", { scr: "home", tab: "profile" })), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: 20 } }, sortedAddresses.map((a) => {
     const open = expandedAddr === a.id;
     return /* @__PURE__ */ React.createElement("div", { key: a.id, style: { background: a.isPrimary ? SELBG : W, border: a.isPrimary ? `1.5px solid ${SELBORDER}` : "1.5px solid transparent", borderRadius: 18, marginBottom: 12, boxShadow: "0 2px 10px rgba(28,43,58,.07)", overflow: "hidden" } }, /* @__PURE__ */ React.createElement("div", { role: "button", tabIndex: 0, onKeyDown: keyActivate, "aria-expanded": open, onClick: () => setExpandedAddr(open ? null : a.id), style: { padding: 16, display: "flex", gap: 12, alignItems: "flex-start", cursor: "pointer" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, addressIcon(a)), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 14, color: TX } }, a.label), a.isPrimary && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 10, fontWeight: 700, color: N, background: "#DBEAFE", padding: "2px 8px", borderRadius: 8 } }, "🏠 Primary")), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginTop: 3, lineHeight: 1.4 } }, formatAddress(a)), a.accessNotes && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 2 } }, "Access notes: ", a.accessNotes)), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 16, transform: open ? "rotate(90deg)" : "none", display: "inline-block" } }, "›")), open && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, padding: "0 16px 16px", flexWrap: "wrap" } }, a.isPrimary ? /* @__PURE__ */ React.createElement("button", { disabled: true, style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: BG, color: TM, fontWeight: 600, fontSize: 12, cursor: "default" } }, "Primary") : /* @__PURE__ */ React.createElement("button", { onClick: () => setPrimaryAddress(a.id), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: NT, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Set as Primary"), /* @__PURE__ */ React.createElement("button", { onClick: () => openAddressForm(a), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: NT, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Edit"), /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmDeleteAddrId(a.id), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "1.5px solid #FCA5A5", background: "#FEF2F2", color: "#DC2626", fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Delete")), confirmDeleteAddrId === a.id && /* @__PURE__ */ React.createElement("div", { style: { margin: "0 16px 16px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 14, padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: "#DC2626", marginBottom: 4 } }, "Delete this property?"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 12, lineHeight: 1.4 } }, "This will remove it from Saved Addresses and My Home."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setConfirmDeleteAddrId(null), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: TS, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Cancel"), /* @__PURE__ */ React.createElement("button", { onClick: () => removeAddr(a.id), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: "#DC2626", color: ON, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Delete Property"))));
