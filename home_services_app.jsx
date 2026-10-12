@@ -104,6 +104,9 @@ const APPT_DAYS_AHEAD=7;
 const APPT_TIME_PREF_ID=7; // TIME_PREFS entry for a requested window
 // The backend does not receive the requested time yet (GROKBOT_BACKEND_HANDOFF HB-01).
 const HAVEN_REQUESTED_TIME_SHARED_WITH_PROS=false;
+// In-app tipping needs a real payment provider (HB-06). Until then the tip
+// flow is off: nothing is charged, so nothing may ever read "Tip sent" or "paid".
+const HAVEN_TIPPING_AVAILABLE=false;
 const fmtHour=h=>{const ap=h<12?"AM":"PM";const hh=h%12===0?12:h%12;return `${hh} ${ap}`;};
 const fmtWindow=start=>{const end=start+2;const sameHalf=(start<12)===(end<12)&&end!==12;return sameHalf?`${start%12===0?12:start%12}–${fmtHour(end)}`:`${fmtHour(start)}–${fmtHour(end)}`;};
 const dayKey=d=>`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -2007,6 +2010,7 @@ export default function App(){
   // neither the Receipt nor Pro earnings are touched (both are derived from
   // tipStatus==="paid", so a failed/processing tip simply doesn't count yet).
   const addTipToJob=(jobId,amount,{simulateFailure=false}={})=>{
+    if(!HAVEN_TIPPING_AVAILABLE)return; // never mark a tip paid without a real payment (HB-06)
     if(isTippingRef.current)return;
     isTippingRef.current=true;
     setJobs(js=>js.map(j=>j.id===jobId?{...j,tipStatus:"processing"}:j));
@@ -4671,7 +4675,9 @@ export default function App(){
                       <div style={{fontWeight:700,fontSize:14,color:SC}}>Review submitted — thanks!</div>
                     </div>
                   )}
-                  {vj.tipStatus==="paid"?(
+                  {!HAVEN_TIPPING_AVAILABLE?(
+                    <div role="note" style={{fontSize:12,color:TS,textAlign:"center",lineHeight:1.5,margin:"2px 8px 12px"}}>In-app tipping isn't available yet. You haven't been charged for a tip.</div>
+                  ):vj.tipStatus==="paid"?(
                     <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:SC,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>✓ Tip sent: ${vj.tipAmount.toFixed(2)}</button>
                   ):(
                     <button onClick={openTip} style={{width:"100%",padding:15,borderRadius:18,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:14,cursor:"pointer",marginBottom:10}}>💛 Tip Pro</button>
@@ -4703,6 +4709,16 @@ export default function App(){
   // ── RATING ─────────────────────────────────────────────────────────────────
   const tipScreen=()=>{
     if(!vj) return unavailableScreen("Tip Pro",goBookings);
+    if(!HAVEN_TIPPING_AVAILABLE) return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
+        {subHeader("Tip Pro",()=>backFrom("tip",{scr:"tracking",tab:"bookings"}))}
+        <div role="status" className="sc" style={{flex:1,overflowY:"auto",padding:20,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",textAlign:"center"}}>
+          <div style={{fontSize:32,marginBottom:12}}>💛</div>
+          <div style={{fontWeight:800,fontSize:16,color:TX,marginBottom:6}}>Tipping isn't available yet</div>
+          <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:300}}>In-app tipping will open once payments are connected. You haven't been charged.</div>
+        </div>
+      </div>
+    );
     const presets=[5,10,15,20];
     const parsedCustom=parseFloat(tipCustomAmount);
     const customValid=tipCustomAmount.trim()!==""&&!isNaN(parsedCustom)&&parsedCustom>0&&parsedCustom<=2000;
