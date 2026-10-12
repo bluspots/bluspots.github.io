@@ -543,7 +543,10 @@ const concatenated = SOURCE_FILES.map(f => fs.readFileSync(f, 'utf8')).join('\n'
 const transformedSource = concatenated
   .replace(/^import React, { useState, useRef, useEffect } from "react";$/m, '')
   .replace('export default function App(){', 'function App(){');
-const { code } = babel.transformSync(transformedSource, { presets: [['@babel/preset-react', { runtime: 'classic' }]], filename: 'concat.jsx' });
+// HAVEN_COMPILED_SUITE (tools/compiled_suite.js): run every test on the production compile (esbuild), not Babel.
+const { code } = process.env.HAVEN_COMPILED_SUITE
+  ? { code: require('./tools/compile_html.js').compileJs(transformedSource) }
+  : babel.transformSync(transformedSource, { presets: [['@babel/preset-react', { runtime: 'classic' }]], filename: 'concat.jsx' });
 const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports = typeof App !== 'undefined' ? App : undefined;
   module.exports2 = typeof ErrorBoundary !== 'undefined' ? ErrorBoundary : undefined;
