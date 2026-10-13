@@ -191,6 +191,15 @@ const storedMsgs = () => JSON.parse(storedData['haven_jobs']).data[0].msgs;
   assert(JSON.stringify(storedMsgs()) === JSON.stringify(OLD), 'nothing new is added');
   assert(!fetchLog.some(u => /4821|job_messages/.test(u)), 'no request carries message text or touches job_messages');
   assert(!/New message from/.test(bodyText()), 'no message notification');
+  // dark mode: own message text readable on the navy bubble (was W = dark card colour in dark mode)
+  await mount(() => { setAddrs([{ ...REAL, isPrimary: true }]); setJobs([JOB('en_route', OLD)]); storedData['haven_theme'] = JSON.stringify({ __v: 1, data: 'dark' }); });
+  remoteRows = [{ id: JOB_UUID, status: 'en_route', customer_id: CUSTOMER_ID, pro_id: PRO_UUID }];
+  await tap(screen.getAllByText('Bookings').pop(), 'Bookings tab');
+  for (let i = 0; i < 80 && !screen.queryAllByText(/Assemble furniture/).length; i++) await settle(25);
+  await tap(screen.queryAllByText(/Assemble furniture/).pop(), 'job card');
+  await tap(Array.from(document.querySelectorAll('button')).find(x => /💬\s*Message/.test(x.textContent)), 'Message');
+  const bubble = Array.from(document.querySelectorAll('div')).find(d => d.children.length === 0 && d.textContent === 'Gate code is 4821, see you soon');
+  assert(bubble && /rgb\(255,\s*255,\s*255\)/.test(bubble.style.color), 'dark: own message text is white on the navy bubble (was invisible)');
   // (3) empty thread
   await openThread('en_route', []);
   assert(/Messaging with your Pro isn't available in the app yet\./.test(bodyText()) && !/You'll be able to chat with/.test(bodyText()), 'empty thread no longer promises chat');
