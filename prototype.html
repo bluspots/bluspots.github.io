@@ -2291,6 +2291,9 @@ function App(){
   // Selected option chips. Light mode keeps the solid navy fill; in dark mode
   // navy is almost the same color as the card behind it, so selected chips
   // use the same blue the app already uses for a selected address or card.
+  // UI-02: urgent-fee text ("+$10") on an unselected option. #D97706 was
+  // 3.19:1 on white; #B45309 is 5.02:1 (light), brand amber 7.31:1 (dark).
+  const FEE_TX = isDark ? AM : "#B45309";
   const CHIP_ON = isDark ? SELBG : N;
   const CHIP_ON_EDGE = isDark ? SELBORDER : N;
   const CHIP_ON_RING = isDark ? `inset 0 0 0 1.5px ${SELBORDER}` : null;
@@ -4612,7 +4615,7 @@ function App(){
             return(
               <button key={p.id} aria-pressed={a} onClick={()=>setTpid(p.id)} style={{border:`1.5px solid ${a?CHIP_ON_EDGE:BD}`,borderRadius:14,padding:"9px 14px",cursor:"pointer",background:a?CHIP_ON:W,display:"flex",alignItems:"center",gap:6}}>
                 <span style={{fontWeight:700,fontSize:13,color:a?ON:TX}}>{p.label}</span>
-                {p.surge>0&&<span style={{fontSize:10,fontWeight:700,color:a?"#FFE8B0":"#D97706"}}>+${p.surge}</span>}
+                {p.surge>0&&<span style={{fontSize:10,fontWeight:700,color:a?"#FFE8B0":FEE_TX}}>+${p.surge}</span>}
               </button>
             );
           })}
@@ -4645,7 +4648,7 @@ function App(){
             <span style={{display:"block",fontWeight:800,fontSize:14,color:asapOn?ON:TX}}>As soon as possible</span>
             <span style={{display:"block",fontSize:12,color:asapOn?"rgba(255,255,255,.8)":TS,marginTop:2}}>The first available Pro accepts it</span>
           </span>
-          <span style={{fontSize:12,fontWeight:800,color:asapOn?"#FFE8B0":"#D97706"}}>+${TIME_PREFS.find(p=>p.id===1).surge}</span>
+          <span style={{fontSize:12,fontWeight:800,color:asapOn?"#FFE8B0":FEE_TX}}>+${TIME_PREFS.find(p=>p.id===1).surge}</span>
         </button>
         <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",margin:"4px 0 8px"}}>Or request a preferred time</div>
         <div role="group" aria-label="Day" className="sc" style={{display:"flex",gap:8,overflowX:"auto",margin:"0 -20px 10px",padding:"0 20px 2px"}}>
