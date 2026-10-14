@@ -204,6 +204,11 @@ const STAR_LABELS=["","Terrible","Bad","OK","Good","Excellent!"];
 // available, never lists a card as a payment method, and never sends card
 // details on a job.
 const HAVEN_PAYMENTS_AVAILABLE=false;
+// MSG-01: customer ↔ Pro messaging isn't connected to a backend yet (HB-04).
+// Until it is, nothing can be sent or received, and the thread says so.
+// Messages saved on this phone by earlier builds stay visible, marked as not
+// delivered (they never reached the Pro).
+const CUSTOMER_MESSAGING_CONNECTED=false;
 // The two sample cards earlier builds put on every new device. Only an exact,
 // unedited match is removed from a device; anything else stays stored as is.
 const SAMPLE_CARDS=[
@@ -2125,6 +2130,7 @@ export default function App(){
   };
 
   const sendMsg=()=>{
+    if(!CUSTOMER_MESSAGING_CONNECTED)return; // MSG-01: never pretend to send
     if(!minput.trim()||vj?.status==="complete")return;
     const txt=minput.trim();
     addMsg(vjid,{id:Date.now(),f:"cu",m:txt,t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})});
@@ -5158,12 +5164,18 @@ export default function App(){
           <div><div style={{fontSize:12,fontWeight:700,color:"#92400E"}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontSize:11,color:TS}}>{vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.label:"—")} · ${vjTotal}</div></div>
         </div>
         {locked&&<div style={{background:"#FFF1F2",borderBottom:"1px solid #FCC",padding:"10px 20px",textAlign:"center",flexShrink:0}}><span style={{fontSize:12,color:"#E11D48",fontWeight:600}}>🔒 Chat closed — job completed successfully.</span></div>}
+        {!CUSTOMER_MESSAGING_CONNECTED&&!locked&&(
+          <div role="status" style={{background:W,borderBottom:`1px solid ${BD}`,padding:"10px 20px",display:"flex",gap:10,alignItems:"flex-start",flexShrink:0}}>
+            <span aria-hidden="true" style={{fontSize:16}}>💬</span>
+            <span style={{fontSize:12,color:TS,lineHeight:1.5}}>In-app messaging with your Pro isn't available yet. You can't send or receive messages here right now, and your Pro won't see anything typed in this app.</span>
+          </div>
+        )}
         <div className="sc" role="log" aria-live="polite" aria-label="Conversation messages" style={{flex:1,overflowY:"auto",padding:"16px 20px"}}>
           {vjMsgs.length===0&&!typing?(
             <div style={{display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",height:"100%",textAlign:"center",paddingTop:40}}>
               <div style={{fontSize:32,marginBottom:10}}>💬</div>
               <div style={{fontWeight:700,fontSize:15,color:TX,marginBottom:6}}>{locked?"No messages were sent.":"No messages yet."}</div>
-              <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:220}}>{locked?"This conversation is now closed.":`You'll be able to chat with ${vjPname} here now that the job's been accepted.`}</div>
+              <div style={{fontSize:13,color:TS,lineHeight:1.5,maxWidth:220}}>{locked?"This conversation is now closed.":CUSTOMER_MESSAGING_CONNECTED?`You'll be able to chat with ${vjPname} here now that the job's been accepted.`:"Messaging with your Pro isn't available in the app yet."}</div>
             </div>
           ):(
             <div style={{textAlign:"center",marginBottom:18}}><span style={{fontSize:11,color:TM,background:BD,padding:"4px 12px",borderRadius:12,fontWeight:500}}>Today</span></div>
@@ -5175,9 +5187,9 @@ export default function App(){
                 {!mine&&<div style={{width:30,height:30,borderRadius:15,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontWeight:700,fontSize:11,flexShrink:0}}>{vjPro.i}</div>}
                 <div style={{maxWidth:"72%"}}>
                   <div style={{background:mine?N:W,borderRadius:mine?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",boxShadow:mine?"none":"0 1px 4px rgba(28,43,58,.08)"}}>
-                    <div style={{fontSize:14,color:mine?W:TX,lineHeight:1.45}}>{m.m}</div>
+                    <div style={{fontSize:14,color:mine?ON:TX,lineHeight:1.45}}>{m.m}</div>
                   </div>
-                  <div style={{fontSize:10,color:TM,marginTop:4,textAlign:mine?"right":"left",fontWeight:500}}>{m.t}</div>
+                  <div style={{fontSize:10,color:TM,marginTop:4,textAlign:mine?"right":"left",fontWeight:500}}>{m.t}{mine&&!CUSTOMER_MESSAGING_CONNECTED?" · Saved on this phone · not delivered":""}</div>
                 </div>
               </div>
             );
@@ -5197,6 +5209,8 @@ export default function App(){
         <div style={{flexShrink:0,padding:"12px 16px 24px",background:W,borderTop:`1px solid ${BD}`}}>
           {locked?(
             <div style={{textAlign:"center",padding:"12px 0",fontSize:13,color:TM,fontWeight:500}}>🔒 Messaging only available during an active job</div>
+          ):!CUSTOMER_MESSAGING_CONNECTED?(
+            <div style={{textAlign:"center",padding:"12px 0",fontSize:13,color:TM,fontWeight:500}}>Sending messages isn't available yet</div>
           ):(
             <div style={{display:"flex",gap:10,alignItems:"center"}}>
               <input value={minput} onChange={e=>setMinput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendMsg()}

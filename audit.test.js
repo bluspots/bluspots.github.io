@@ -1150,14 +1150,12 @@ await stepAsync('6. Context-aware suppression — E: status change while viewing
 // advancement). Steps 7–9 used to drive notification suppression off those
 // fabricated replies. Keep the customer-send path, assert no auto-reply, and
 // seed a real notification for the Notification Center regression.
-await stepAsync('7. Messaging — customer can send; no simulated pro reply', async () => {
+await stepAsync('7. Messaging — shown as unavailable (MSG-01): no input, nothing sent, no simulated pro reply', async () => {
   clickTab('Bookings');
   act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
   click('💬 Message');
-  const msgInput = screen.getByPlaceholderText(/Message .*/);
-  act(()=>{fireEvent.change(msgInput,{target:{value:'hi'}});});
-  act(()=>{fireEvent.keyDown(msgInput,{key:'Enter'});});
-  assert(existsRegex(/^hi$/ ) || existsRegex('hi'), 'Customer message appears in the conversation');
+  assert(screen.queryAllByPlaceholderText(/Message .*/).length === 0, 'MSG-01: no message input while messaging is not connected');
+  assert(existsRegex(/In-app messaging with your Pro isn't available yet/) && existsRegex("Sending messages isn't available yet"), 'MSG-01: the thread says messaging is unavailable');
   await delay(2100);
   assert(!existsRegex(REPLY_REGEX), 'A2: no simulated pro reply is fabricated');
   forceProfileRoot();
