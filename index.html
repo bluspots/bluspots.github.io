@@ -3090,32 +3090,43 @@ function App() {
   const [savingAddress, setSavingAddress] = useState(false);
   const addrSearchRef = useRef({ timer: null, ctrl: null, seq: 0 });
   const [selectedAddressId, setSelectedAddressId] = useState(1);
-  const [locationPermission, setLocationPermission] = useState("never_requested");
-  const [detectedCity, setDetectedCity] = useState(null);
-  const [locationWarningDismissed, setLocationWarningDismissed] = useState(false);
-  const SIMULATED_NEARBY_CITIES = { "San Francisco": "Oakland", "Oakland": "San Francisco" };
+  const [locCheck, setLocCheck] = useState(null);
+  const locKey = (a) => a ? `${a.id}|${a.geo ? a.geo.lat + "," + a.geo.lng : "none"}` : "";
+  const LOC_NEAR_M = 300, LOC_MAX_ACCURACY_M = 1e3;
   const requestLocation = () => {
-    setLocationPermission("requesting");
-    setTimeout(() => {
-      setLocationPermission("simulated");
-      setDetectedCity(selectedAddress ? selectedAddress.city : null);
-      setLocationWarningDismissed(false);
-    }, 350);
+    const addr = selectedAddress;
+    const key = locKey(addr);
+    if (!addr) return;
+    if (!addr.geo) {
+      setLocCheck({ status: "unconfirmed", addressKey: key });
+      return;
+    }
+    if (typeof navigator === "undefined" || !navigator.geolocation) {
+      setLocCheck({ status: "unavailable", addressKey: key });
+      return;
+    }
+    setLocCheck({ status: "checking", addressKey: key });
+    navigator.geolocation.getCurrentPosition((pos) => {
+      const c = pos && pos.coords;
+      const acc = c && Number.isFinite(c.accuracy) ? c.accuracy : Infinity;
+      if (!c || !Number.isFinite(c.latitude) || !Number.isFinite(c.longitude)) {
+        setLocCheck({ status: "unavailable", addressKey: key });
+        return;
+      }
+      const R = 6371e3, rad = (x) => x * Math.PI / 180;
+      const dLat = rad(addr.geo.lat - c.latitude), dLng = rad(addr.geo.lng - c.longitude);
+      const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(c.latitude)) * Math.cos(rad(addr.geo.lat)) * Math.sin(dLng / 2) ** 2;
+      const meters = 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+      if (acc > LOC_MAX_ACCURACY_M) {
+        setLocCheck({ status: "imprecise", addressKey: key, accuracyM: acc });
+        return;
+      }
+      setLocCheck({ status: meters <= LOC_NEAR_M + acc ? "near" : "away", addressKey: key, miles: meters / 1609.344, accuracyM: acc });
+    }, (err) => {
+      setLocCheck({ status: err && err.code === 1 ? "denied" : "unavailable", addressKey: key });
+    }, { enableHighAccuracy: false, timeout: 1e4, maximumAge: 6e4 });
   };
-  const simulateDifferentLocation = () => {
-    const currentCity = selectedAddress?.city || "";
-    const newCity = SIMULATED_NEARBY_CITIES[currentCity] || "a nearby city";
-    setLocationPermission("simulated");
-    setDetectedCity(newCity);
-    setLocationWarningDismissed(false);
-    createNotification({
-      type: NOTIF_TYPES.LOCATION,
-      title: "Location differs from booked property",
-      body: `Your booking is for your ${selectedAddress?.label || "selected"} property, but your phone appears to be in ${newCity}.`,
-      destination: { screen: "draftAddress" }
-      // resolved at tap time against whatever draft is currently active, if any
-    });
-  };
+  const fmtMiles = (m) => m < 0.1 ? "less than 0.1 mi" : m < 10 ? `${m.toFixed(1)} mi` : `${Math.round(m)} mi`;
   const [showAddressPicker, setShowAddressPicker] = useState(false);
   const [showCancelConfirm, setShowCancelConfirm] = useState(false);
   const [showCancelRequest, setShowCancelRequest] = useState(false);
@@ -3716,9 +3727,7 @@ function App() {
     setSelectedCardId((cards.find((c) => c.isDefault) || cards[0])?.id);
     setShowAddressPicker(false);
     setShowCardPicker(false);
-    setLocationPermission("never_requested");
-    setDetectedCity(null);
-    setLocationWarningDismissed(false);
+    setLocCheck(null);
     isPostingRef.current = false;
   };
   const openTask = (id) => {
@@ -4557,10 +4566,27 @@ function App() {
       alt: `Map of ${selectedAddress.label || "your property"} at ${selectedAddress.street}, ${selectedAddress.city}`,
       caption: HAVEN_PRECISE_ACCURACY.includes(selectedAddress.geo.accuracy) ? "The location you confirmed for this address." : "The location you confirmed for this address. It's approximate: placed near the street, not on the exact building."
     }
-  )) : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 10, padding: "8px 12px", borderRadius: 12, background: BG } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: TS, lineHeight: 1.4 } }, "This address isn't confirmed on the map yet."), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => openAddressForm(selectedAddress), style: { background: "none", border: "none", color: NT, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: "0 4px", minHeight: 44, whiteSpace: "nowrap" } }, "Confirm on map ›"))), locationPermission === "never_requested" && /* @__PURE__ */ React.createElement("div", { role: "button", tabIndex: 0, onKeyDown: keyActivate, onClick: requestLocation, style: { marginTop: 10, fontSize: 11, color: TM, cursor: "pointer" } }, "📡 Check my location to help prevent mistakes"), locationPermission === "requesting" && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, fontSize: 11, color: TM } }, "📡 Checking your location…"), detectedCity !== null && selectedAddress && detectedCity !== selectedAddress.city && !locationWarningDismissed && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, background: "#FFF7ED", border: "1px solid #FDE9CC", borderRadius: 14, padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#92400E", lineHeight: 1.5, marginBottom: 10 } }, "Your repair is booked for your ", selectedAddress.label, " property, but your phone appears to be in ", detectedCity, "."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setLocationWarningDismissed(true), style: { flex: 1, padding: "8px 0", borderRadius: 9, border: "1.5px solid #FDE9CC", background: W, color: "#92400E", fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Continue"), /* @__PURE__ */ React.createElement("button", { onClick: () => {
-    setShowAddressPicker(true);
-    setLocationWarningDismissed(true);
-  }, style: { flex: 1, padding: "8px 0", borderRadius: 9, border: "none", background: "#F59E0B", color: ON, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Change Address"))), detectedCity !== null && selectedAddress && detectedCity === selectedAddress.city && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: SC } }, "📡 Location matches this property"), qaTester && /* @__PURE__ */ React.createElement("span", { role: "button", tabIndex: 0, onKeyDown: keyActivate, onClick: simulateDifferentLocation, style: { fontSize: 10, color: TM, textDecoration: "underline", cursor: "pointer" } }, "Simulate different location (demo)")), showAddressPicker && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, paddingTop: 12, borderTop: `1px solid ${BD}` } }, sortedAddresses.map((a) => /* @__PURE__ */ React.createElement(
+  )) : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10, marginTop: 10, padding: "8px 12px", borderRadius: 12, background: BG } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: TS, lineHeight: 1.4 } }, "This address isn't confirmed on the map yet."), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => openAddressForm(selectedAddress), style: { background: "none", border: "none", color: NT, fontWeight: 700, fontSize: 12, cursor: "pointer", padding: "0 4px", minHeight: 44, whiteSpace: "nowrap" } }, "Confirm on map ›"))), selectedAddress && (() => {
+    const lc = locCheck && locCheck.addressKey === locKey(selectedAddress) ? locCheck : null;
+    const note = (txt, extra) => /* @__PURE__ */ React.createElement("div", { role: "status", style: { marginTop: 10, fontSize: 11, color: TS, lineHeight: 1.5 } }, "📡 ", txt, extra);
+    const linkBtn = (label, onClick) => /* @__PURE__ */ React.createElement("button", { type: "button", onClick, style: { background: "none", border: "none", color: NT, fontWeight: 700, fontSize: 11, cursor: "pointer", padding: "0 0 0 6px", minHeight: 32 } }, label);
+    const changeAddress = () => {
+      if (addresses.length > 1) {
+        setShowAddressPicker(true);
+        setShowCardPicker(false);
+      } else openAddressForm(selectedAddress);
+    };
+    if (!lc) return /* @__PURE__ */ React.createElement("button", { type: "button", onClick: requestLocation, style: { display: "block", marginTop: 10, background: "none", border: "none", padding: "4px 0", minHeight: 32, fontSize: 11, color: TM, cursor: "pointer", textAlign: "left" } }, "📡 Check my location to help prevent mistakes");
+    if (lc.status === "checking") return note("Checking your location…");
+    if (lc.status === "unconfirmed") return note("Confirm this address on the map first, then Haven can compare it with your phone's location. You can book either way.");
+    if (lc.status === "denied") return note("Location access is off, so Haven can't compare. That's fine: you can still book this address.");
+    if (lc.status === "unavailable") return note("Couldn't get your location right now. You can still book this address.", linkBtn("Try again", requestLocation));
+    if (lc.status === "imprecise") return note(`Your phone's location is too imprecise right now (within about ${fmtMiles(lc.accuracyM / 1609.344)}) to compare with this address. You can still book.`, linkBtn("Try again", requestLocation));
+    if (lc.status === "near") return note("Your phone appears to be near this address.");
+    if (lc.status === "confirmed") return note(`You confirmed ${selectedAddress.label || "this address"} as the service address.`);
+    const warnBg = isDark ? "#2B2114" : "#FFF7ED", warnBd = isDark ? "#5C4512" : "#FDE9CC", warnTx = isDark ? "#FCD9A0" : "#92400E";
+    return /* @__PURE__ */ React.createElement("div", { role: "status", style: { marginTop: 12, background: warnBg, border: `1px solid ${warnBd}`, borderRadius: 14, padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: warnTx, lineHeight: 1.5, marginBottom: 10 } }, "Your phone appears to be about ", fmtMiles(lc.miles), " from ", selectedAddress.label || "this address", ". That's fine: you don't need to be there to book. Just make sure this is where the work should happen."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { type: "button", onClick: () => setLocCheck({ ...lc, status: "confirmed" }), style: { flex: 1, padding: "10px 0", minHeight: 44, borderRadius: 10, border: `1.5px solid ${warnBd}`, background: W, color: warnTx, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Yes, this is the right address"), /* @__PURE__ */ React.createElement("button", { type: "button", onClick: changeAddress, style: { flex: 1, padding: "10px 0", minHeight: 44, borderRadius: 10, border: "none", background: AM, color: "#1C2B3A", fontWeight: 800, fontSize: 12, cursor: "pointer" } }, "Change address")));
+  })(), showAddressPicker && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 12, paddingTop: 12, borderTop: `1px solid ${BD}` } }, sortedAddresses.map((a) => /* @__PURE__ */ React.createElement(
     "div",
     {
       role: "button",

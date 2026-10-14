@@ -962,35 +962,37 @@ export default function App(){
   const [savingAddress,setSavingAddress]=useState(false);
   const addrSearchRef=useRef({timer:null,ctrl:null,seq:0});
   const [selectedAddressId,setSelectedAddressId]=useState(1); // which address the current booking will use
-  // Location awareness — architecture supports every real permission state,
-  // even though the current prototype only ever uses "simulated". A future
-  // real implementation replaces requestLocation()'s body with
-  // navigator.geolocation.getCurrentPosition(...) — no UI code needs to change.
-  const [locationPermission,setLocationPermission]=useState("never_requested"); // never_requested|requesting|granted|denied|unavailable|simulated
-  const [detectedCity,setDetectedCity]=useState(null); // null = not yet checked this session
-  const [locationWarningDismissed,setLocationWarningDismissed]=useState(false);
-  const SIMULATED_NEARBY_CITIES={"San Francisco":"Oakland","Oakland":"San Francisco"};
+  // LOC-01: an optional check of where the customer's phone is, compared with
+  // the selected address's confirmed map point. Customers don't need to be at
+  // the property to book, so this never blocks booking and never claims a
+  // match it didn't measure. The device location is read only when the
+  // customer taps, kept in memory only (not saved, not in the job, never sent
+  // anywhere), and compared by straight-line distance: no Mapbox call.
+  // locCheck: {status, addressKey, miles, accuracyM}; status is one of
+  // checking | near | away | imprecise | denied | unavailable | unconfirmed.
+  const [locCheck,setLocCheck]=useState(null);
+  const locKey=a=>a?`${a.id}|${a.geo?a.geo.lat+","+a.geo.lng:"none"}`:"";
+  const LOC_NEAR_M=300, LOC_MAX_ACCURACY_M=1000;
   const requestLocation=()=>{
-    setLocationPermission("requesting");
-    setTimeout(()=>{
-      setLocationPermission("simulated");
-      setDetectedCity(selectedAddress?selectedAddress.city:null);
-      setLocationWarningDismissed(false);
-    },350);
+    const addr=selectedAddress; const key=locKey(addr);
+    if(!addr) return;
+    if(!addr.geo){ setLocCheck({status:"unconfirmed",addressKey:key}); return; }
+    if(typeof navigator==="undefined"||!navigator.geolocation){ setLocCheck({status:"unavailable",addressKey:key}); return; }
+    setLocCheck({status:"checking",addressKey:key});
+    navigator.geolocation.getCurrentPosition(pos=>{
+      const c=pos&&pos.coords; const acc=c&&Number.isFinite(c.accuracy)?c.accuracy:Infinity;
+      if(!c||!Number.isFinite(c.latitude)||!Number.isFinite(c.longitude)){ setLocCheck({status:"unavailable",addressKey:key}); return; }
+      const R=6371000,rad=x=>x*Math.PI/180;
+      const dLat=rad(addr.geo.lat-c.latitude),dLng=rad(addr.geo.lng-c.longitude);
+      const h=Math.sin(dLat/2)**2+Math.cos(rad(c.latitude))*Math.cos(rad(addr.geo.lat))*Math.sin(dLng/2)**2;
+      const meters=2*R*Math.asin(Math.min(1,Math.sqrt(h)));
+      if(acc>LOC_MAX_ACCURACY_M){ setLocCheck({status:"imprecise",addressKey:key,accuracyM:acc}); return; }
+      setLocCheck({status:meters<=LOC_NEAR_M+acc?"near":"away",addressKey:key,miles:meters/1609.344,accuracyM:acc});
+    },err=>{
+      setLocCheck({status:err&&err.code===1?"denied":"unavailable",addressKey:key});
+    },{enableHighAccuracy:false,timeout:10000,maximumAge:60000});
   };
-  const simulateDifferentLocation=()=>{
-    const currentCity=selectedAddress?.city||"";
-    const newCity=SIMULATED_NEARBY_CITIES[currentCity]||"a nearby city";
-    setLocationPermission("simulated");
-    setDetectedCity(newCity);
-    setLocationWarningDismissed(false);
-    createNotification({
-      type:NOTIF_TYPES.LOCATION,
-      title:"Location differs from booked property",
-      body:`Your booking is for your ${selectedAddress?.label||"selected"} property, but your phone appears to be in ${newCity}.`,
-      destination:{screen:"draftAddress"}, // resolved at tap time against whatever draft is currently active, if any
-    });
-  };
+  const fmtMiles=m=>m<0.1?"less than 0.1 mi":m<10?`${m.toFixed(1)} mi`:`${Math.round(m)} mi`;
   const [showAddressPicker,setShowAddressPicker]=useState(false);
   const [showCancelConfirm,setShowCancelConfirm]=useState(false); // pre-accept direct cancel confirmation
   const [showCancelRequest,setShowCancelRequest]=useState(false); // post-accept support-mediated cancel panel
@@ -1685,7 +1687,7 @@ export default function App(){
     setSelectedAddressId(primaryHome?.id);
     setSelectedCardId((cards.find(c=>c.isDefault)||cards[0])?.id);
     setShowAddressPicker(false);setShowCardPicker(false);
-    setLocationPermission("never_requested");setDetectedCity(null);setLocationWarningDismissed(false);
+    setLocCheck(null); // LOC-01: a new booking starts with no location result
     isPostingRef.current=false; // re-arm the double-submission guard for this fresh draft
   };
   const openTask   =(id)=>{setTid(id);setTpid(null);setDesc("");setEmergency(false);resetBookingSelections();goTo("task");};
@@ -2780,29 +2782,34 @@ export default function App(){
           <button type="button" onClick={()=>openAddressForm(selectedAddress)} style={{background:"none",border:"none",color:NT,fontWeight:700,fontSize:12,cursor:"pointer",padding:"0 4px",minHeight:44,whiteSpace:"nowrap"}}>Confirm on map ›</button>
         </div>
       ))}
-      {locationPermission==="never_requested"&&(
-        <div role="button" tabIndex={0} onKeyDown={keyActivate} onClick={requestLocation} style={{marginTop:10,fontSize:11,color:TM,cursor:"pointer"}}>📡 Check my location to help prevent mistakes</div>
-      )}
-      {locationPermission==="requesting"&&(
-        <div style={{marginTop:10,fontSize:11,color:TM}}>📡 Checking your location…</div>
-      )}
-      {detectedCity!==null&&selectedAddress&&detectedCity!==selectedAddress.city&&!locationWarningDismissed&&(
-        <div style={{marginTop:12,background:"#FFF7ED",border:"1px solid #FDE9CC",borderRadius:14,padding:14}}>
-          <div style={{fontSize:12,color:"#92400E",lineHeight:1.5,marginBottom:10}}>
-            Your repair is booked for your {selectedAddress.label} property, but your phone appears to be in {detectedCity}.
+      {selectedAddress&&(()=>{
+        // LOC-01: result only for the address it was measured against.
+        const lc=locCheck&&locCheck.addressKey===locKey(selectedAddress)?locCheck:null;
+        const note=(txt,extra)=>(<div role="status" style={{marginTop:10,fontSize:11,color:TS,lineHeight:1.5}}>📡 {txt}{extra}</div>);
+        const linkBtn=(label,onClick)=>(<button type="button" onClick={onClick} style={{background:"none",border:"none",color:NT,fontWeight:700,fontSize:11,cursor:"pointer",padding:"0 0 0 6px",minHeight:32}}>{label}</button>);
+        const changeAddress=()=>{ if(addresses.length>1){setShowAddressPicker(true);setShowCardPicker(false);} else openAddressForm(selectedAddress); };
+        if(!lc) return(<button type="button" onClick={requestLocation} style={{display:"block",marginTop:10,background:"none",border:"none",padding:"4px 0",minHeight:32,fontSize:11,color:TM,cursor:"pointer",textAlign:"left"}}>📡 Check my location to help prevent mistakes</button>);
+        if(lc.status==="checking") return note("Checking your location…");
+        if(lc.status==="unconfirmed") return note("Confirm this address on the map first, then Haven can compare it with your phone's location. You can book either way.");
+        if(lc.status==="denied") return note("Location access is off, so Haven can't compare. That's fine: you can still book this address.");
+        if(lc.status==="unavailable") return note("Couldn't get your location right now. You can still book this address.",linkBtn("Try again",requestLocation));
+        if(lc.status==="imprecise") return note(`Your phone's location is too imprecise right now (within about ${fmtMiles(lc.accuracyM/1609.344)}) to compare with this address. You can still book.`,linkBtn("Try again",requestLocation));
+        if(lc.status==="near") return note("Your phone appears to be near this address.");
+        if(lc.status==="confirmed") return note(`You confirmed ${selectedAddress.label||"this address"} as the service address.`);
+        // away: explain, never block
+        const warnBg=isDark?"#2B2114":"#FFF7ED", warnBd=isDark?"#5C4512":"#FDE9CC", warnTx=isDark?"#FCD9A0":"#92400E";
+        return(
+          <div role="status" style={{marginTop:12,background:warnBg,border:`1px solid ${warnBd}`,borderRadius:14,padding:14}}>
+            <div style={{fontSize:12,color:warnTx,lineHeight:1.5,marginBottom:10}}>
+              Your phone appears to be about {fmtMiles(lc.miles)} from {selectedAddress.label||"this address"}. That's fine: you don't need to be there to book. Just make sure this is where the work should happen.
+            </div>
+            <div style={{display:"flex",gap:8}}>
+              <button type="button" onClick={()=>setLocCheck({...lc,status:"confirmed"})} style={{flex:1,padding:"10px 0",minHeight:44,borderRadius:10,border:`1.5px solid ${warnBd}`,background:W,color:warnTx,fontWeight:700,fontSize:12,cursor:"pointer"}}>Yes, this is the right address</button>
+              <button type="button" onClick={changeAddress} style={{flex:1,padding:"10px 0",minHeight:44,borderRadius:10,border:"none",background:AM,color:"#1C2B3A",fontWeight:800,fontSize:12,cursor:"pointer"}}>Change address</button>
+            </div>
           </div>
-          <div style={{display:"flex",gap:8}}>
-            <button onClick={()=>setLocationWarningDismissed(true)} style={{flex:1,padding:"8px 0",borderRadius:9,border:"1.5px solid #FDE9CC",background:W,color:"#92400E",fontWeight:700,fontSize:12,cursor:"pointer"}}>Continue</button>
-            <button onClick={()=>{setShowAddressPicker(true);setLocationWarningDismissed(true);}} style={{flex:1,padding:"8px 0",borderRadius:9,border:"none",background:"#F59E0B",color:ON,fontWeight:700,fontSize:12,cursor:"pointer"}}>Change Address</button>
-          </div>
-        </div>
-      )}
-      {detectedCity!==null&&selectedAddress&&detectedCity===selectedAddress.city&&(
-        <div style={{marginTop:10,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
-          <span style={{fontSize:11,color:SC}}>📡 Location matches this property</span>
-          {qaTester&&<span role="button" tabIndex={0} onKeyDown={keyActivate} onClick={simulateDifferentLocation} style={{fontSize:10,color:TM,textDecoration:"underline",cursor:"pointer"}}>Simulate different location (demo)</span>}
-        </div>
-      )}
+        );
+      })()}
       {showAddressPicker&&(
         <div style={{marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
           {sortedAddresses.map(a=>(
