@@ -1153,7 +1153,8 @@ await stepAsync('6. Context-aware suppression — E: status change while viewing
 await stepAsync('7. Messaging — shown as unavailable (MSG-01): no input, nothing sent, no simulated pro reply', async () => {
   clickTab('Bookings');
   act(()=>{fireEvent.click(screen.queryAllByText(/Assemble bed/)[0]);});
-  click('💬 Message');
+  assert(!existsRegex(/^💬 Message$/), 'MSG-02: the tracking entry no longer reads as working messaging');
+  click('💬 Messages · not available yet');
   assert(screen.queryAllByPlaceholderText(/Message .*/).length === 0, 'MSG-01: no message input while messaging is not connected');
   assert(existsRegex(/In-app messaging with your Pro isn't available yet/) && existsRegex("Sending messages isn't available yet"), 'MSG-01: the thread says messaging is unavailable');
   await delay(2100);
