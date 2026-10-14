@@ -23,6 +23,8 @@ for (const [name, src] of [['source page', html], ['built page', built]]) {
   ok(/You can cancel for free from the Bookings tab any time before a Pro accepts\./.test(src), name + ': cancellation FAQ matches what the app does');
   ok(/call 911 or your local emergency services/.test(src), name + ': safety FAQ points to emergency services');
 }
-ok(/\{vj\.rated\?"✅":"🎧"\}/.test(html) && /background:vj\.rated\?SL:W/.test(html), 'unrated card uses 🎧 with neutral styling; rated keeps the green thanks');
+// Formatting-tolerant: under the compiled suite prototype.html holds esbuild output
+// ("vj.rated ? SL2 : W2"), so match the expression, not the exact Babel spacing.
+ok(/vj\.rated\s*\?\s*"✅"\s*:\s*"🎧"/.test(html) && /background:\s*vj\.rated\s*\?\s*SL\d*\s*:\s*W\d*\b/.test(html), 'unrated card uses 🎧 with neutral styling; rated keeps the green thanks');
 console.log(`--- COPY-01 truthful support copy: ${pass} passing, ${fail} failing ---`);
 process.exit(fail ? 1 : 0);
