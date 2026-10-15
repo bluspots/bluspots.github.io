@@ -3252,6 +3252,44 @@ async function runReceiptTotalsChecks(){
       const o = k => r2.indexOf(k);
       assert(o('begin;') >= 0 && o('begin;') < o('drop trigger') && o('drop trigger') < o('drop function') && o('drop function') < o('materials_request_seq') && o('materials_request_seq') < o('materials_approved_cents') && o('materials_approved_cents') < o('commit;'), '0026 rollback R2: one transaction, undo 0026 trigger/function, then 0026 columns, then 0025 columns');
     });
+
+    step('P1. 0028 materials follow-ups to 0026 (static, QA #85 v3 O1-O4)', () => {
+      const p = require('path');
+      const sql = fs.readFileSync(p.join(__dirname, 'supabase/migrations/0028_materials_followups.sql'), 'utf8');
+      const s26 = fs.readFileSync(p.join(__dirname, 'supabase/migrations/0026_customer_only_materials_approval.sql'), 'utf8');
+      const live = sql.split('\n').filter(l => !/^\s*--/.test(l)).join('\n');
+      const norm = live.replace(/\s+/g, ' ');
+      const head = sql.split('-- ── 0.')[0];
+      assert(/ONE single run/.test(head) && /0025 body, then 0027, then 0026, then 0028 \(this file\),\n-- each pasted as its own run/.test(head) && !/close on the next status change/.test(sql) && /\(d\) covers ONLY abandonments that happen after 0028 is applied/.test(head) && /stay as they are/.test(head), '0028 header: one single run, paste order 0025 body, 0027, 0026, 0028; (d) only after 0028, older abandoned rows stay as they are');
+      assert((live.match(/^(begin|commit);$/gm) || []).join(',') === 'begin;,commit;' && live.indexOf('\nbegin;') < live.indexOf('0028 needs 0026') && live.indexOf('\ncommit;') > live.indexOf('revoke all on function'), '0028 body is one transaction, prerequisite check inside it');
+      assert(/column_name = 'materials_decided_seq'/.test(live) && /prosrc like '%Only the customer can approve or decline materials on this job%'/.test(live) && /raise exception '0028 needs 0026_customer_only_materials_approval\.sql first/.test(live), '0028 stops unless 0026 (columns + function + trigger) is installed');
+      assert(/^ create or replace function public\.jobs_lock_materials_approved\(\)/m.test(' ' + live.split('\n').find(l => /create or replace function/.test(l))) && !/create trigger|drop trigger|\b(create|alter|drop) policy\b|alter table|\bgrant (select|insert|update|delete|all|execute)\b/i.test(live), '0028 only replaces the trigger function: no trigger, table, policy or grant change');
+      assert(/revoke all on function public\.jobs_lock_materials_approved\(\) from public, anon, authenticated;/.test(live), '0028 keeps EXECUTE revoked');
+      assert(/is_customer := not privileged and auth\.uid\(\) is not null and auth\.uid\(\) = old\.customer_id;/.test(norm), '0028 is_customer only for client roles');
+      // (a) C3-CUST: the customer may not enter materials_requested from any other status.
+      assert(/ if not privileged and is_customer and new\.status = 'materials_requested' and old\.status is distinct from 'materials_requested' then raise exception 'Only the Pro can request materials on this job' using errcode = '42501'/.test(norm), '0028 (a): customer move into materials_requested -> 42501 (exact)');
+      // 0026 rules kept verbatim (G1-G3, C3 for non-customers).
+      assert(/ if not privileged and \(auth\.uid\(\) is null or auth\.uid\(\) is distinct from old\.customer_id\) and new\.status is distinct from old\.status then if new\.status in \('materials_approved', 'materials_declined'\) or old\.status = 'materials_requested' then raise exception/.test(norm) && / if new\.status = 'materials_requested' and old\.status not in \('en_route', 'arrived', 'diagnosing', 'in_progress'\) then raise exception/.test(norm) && / if old\.materials_request_seq > old\.materials_decided_seq then raise exception/.test(norm), '0028 keeps 0026 G1-G3 and C3');
+      assert(/new_request_move := new\.status = 'materials_requested' and old\.status in \('en_route', 'arrived', 'diagnosing', 'in_progress'\);/.test(norm), '0028 new-request move is exactly the 0009 source statuses');
+      // C2 + (c) legacy fill: only the assigned Pro, same request, same estimate, stored items null/[], new items sum to the estimate.
+      assert(/ if not privileged and \(old\.status = 'materials_requested' or old\.materials_request_seq > old\.materials_decided_seq\) and not new_request_move and \(new\.materials_estimate_cents is distinct from old\.materials_estimate_cents or new\.materials_items is distinct from old\.materials_items\) and not legacy_fill_ok then raise exception 'The requested materials amount cannot change while the request is pending' using errcode = '42501'/.test(norm), '0028 C2: pending amount frozen unless legacy_fill_ok (exact)');
+      assert(/ legacy_fill_ok boolean := false;/.test(norm) && (norm.match(/legacy_fill_ok :=/g) || []).length === 1, '0028 (c): legacy_fill_ok defaults to false and is set in one place only');
+      assert(/ if not privileged and auth\.uid\(\) is not null and auth\.uid\(\) = old\.pro_id and old\.status = 'materials_requested' and new\.status = 'materials_requested' and new\.materials_estimate_cents is not distinct from old\.materials_estimate_cents and coalesce\(old\.materials_items, '\[\]'::jsonb\) = '\[\]'::jsonb and jsonb_typeof\(new\.materials_items\) = 'array' then select count\(\*\) filter \(where case when jsonb_typeof\(e -> 'cost_cents'\) = 'number' then \(e ->> 'cost_cents'\)::numeric < 0 or \(e ->> 'cost_cents'\)::numeric <> trunc\(\(e ->> 'cost_cents'\)::numeric\) else true end\), sum\(case when jsonb_typeof\(e -> 'cost_cents'\) = 'number' then \(e ->> 'cost_cents'\)::numeric end\) into bad_items, items_sum from jsonb_array_elements\(new\.materials_items\) as e; legacy_fill_ok := bad_items = 0 and coalesce\(items_sum, 0\) = coalesce\(old\.materials_estimate_cents, 0\); end if;/.test(norm), '0028 (c): fill only by the assigned Pro (auth.uid() = old.pro_id), same estimate, empty stored items, whole non-negative items summing to the frozen estimate (exact)');
+      assert(norm.indexOf('legacy_fill_ok := bad_items') < norm.indexOf('and not legacy_fill_ok then'), '0028 (c): legacy_fill_ok computed before C2');
+      // (b) C4: locked outside a pending request too.
+      assert(/ if not privileged and not \(old\.status = 'materials_requested' or old\.materials_request_seq > old\.materials_decided_seq\) and not new_request_move and \(new\.materials_estimate_cents is distinct from old\.materials_estimate_cents or new\.materials_items is distinct from old\.materials_items\) then raise exception 'The materials estimate can only change with a new materials request' using errcode = '42501'/.test(norm), '0028 (b) C4: estimate/items locked outside a pending request for non-privileged callers (exact)');
+      // (d) abandonment closes the request, $0, approved columns untouched.
+      const ab = norm.slice(norm.indexOf(' elsif undecided and not privileged then'), norm.indexOf(' return new; end;'));
+      assert(/^ elsif undecided and not privileged then new\.materials_decided_seq := old\.materials_request_seq; end if; end if;\s*$/.test(ab), '0028 (d): customer leaving an undecided request marks it decided, adds nothing (exact)');
+      assert((live.match(/new\.materials_decided_seq := old\.materials_request_seq/g) || []).length === 3 && /coalesce\(old\.materials_approved_cents, 0\)\s+\+ coalesce\(old\.materials_estimate_cents, 0\)/.test(live) && !/\+ coalesce\(new\.materials_estimate_cents/.test(live), '0028 counting unchanged: OLD estimate added on approve, decided marked on approve/decline/abandon');
+      assert(!/fixed_customer_labor_price_cents|emergency_fee_cents|convenience_fee_cents|tip_amount_cents|inspection_fee_cents|materials_reimbursed_cents|payment_snapshot/.test(live) && !/^\s*(update|insert|delete)\b/im.test(live), '0028 touches no pricing/fee/receipt column and no data row');
+      // Rollback restores the 0026 function verbatim, one transaction.
+      const blk = (sql.split('-- BEGIN-ROLLBACK\n')[1] || '').split('-- END-ROLLBACK')[0];
+      const rsql = blk.split('\n').map(l => l.startsWith('-- ') ? l.slice(3) : (l === '--' ? '' : l)).join('\n').trim();
+      assert(blk.trim().split('\n').every(l => /^--/.test(l)) && rsql.startsWith('begin;') && rsql.endsWith('commit;'), '0028 rollback is commented, one begin/commit');
+      const body = rsql.slice('begin;'.length, -'commit;'.length).trim();
+      assert(body.length > 1000 && s26.includes(body) && body.startsWith('create or replace function public.jobs_lock_materials_approved()') && body.endsWith('revoke all on function public.jobs_lock_materials_approved() from public, anon, authenticated;'), '0028 rollback restores the 0026 function exactly (verbatim 0026 text)');
+    });
   } catch (e) {
     fail++;
     console.error('FAIL (receipt totals):', (e && e.stack) || e);
