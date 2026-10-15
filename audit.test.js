@@ -1146,6 +1146,19 @@ await stepAsync('6. Context-aware suppression — E: status change while viewing
   click('‹');
 });
 
+await stepAsync('6b. Cancel-after-accept sheet carries no Haven Support review wording or support button', async () => {
+  click('Bookings');
+  clickRegex(/Assemble bed/);
+  await act(async () => { await delay(40); });
+  assert(existsRegex('Need to cancel this job?'), 'accepted job shows the cancel entry');
+  click('Need to cancel this job?');
+  assert(existsRegex('A pro has already accepted.'), 'cancel sheet still explains a pro accepted');
+  assert(!/Haven Support|may need to review|applicable fees/.test(document.body.textContent), 'cancel sheet: no Haven Support review or fee-review wording');
+  assert(!existsRegex('Contact Haven Support'), 'cancel sheet: no Contact Haven Support button');
+  click('Continue with job');
+  forceProfileRoot();
+});
+
 // Phase 1B A2: simulated pro replies are removed (they were a local-only
 // advancement). Steps 7–9 used to drive notification suppression off those
 // fabricated replies. Keep the customer-send path, assert no auto-reply, and
@@ -1951,7 +1964,7 @@ function runHomeIntentArchitectureChecks(){
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 
-  runA2QaTesterGateChecks().then(() => runArrivedVisibilityChecks()).then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runReceiptTotalsChecks()).then(() => {
+  runA2QaTesterGateChecks().then(() => runArrivedVisibilityChecks()).then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runReceiptTotalsChecks()).then(() => runNoPlaceholderSupportChecks()).then(() => {
     assert(unexpectedRequests.length === 0, `No request left the mocked backend (unexpected: ${JSON.stringify(unexpectedRequests.slice(0,3))})`);
     console.log(`\n--- Full audit: ${pass} passing, ${fail} failing ---`);
     if (fail > 0) process.exit(1);
@@ -2773,6 +2786,54 @@ async function runArrivedVisibilityChecks(){
   console.log(`\n--- Arrived visibility audit: ${pass} passing, ${fail} failing ---`);
 }
 
+// Founder rule: no support contact is shown until a real one exists. The
+// placeholder phone, support@haven.app and the scripted "Chat with support"
+// are gone from the signed-in Help screen, Settings and the built pages.
+async function runNoPlaceholderSupportChecks(){
+  const SUPPORT_PLACEHOLDER = /support@haven\.app|555-0147|555-0199|Chat with support|Support chat|Speak with support|QUESTIONS\?/;
+  cleanup();
+  resetBackendMock();
+  seedSignedInCustomer();
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  await mountApp(container);
+  await act(async () => { await delay(40); });
+  step('S1. Help & support shows no placeholder phone, email or scripted support chat', () => {
+    forceProfileRoot();
+    click('Help & Support');
+    assert(existsRegex('Common topics'), 'Help & support screen is open');
+    assert(!SUPPORT_PLACEHOLDER.test(document.body.textContent), 'Help & support: no placeholder support contact or support chat entry');
+    assert(!document.querySelector('a[href^="tel:"]'), 'Help & support: no tel: link');
+    assert(!/Avg\. response time|support specialist/.test(document.body.textContent), 'Help & support: no scripted support-chat copy');
+  });
+  step('S2. Settings shows no placeholder support contact', () => {
+    forceProfileRoot();
+    click('Settings');
+    assert(!SUPPORT_PLACEHOLDER.test(document.body.textContent), 'Settings: no placeholder support contact');
+  });
+  step('S2b. Notifications settings row is about Pros only, with no Haven Support mention', () => {
+    forceProfileRoot();
+    click('Settings');
+    assert(existsRegex('Messages from pros'), 'Settings: Messages row still present');
+    assert(!/Haven Support/.test(document.body.textContent), 'Settings: no "Haven Support" mention');
+  });
+  step('S2c. Notifications list shows no simulated "New message from Haven Support"', () => {
+    forceProfileRoot();
+    click('Notifications');
+    assert(!/from Haven Support/.test(document.body.textContent), 'Notifications: no simulated Haven Support message');
+  });
+  step('S3. Built HTML and source carry no placeholder support contact', () => {
+    const fs = require('fs');
+    for (const f of ['index.html', 'prototype.html', 'home_services_app.jsx']) {
+      const txt = fs.readFileSync(require('path').join(__dirname, f), 'utf8');
+      assert(!txt.includes('support@haven.app'), `${f}: no support@haven.app`);
+      assert(!/\(407\) 555-0147|4075550147|1-800-555-0199/.test(txt), `${f}: no placeholder support phone`);
+      assert(!/Chat with support/i.test(txt), `${f}: no "Chat with support"`);
+      assert(!/New message from Haven Support|new messages from Haven Support|Messages from pros and Haven Support|Haven Support will review|Haven Support may need to review|Contact Haven Support/.test(txt), `${f}: no simulated support notifications, settings mention or cancel-sheet support wording`);
+    }
+  });
+}
+
 // Phase 1B item B: receipt totals. The in-app receipt, the PDF and the share
 // text read stored backend job values only (labor, approved materials,
 // priority fee, tip). Local price, surge, tip and demo materials never reach
@@ -2931,6 +2992,10 @@ async function runReceiptTotalsChecks(){
       assert(!/Total paid|TOTAL PAID/.test(txt), `${name}: no "Total paid" without a payment record`);
       assert(!/4242|Visa/.test(txt), `${name}: no card brand or last4 without a payment record`);
     });
+    // Founder rule: no placeholder support contact on any receipt surface.
+    [['in-app', out.inApp], ['share', out.share], ['PDF', out.pdf]].forEach(([name, txt]) => {
+      assert(!/support@haven\.app|555-0147|555-0199|Chat with support|Support chat|Speak with support|QUESTIONS\?/.test(txt), `${name}: no placeholder support email, phone or support chat`);
+    });
     assert(existsRegex('NOT CHARGED YET') && !existsRegex(/^PAID$/) && !existsRegex('PAYMENT PENDING'), 'in-app: NOT CHARGED YET pill, no PAID stamp');
     assert(!existsRegex('PAYMENT METHOD'), 'in-app: no payment method block');
     assert(!existsRegex('This receipt confirms a completed payment'), 'in-app: no paid confirmation line');
@@ -2967,6 +3032,7 @@ async function runReceiptTotalsChecks(){
     assert(out.share.includes('Total not available yet') && !out.share.includes('Labor:'), 'share text: Total not available yet');
     assert(out.pdf.includes('Total not available yet') && !out.pdf.split('\n').includes('TOTAL'), 'PDF: Total not available yet, no TOTAL');
     assert(!/4242|Visa|TOTAL PAID|Total paid/.test(out.inApp + out.share + out.pdf), 'no card and no paid total without backend values');
+    assert(!/support@haven\.app|555-0147|555-0199|Chat with support|Support chat|Speak with support|QUESTIONS\?/.test(out.inApp + out.share + out.pdf), 'no backend row: no placeholder support contact on any receipt surface');
 
     // The receipt fetch asks for the stored amount columns (read-only select).
     const seen = [];
