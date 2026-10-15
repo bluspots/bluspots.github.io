@@ -2,13 +2,21 @@
 -- Number: 0026 (next after 0025_materials_approved_lock.sql).
 -- Pro has no migrations folder. This is the one paste for both apps.
 --
+-- HOW TO RUN: paste this whole file into the Supabase SQL editor and run
+-- it as ONE single run (one query, one session). Do not highlight and run
+-- statements one at a time: the editor may send each selection on its own
+-- connection, so begin; would not carry over and a partial install could
+-- break every jobs write. The same applies to every other migration file
+-- and to each founder step / rollback block below: one block, one run.
+--
 -- Paste this whole file in the Supabase SQL editor as the database owner,
 -- AFTER 0025 (it needs 0025's columns and replaces 0025's trigger function;
 -- section 0 stops with an error if 0025 is missing). Do not apply it from
 -- the app, from CI, or from an agent. Safe to re-run.
 -- The whole migration (sections 0-3) is one transaction (begin; ... commit;):
--- if the 0025 check or any statement fails, nothing is applied, even when
--- run statement by statement. The founder steps below the commit are
+-- if the 0025 check or any statement fails, nothing is applied, as long as
+-- the file goes in as one single run (see HOW TO RUN above; this holds
+-- only within one session). The founder steps below the commit are
 -- commented out.
 --
 -- What it does
@@ -41,6 +49,20 @@
 --            materials_decided_seq) inspection_completed is refused from any
 --            status, so a pending request cannot be dodged and decided by the
 --            Pro in two hops.
+--        C2. While a request is pending (status materials_requested, or
+--            materials_request_seq > materials_decided_seq) the requested
+--            amount columns (materials_estimate_cents, materials_items) are
+--            frozen: changing them is refused (42501). The customer approves
+--            exactly the amount shown at request time. A Pro who wants a
+--            different amount must make a NEW request (see counting rule),
+--            which gets its own number. The only allowed change is the
+--            new-request move itself (en_route / arrived / diagnosing /
+--            in_progress -> materials_requested), which sets the amount.
+--        C3. Entering materials_requested is allowed only from en_route,
+--            arrived, diagnosing or in_progress. A move into it from any
+--            decided or terminal status (materials_approved,
+--            materials_declined, inspection_completed, complete, cancelled,
+--            ...) is refused (42501).
 --      FOUNDER DECISION PENDING: the Pro may still move to
 --      inspection_completed from diagnosing / arrived / in_progress / ...
 --      when NO request is pending (today's behaviour, one marked block in
@@ -66,15 +88,19 @@
 --     materials_request_seq = previous + 1. Nothing the client sends
 --     (timestamps, items, estimate) can make a request new.
 --   - SAME REQUEST: materials_requested -> materials_requested (a retried or
---     re-sent request PATCH, possibly with a revised estimate). The number
---     stays; the estimate at decision time is what counts.
---   - REOPEN, NOT NEW: a move into materials_requested from any other status
+--     re-sent request PATCH). The number stays. A revised estimate or item
+--     list is refused (C2), so the amount counted is the one locked when
+--     the request was made.
+--   - REOPEN: a move into materials_requested from any other status
 --     (materials_approved, materials_declined, inspection_completed,
 --     complete, cancelled, ...). Permissive policies are OR-ed, so RLS
---     allows these, but no app sends them. The number stays.
+--     allows these, but no app sends them. Refused for clients (C3); a
+--     privileged caller keeps the number (no new request).
 --   - A decision counts only for an undecided request
 --     (materials_request_seq > materials_decided_seq):
---       approve -> materials_approved_cents += OLD.materials_estimate_cents,
+--       approve -> materials_approved_cents += OLD.materials_estimate_cents
+--                  (frozen since the request by C2, so it is the amount the
+--                  request was made with),
 --                  materials_approved_at = now(), decided = request number.
 --       decline (materials_declined or inspection_completed) -> adds 0
 --                  (null becomes 0), decided = request number.
@@ -84,10 +110,11 @@
 --     $18 approved, receipt, in_progress, $12 requested and approved = $30.
 --     Duplicate / retried approve PATCH: the row is already
 --       materials_approved, so there is no transition and nothing is added.
---     approved -> requested -> approved replay: the reopen keeps request #n,
---       already decided, so $0 is added. Only a request created from
+--     approved -> requested -> approved replay: refused for clients (C3);
+--       a privileged reopen keeps request #n, already decided, so $0. Only a request created from
 --       en_route / arrived / diagnosing / in_progress counts again.
---     Declined, then reopened and approved: still $0 (first decision final).
+--     Declined, then reopened: refused for clients (C3); a privileged
+--       reopen then approve adds $0 (first decision final).
 --     Request #n abandoned without a decision, then request #n+1 approved:
 --       only #n+1 counts.
 --   Why this rule: it needs no Pro app change, it is stamped server-side so
@@ -197,6 +224,13 @@ begin
         using errcode = '42501',
               hint = 'Approving, declining or leaving materials_requested must come from the job''s customer.';
     end if;
+    -- C3: materials_requested only from the statuses a request is made from.
+    if new.status = 'materials_requested'
+       and old.status not in ('en_route', 'arrived', 'diagnosing', 'in_progress') then
+      raise exception 'Only the customer can approve or decline materials on this job'
+        using errcode = '42501',
+              hint = 'A decided or finished job cannot be reopened into materials_requested.';
+    end if;
     if new.status = 'inspection_completed' then
       -- G3: no inspection_completed while a request is undecided.
       if old.materials_request_seq > old.materials_decided_seq then
@@ -211,6 +245,22 @@ begin
       null;
       -- END FOUNDER DECISION PENDING
     end if;
+  end if;
+
+  -- C2: while a request is pending, the requested amount is frozen for
+  --     everyone but the customer and privileged callers. The new-request
+  --     move itself (allowed statuses -> materials_requested) sets it.
+  if not privileged
+     and (auth.uid() is null or auth.uid() is distinct from old.customer_id)
+     and (old.status = 'materials_requested'
+          or old.materials_request_seq > old.materials_decided_seq)
+     and not (new.status = 'materials_requested'
+              and old.status in ('en_route', 'arrived', 'diagnosing', 'in_progress'))
+     and (new.materials_estimate_cents is distinct from old.materials_estimate_cents
+          or new.materials_items is distinct from old.materials_items) then
+    raise exception 'The requested materials amount cannot change while the request is pending'
+      using errcode = '42501',
+            hint = 'The customer approves the amount shown at request time. Make a new request for a different amount.';
   end if;
 
   -- (b) An explicit change by a privileged caller wins (manual correction in
