@@ -227,6 +227,9 @@ async function openMyHome() {
   assert(/123 Market Street/.test(bodyText()) && /1 completed/.test(bodyText()), 'the kept sample still shows its service history on My Home');
   await mount(() => { setAddrs([SAMPLE_HOME, SAMPLE_WORK]); setJobs([activeAtSample]); });
   assert(JSON.stringify(ids()) === '[1]', 'a sample with an open (not yet complete) job at it is also kept');
+  // MAP-03 upgrade from master: master caches have no haven_jobs_owner; the sample with a job is still kept
+  await mount(() => { delete storedData['haven_jobs_owner']; setAddrs([SAMPLE_HOME, SAMPLE_WORK]); setJobs([jobAtSample]); });
+  assert(JSON.stringify(ids()) === '[1]' && saved()[0].street === '123 Market Street', 'master-style storage (no jobs owner): a sample with a completed job at it is kept');
 
   // a real address that happens to match the sample text but is the customer's own (different id) is kept
   await mount(() => setAddrs([{ ...SAMPLE_HOME, id: 1761000000000 }]));

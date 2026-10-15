@@ -2231,6 +2231,15 @@ function havenWriteJobsOwner(userId) {
   } catch {
   }
 }
+function havenReadStoredJobsAnyOwner() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem("haven_jobs") || "null");
+    const data = parsed && typeof parsed === "object" && !Array.isArray(parsed) && "data" in parsed ? parsed.data : parsed;
+    return Array.isArray(data) ? data : [];
+  } catch {
+    return [];
+  }
+}
 function havenJobsAccountId() {
   try {
     return typeof havenJobCustomerId === "function" && havenJobCustomerId() || "";
@@ -3209,7 +3218,7 @@ function App() {
         // Map location confirmed by the customer (Mapbox, permanent lookup). Kept only if well-formed.
         geo: a.geo && typeof a.geo === "object" && Number.isFinite(a.geo.lat) && Number.isFinite(a.geo.lng) ? { lat: a.geo.lat, lng: a.geo.lng, accuracy: typeof a.geo.accuracy === "string" ? a.geo.accuracy : "unknown", mapboxId: a.geo.mapboxId || null, source: "mapbox", confirmedAt: a.geo.confirmedAt || null } : null
       }));
-      const storedJobs = havenJobsCacheIsCurrentAccount() ? jobsState : [];
+      const storedJobs = jobsState.length ? jobsState : havenReadStoredJobsAnyOwner();
       const kept = cleaned.filter((a) => !isUntouchedSampleAddress(a, storedJobs));
       if (kept.length !== cleaned.length) {
         cleaned.length = 0;

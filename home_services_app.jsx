@@ -105,6 +105,15 @@ function havenWriteJobsOwner(userId){
     else localStorage.removeItem(HAVEN_JOBS_OWNER_KEY);
   }catch{}
 }
+// MAP-03 storage cleanup only: the raw stored jobs cache whatever its owner
+// (master caches have no owner key). Never used for display.
+function havenReadStoredJobsAnyOwner(){
+  try{
+    const parsed=JSON.parse(localStorage.getItem("haven_jobs")||"null");
+    const data=parsed&&typeof parsed==="object"&&!Array.isArray(parsed)&&"data" in parsed?parsed.data:parsed;
+    return Array.isArray(data)?data:[];
+  }catch{ return []; }
+}
 // Signed-in account id for the jobs cache. "" when signed out. Never a demo id.
 function havenJobsAccountId(){
   try{ return (typeof havenJobCustomerId==="function" && havenJobCustomerId()) || ""; }catch{ return ""; }
@@ -1109,7 +1118,9 @@ export default function App(){
       // MAP-03: drop the old untouched sample addresses (see SAMPLE_ADDRESSES).
       // Storage cleanup, not display: check the stored jobs cache (shown or
       // not yet verified), so a sample with a job at it is never removed.
-      const storedJobs=havenJobsCacheIsCurrentAccount()?jobsState:[];
+      // Owner is deliberately not checked here: master caches have no owner
+      // key, and this check can only keep more addresses (nothing is shown).
+      const storedJobs=jobsState.length?jobsState:havenReadStoredJobsAnyOwner();
       const kept=cleaned.filter(a=>!isUntouchedSampleAddress(a,storedJobs));
       if(kept.length!==cleaned.length){ cleaned.length=0; cleaned.push(...kept); }
       if(cleaned.length===0)return cleaned; // zero properties is valid — booking will require adding one
