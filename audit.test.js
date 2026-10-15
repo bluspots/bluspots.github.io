@@ -2822,6 +2822,12 @@ async function runNoPlaceholderSupportChecks(){
     click('Notifications');
     assert(!/from Haven Support/.test(document.body.textContent), 'Notifications: no simulated Haven Support message');
   });
+  step('S2d. Notifications list never shows the simulated "Haven Support has a question about your cancellation request."', () => {
+    forceProfileRoot();
+    click('Notifications');
+    assert(!/Haven Support has a question about your cancellation request/.test(document.body.textContent), 'Notifications: no simulated Haven Support cancellation question');
+    assert(!/Cancellation needs attention/.test(document.body.textContent), 'Notifications: no simulated cancellation-denied notification');
+  });
   step('S3. Built HTML and source carry no placeholder support contact', () => {
     const fs = require('fs');
     for (const f of ['index.html', 'prototype.html', 'home_services_app.jsx']) {
@@ -2829,7 +2835,7 @@ async function runNoPlaceholderSupportChecks(){
       assert(!txt.includes('support@haven.app'), `${f}: no support@haven.app`);
       assert(!/\(407\) 555-0147|4075550147|1-800-555-0199/.test(txt), `${f}: no placeholder support phone`);
       assert(!/Chat with support/i.test(txt), `${f}: no "Chat with support"`);
-      assert(!/New message from Haven Support|new messages from Haven Support|Messages from pros and Haven Support|Haven Support will review|Haven Support may need to review|Contact Haven Support/.test(txt), `${f}: no simulated support notifications, settings mention or cancel-sheet support wording`);
+      assert(!/New message from Haven Support|new messages from Haven Support|Messages from pros and Haven Support|Haven Support will review|Haven Support may need to review|Contact Haven Support|Haven Support has a question about your cancellation request/.test(txt), `${f}: no simulated support notifications, settings mention or cancel-sheet support wording`);
     }
   });
 }

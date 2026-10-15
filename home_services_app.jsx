@@ -583,7 +583,6 @@ export default function App(){
     const copy={
       requested:["Cancellation request received","We've received your cancellation request and will follow up shortly."],
       approved:["Cancellation approved","Your cancellation has been approved."],
-      denied:["Cancellation needs attention","Haven Support has a question about your cancellation request."],
     }[kind];
     if(!copy)return;
     createNotification({type:NOTIF_TYPES.CANCELLATION,title:copy[0],body:copy[1],jobId,destination:{screen:"tracking",jobId}});
