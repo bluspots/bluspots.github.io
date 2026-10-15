@@ -6,6 +6,10 @@
 -- AFTER 0025 (it needs 0025's columns and replaces 0025's trigger function;
 -- section 0 stops with an error if 0025 is missing). Do not apply it from
 -- the app, from CI, or from an agent. Safe to re-run.
+-- The whole migration (sections 0-3) is one transaction (begin; ... commit;):
+-- if the 0025 check or any statement fails, nothing is applied, even when
+-- run statement by statement. The founder steps below the commit are
+-- commented out.
 --
 -- What it does
 --   1. Customer-only decision (founder-approved 2026-10-08). On a jobs row
@@ -23,12 +27,27 @@
 --      Customer | Declines on diagnosis categories"; 0006 "diagnosis decline
 --      path"; the Customer app sends it from Decline for diagnosis jobs). It
 --      is the same customer decision as materials_declined under the
---      diagnosis-path name. inspection_completed or materials_declined from
---      any other status (diagnosing, in_progress, arrived, ...), and the Pro
---      app re-sending a terminal the customer already set, are unchanged.
---      Pros can still create and re-send materials requests. Every other
---      transition is exactly as before: no RLS policy, status value or
---      lifecycle policy is added, dropped or changed.
+--      diagnosis-path name. The permissive UPDATE policies (0008 approve
+--      check, 0012/0013/0014 lifecycle, decline terminals) are OR-ed, so RLS
+--      alone lets the assigned Pro reach these states by other routes. The
+--      trigger therefore enforces, for every caller that is neither
+--      privileged nor the job's customer (rules G1-G3 in section 2):
+--        G1. Setting status to materials_approved or materials_declined from
+--            ANY other status is refused (42501).
+--        G2. Leaving materials_requested to ANY other status (arrived,
+--            in_progress, complete, cancelled, decline terminals, ...) is
+--            refused (42501): only the customer decides a pending request.
+--        G3. While a request is undecided (materials_request_seq >
+--            materials_decided_seq) inspection_completed is refused from any
+--            status, so a pending request cannot be dodged and decided by the
+--            Pro in two hops.
+--      FOUNDER DECISION PENDING: the Pro may still move to
+--      inspection_completed from diagnosing / arrived / in_progress / ...
+--      when NO request is pending (today's behaviour, one marked block in
+--      the trigger). Re-sending the status the row already has (no
+--      transition) is unchanged. Pros can still create and re-send
+--      materials requests. No RLS policy, status value or lifecycle policy
+--      is added, dropped or changed; the guard lives only in this trigger.
 --   2. Exactly-once counting, stamped by the server. Two bookkeeping
 --      columns on public.jobs, integer not null default 0:
 --        materials_request_seq  number of the current materials request.
@@ -98,6 +117,8 @@
 --   haven_caller_within_radius, pro_claim_job, jobs_enforce_claim_radius),
 --   profiles, the 0024 QA gate, or any existing financial value.
 
+begin;
+
 -- ── 0. Requires 0025 ──────────────────────────────────────────────────────
 do $$
 begin
@@ -163,15 +184,33 @@ begin
     return new;
   end if;
 
-  -- (a) The materials decision belongs to the customer (0026).
-  if old.status = 'materials_requested'
-     and new.status is distinct from old.status
-     and new.status in ('materials_approved', 'materials_declined', 'inspection_completed')
-     and not privileged
-     and (auth.uid() is null or auth.uid() is distinct from old.customer_id) then
-    raise exception 'Only the customer can approve or decline materials on this job'
-      using errcode = '42501',
-            hint = 'materials_requested -> materials_approved, materials_declined or inspection_completed must come from the job''s customer.';
+  -- (a) The materials decision belongs to the customer (0026, G1-G3).
+  --     Only callers that are neither privileged nor the job's customer.
+  if not privileged
+     and (auth.uid() is null or auth.uid() is distinct from old.customer_id)
+     and new.status is distinct from old.status then
+    -- G1: approve / decline from any status.
+    -- G2: leaving a pending request (materials_requested) to anything.
+    if new.status in ('materials_approved', 'materials_declined')
+       or old.status = 'materials_requested' then
+      raise exception 'Only the customer can approve or decline materials on this job'
+        using errcode = '42501',
+              hint = 'Approving, declining or leaving materials_requested must come from the job''s customer.';
+    end if;
+    if new.status = 'inspection_completed' then
+      -- G3: no inspection_completed while a request is undecided.
+      if old.materials_request_seq > old.materials_decided_seq then
+        raise exception 'Only the customer can approve or decline materials on this job'
+          using errcode = '42501',
+                hint = 'A materials request is still pending; the customer must decide it.';
+      end if;
+      -- FOUNDER DECISION PENDING: Pro diagnosing->inspection_completed
+      -- (and from arrived / in_progress / ...) with NO pending request is
+      -- allowed today. To forbid it, replace this null; with the same
+      -- raise exception ... using errcode = '42501' as above.
+      null;
+      -- END FOUNDER DECISION PENDING
+    end if;
   end if;
 
   -- (b) An explicit change by a privileged caller wins (manual correction in
@@ -215,8 +254,8 @@ begin
 end;
 $$;
 
-revoke all on function public.jobs_lock_materials_approved() from public;
-grant execute on function public.jobs_lock_materials_approved() to anon, authenticated;
+-- Trigger functions run without EXECUTE; nobody needs to call it directly.
+revoke all on function public.jobs_lock_materials_approved() from public, anon, authenticated;
 
 drop trigger if exists jobs_lock_materials_approved on public.jobs;
 create trigger jobs_lock_materials_approved
@@ -238,6 +277,8 @@ revoke insert (materials_request_seq, materials_decided_seq),
        update (materials_request_seq, materials_decided_seq)
   on table public.jobs from authenticated;
 
+commit;
+
 -- ── Founder steps: historical materials (read-only first) ─────────────────
 -- Rule (founder, 2026-10-08): fill materials_approved_cents only where
 -- explicit customer approval is documented. A Pro receipt amount, a missing
@@ -252,8 +293,11 @@ revoke insert (materials_request_seq, materials_decided_seq),
 --     (0019 removed anon), and no migration enables RLS on it, so any row
 --     there was self-reported by a client: not proof of who acted.
 --   materials_requests (0001): status pending/approved/declined,
---     responded_at, responded_by. Never written by either app. No RLS in
---     the migrations.
+--     responded_at, responded_by. Never written by either app. No migration
+--     grants INSERT/UPDATE on it to anon or authenticated, so clients cannot
+--     write it: a row there came from the owner / service_role. An
+--     'approved' row with responded_by = jobs.customer_id is therefore
+--     documented customer approval (group "documented" below).
 --   materials_receipts (0001): Pro receipts. Never written (the Pro writes
 --     jobs.materials_reimbursed_cents instead). Pro evidence, not customer.
 --   Notifications: none in the database. Customer and Pro notifications are
@@ -267,9 +311,11 @@ revoke insert (materials_request_seq, materials_decided_seq),
 --     this file), so even status = materials_approved is not customer proof.
 --   Supabase API / Postgres logs are outside the schema, short-lived, and do
 --     not log PATCH bodies, so they cannot show who approved.
--- Conclusion: no provable customer-approval record can exist in the live
--- schema. The backfill is a no-op. Every job that may have had approved
--- materials goes on the review list and stays at $0 materials.
+-- Conclusion: the only documented customer approval possible is an
+-- 'approved' materials_requests row whose responded_by is the job's
+-- customer. Everything else is ambiguous / Pro-only, stays at $0 materials
+-- and is flagged. Founder decision (Req3) is PENDING: this file applies no
+-- backfill; Step 3 is a disabled, opt-in fill for the documented group.
 --
 -- Step 1 (read-only). Every candidate evidence source: row count, whether
 -- RLS is on, and whether API roles can write it. Expect 0 rows each.
@@ -304,13 +350,24 @@ revoke insert (materials_request_seq, materials_decided_seq),
 --   from public.materials_requests r join public.jobs j on j.id = r.job_id
 --  order by r.job_id, r.requested_at;
 --
--- Step 2 (read-only). Review list: every job that may have had materials
--- approved before 0026 but has no provable customer approval. All of them
--- stay at $0 materials (materials_approved_cents null). Replace
+-- Step 2 (read-only). ONE preview query, two labelled groups. Replace
 -- <0026 paste time> with when you pasted 0026 (now() works in the same
 -- sitting); later approvals are recorded by the trigger and are not legacy.
--- select j.id, j.status, j.customer_id, j.pro_id,
---        j.materials_estimate_cents, j.materials_items, j.materials_requested_at,
+--   group = 'documented': Customer-responded request row (documented
+--           evidence). documented_cents = sum of the approved rows'
+--           estimated_total_cents; Step 3 would fill exactly this.
+--   group = 'ambiguous':  ambiguous / Pro-only. Stays at $0 materials
+--           (materials_approved_cents null) and is flagged for review.
+-- with docs as (
+--   select r.job_id, sum(r.estimated_total_cents)::int as documented_cents
+--     from public.materials_requests r join public.jobs j on j.id = r.job_id
+--    where r.status = 'approved' and r.responded_by = j.customer_id
+--    group by r.job_id)
+-- select case when d.job_id is not null
+--             then 'documented: Customer-responded request row (documented evidence)'
+--             else 'ambiguous / Pro-only: stays $0, flagged' end as review_group,
+--        j.id, j.status, j.customer_id, j.pro_id, d.documented_cents,
+--        j.materials_estimate_cents, j.materials_requested_at,
 --        j.materials_reimbursed_cents, j.convenience_fee_cents, j.completed_at,
 --        concat_ws(', ',
 --          case when j.status = 'materials_approved' then 'status materials_approved (actor unknown)' end,
@@ -319,28 +376,47 @@ revoke insert (materials_request_seq, materials_decided_seq),
 --          case when j.materials_estimate_cents > 0 then 'estimate on row' end,
 --          case when j.materials_requested_at is not null then 'request time on row' end,
 --          case when exists (select 1 from public.job_status_events e where e.job_id = j.id
---                             and e.to_status = 'materials_approved') then 'status event (self-reported)' end,
+--                             and e.to_status = 'materials_approved') then 'status event (client-writable, not proof)' end,
 --          case when exists (select 1 from public.materials_requests r where r.job_id = j.id
---                             and r.status = 'approved') then 'materials_requests row (self-reported)' end
+--                             and r.status = 'approved' and r.responded_by is distinct from j.customer_id)
+--               then 'materials_requests approved row, responder not the customer' end
 --        ) as signals
---   from public.jobs j
+--   from public.jobs j left join docs d on d.job_id = j.id
 --  where j.materials_approved_cents is null
 --    and coalesce(j.materials_requested_at, j.posted_at) < '<0026 paste time>'
---    and (   j.status = 'materials_approved'
+--    and (   d.job_id is not null
+--         or j.status = 'materials_approved'
 --         or j.materials_estimate_cents > 0
 --         or j.materials_reimbursed_cents > 0
 --         or j.materials_requested_at is not null
 --         or jsonb_array_length(coalesce(j.materials_items, '[]'::jsonb)) > 0)
---  order by j.posted_at;
+--  order by 1, j.posted_at;
 --
--- Step 3. Backfill: NO-OP. There is no UPDATE to run, because no provable
--- customer-approval record can exist (see above).
+-- Step 3. OPT-IN, DISABLED (founder decision pending, Req3). Fills the
+-- 'documented' group only: materials_approved_cents / materials_approved_at,
+-- only while still null, so a second run updates 0 rows and ambiguous jobs
+-- (no customer-responded approved row) are never touched. To enable, remove
+-- the leading "-- " from the lines between BEGIN-OPT-IN and END-OPT-IN and
+-- run them as one query.
+-- BEGIN-OPT-IN
+-- begin;
+-- update public.jobs j
+--    set materials_approved_cents = d.documented_cents,
+--        materials_approved_at    = coalesce(d.responded_at, now())
+--   from (select r.job_id, sum(r.estimated_total_cents)::int as documented_cents,
+--                max(r.responded_at) as responded_at
+--           from public.materials_requests r join public.jobs jj on jj.id = r.job_id
+--          where r.status = 'approved' and r.responded_by = jj.customer_id
+--          group by r.job_id) d
+--  where j.id = d.job_id
+--    and j.materials_approved_cents is null;
+-- commit;
+-- END-OPT-IN
 --
--- Founder decision only, one job at a time: if the customer confirms an
--- approval in writing outside the app (keep that record), fill that job by
--- hand. This touches materials_approved_cents / materials_approved_at only,
--- and only while the job is still null. Replace the id and the amount the
--- customer confirmed.
+-- Any other job: founder decision only, one job at a time. If the customer
+-- confirms an approval in writing outside the app (keep that record), fill
+-- that job by hand (materials_approved_cents / materials_approved_at only,
+-- only while null). Replace the id and the confirmed amount.
 -- update public.jobs
 --    set materials_approved_cents = 1800,
 --        materials_approved_at    = now()
@@ -386,11 +462,26 @@ revoke insert (materials_request_seq, materials_decided_seq),
 -- rollback;
 
 -- ── Rollback (only if this file must be undone) ───────────────────────────
--- Order matters: restore 0025's function before dropping the columns this
--- function reads, or every jobs write fails.
--- 1. Paste 0025_materials_approved_lock.sql again in full (safe to re-run;
---    it puts back 0025's trigger function: Pro-alone approval moves the
---    status and records $0, no exactly-once marker).
--- 2. Then:
+-- Each option is ONE transaction; run it as one SQL-editor query. Order
+-- matters: undo 0026's trigger function first, then 0025, then drop
+-- columns. Dropping a column while a function that reads it is still the
+-- trigger breaks every jobs write (42703).
+--
+-- R1. Undo 0026 only, back to 0025 behaviour (Pro-alone approval moves the
+--     status and records $0):
+--     begin;
+--       <paste 0025_materials_approved_lock.sql sections 1-3 here, NOT its
+--        commented backfill; this restores 0025's trigger function>
+--       alter table public.jobs drop column if exists materials_decided_seq;
+--       alter table public.jobs drop column if exists materials_request_seq;
+--     commit;
+--
+-- R2. Undo 0026 and 0025 together:
+-- begin;
+-- drop trigger if exists jobs_lock_materials_approved on public.jobs;
+-- drop function if exists public.jobs_lock_materials_approved();
 -- alter table public.jobs drop column if exists materials_decided_seq;
 -- alter table public.jobs drop column if exists materials_request_seq;
+-- alter table public.jobs drop column if exists materials_approved_at;
+-- alter table public.jobs drop column if exists materials_approved_cents;
+-- commit;

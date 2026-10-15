@@ -3202,8 +3202,20 @@ async function runReceiptTotalsChecks(){
       assert(/AFTER 0025/.test(sql) && /Safe to re-run/i.test(sql), '0026 header: paste after 0025, safe to re-run');
       assert(/0026 needs 0025_materials_approved_lock\.sql first/.test(live), '0026 stops with a clear error when 0025 is missing');
       assert(/create or replace function public\.jobs_lock_materials_approved\(\)/.test(live) && /create trigger jobs_lock_materials_approved\s+before insert or update on public\.jobs/i.test(live), '0026 replaces the 0025 trigger function on the same BEFORE INSERT OR UPDATE trigger');
-      assert(/old\.status = 'materials_requested'[\s\S]{0,200}new\.status in \('materials_approved', 'materials_declined', 'inspection_completed'\)[\s\S]{0,120}not privileged[\s\S]{0,120}auth\.uid\(\) is distinct from old\.customer_id/.test(live), '0026 guards approve and both decline states: privileged or the job customer only');
-      assert(/diagnosis-category decline/.test(sql) && /from\s+--\s+any other status/.test(sql), '0026 documents inspection_completed as the diagnosis decline, refused only from materials_requested');
+      // Exact guard structure (G1-G3). Whitespace-normalised so a logic flip
+      // (or -> and, dropped `not`, dropped branch) fails here; the local SQL
+      // harness covers behaviour (bypass sequences -> 42501).
+      const norm = live.replace(/\s+/g, ' ');
+      const guard = norm.slice(norm.indexOf(' if not privileged and (auth.uid() is null'), norm.indexOf(' if privileged and (new.materials_approved_cents'));
+      assert(/^ if not privileged and \(auth\.uid\(\) is null or auth\.uid\(\) is distinct from old\.customer_id\) and new\.status is distinct from old\.status then /.test(guard), '0026 guard applies to every non-privileged, non-customer status change (or/and/not exact)');
+      assert(/ then if new\.status in \('materials_approved', 'materials_declined'\) or old\.status = 'materials_requested' then raise exception 'Only the customer can approve or decline materials on this job' using errcode = '42501'/.test(guard), '0026 G1+G2: approve/decline from any status OR leaving materials_requested -> 42501 (or, not and)');
+      assert(/ end if; if new\.status = 'inspection_completed' then if old\.materials_request_seq > old\.materials_decided_seq then raise exception 'Only the customer can approve or decline materials on this job' using errcode = '42501', hint = '[^']*'; end if; null; end if; end if;$/.test(guard), '0026 G3: inspection_completed refused while a request is undecided; otherwise allowed (founder-pending null)');
+      const fblock = (sql.split('-- FOUNDER DECISION PENDING: Pro diagnosing->inspection_completed')[1] || '').split('-- END FOUNDER DECISION PENDING')[0];
+      assert(fblock && /^\s*null;\s*$/m.test(fblock) && !/raise/.test(fblock.split('\n').filter(l => !/^\s*--/.test(l)).join('\n')), '0026 Pro diagnosing->inspection_completed (no pending request) is one marked founder-pending block, still allowed');
+      assert(!/old\.status = 'materials_requested' and new\.status is distinct from old\.status and new\.status in/.test(norm), '0026 no longer limits the guard to materials_requested only (QA H1)');
+      assert(/diagnosis-category decline/.test(sql) && /G1\./.test(sql) && /G2\./.test(sql) && /G3\./.test(sql) && /FOUNDER DECISION PENDING/.test(sql.split('-- ── 0.')[0]), '0026 header documents G1-G3 and the pending founder decision');
+      assert(/^begin;$/m.test(live) && /^commit;$/m.test(live) && live.indexOf('\nbegin;') < live.indexOf('0026 needs 0025') && live.indexOf('\ncommit;') > live.indexOf('create trigger jobs_lock_materials_approved') && (live.match(/^(begin|commit);$/gm) || []).length === 2, '0026 migration body is one transaction (begin before the 0025 check, commit after the last statement)');
+      assert(/revoke all on function public\.jobs_lock_materials_approved\(\) from public, anon, authenticated;/.test(live) && !/grant execute on function public\.jobs_lock_materials_approved/.test(live), '0026 revokes EXECUTE on the trigger function from public, anon, authenticated');
       assert(/raise exception 'Only the customer can approve or decline materials on this job'\s+using errcode = '42501'/.test(live), '0026 refuses with 42501 and a clear message');
       assert(/current_user not in \('anon', 'authenticated'\)/.test(live), '0026 uses the same privileged-caller check as 0024/0025');
       assert(/add column materials_request_seq integer not null default 0/.test(live) && /add column if not exists materials_decided_seq integer not null default 0/.test(live), '0026 adds the request number and decided marker');
@@ -3219,12 +3231,18 @@ async function runReceiptTotalsChecks(){
       const updates = live.match(/^\s*update public\.jobs[\s\S]*?;/gim) || [];
       assert(updates.length === 1 && /set materials_request_seq = 1\s+where status = 'materials_requested'/.test(updates[0]), '0026 runs one data UPDATE only: the one-time request #1 init on pending rows');
       assert(/SUPERSEDED/.test(sql) && /option C/i.test(sql), '0026 marks 0025 option C backfill superseded');
-      assert(/Backfill: NO-OP/.test(sql) && /review list/i.test(sql) && /-- select j\.id, j\.status/.test(sql), '0026 founder steps: no-op backfill plus a review list');
+      assert(!/self-reported\)/.test(sql) && /Customer-responded request row \(documented evidence\)/.test(sql) && /ambiguous \/ Pro-only: stays \$0, flagged/.test(sql), '0026 preview: two labelled groups, no "self-reported" label on materials_requests');
+      const optin = (sql.split('-- BEGIN-OPT-IN')[1] || '').split('-- END-OPT-IN')[0];
+      assert(optin && optin.trim().split('\n').every(l => /^--/.test(l)) && /r\.responded_by = jj\.customer_id/.test(optin) && /materials_approved_cents is null/.test(optin) && !/fee|tip|reimbursed|labor/.test(optin), '0026 opt-in documented-only fill is commented out, null-only (idempotent), touches no other financial column');
       assert(/job_status_events/.test(sql) && /materials_requests/.test(sql) && /materials_receipts/.test(sql) && /information_schema\.columns/.test(sql), '0026 evidence query covers every candidate source');
       const founder = sql.split('-- ── Founder steps')[1].split('-- ── Verify')[0];
       const founderUpdates = founder.match(/-- update public\.jobs[\s\S]*?;/g) || [];
-      assert(founderUpdates.length === 1 && /where id = '<job uuid>'/.test(founderUpdates[0]) && /materials_approved_cents is null/.test(founderUpdates[0]) && !/fee|tip|reimbursed|labor/.test(founderUpdates[0]), '0026 founder fill is single-job, null-only, and touches no other financial column');
-      assert(/-- alter table public\.jobs drop column if exists materials_request_seq/.test(sql) && /Paste 0025_materials_approved_lock\.sql again/.test(sql), '0026 rollback restores 0025 first, then drops the columns');
+      assert(founderUpdates.length === 2 && /where id = '<job uuid>'/.test(founderUpdates[1]) && /materials_approved_cents is null/.test(founderUpdates[1]) && !/fee|tip|reimbursed|labor/.test(founderUpdates[1]), '0026 founder fill is single-job, null-only, and touches no other financial column');
+      const rb = sql.split('-- ── Rollback')[1] || '';
+      const r1 = rb.split('-- R2.')[0], r2 = rb.split('-- R2.')[1] || '';
+      assert(/begin;[\s\S]*0025_materials_approved_lock\.sql[\s\S]*drop column if exists materials_decided_seq[\s\S]*commit;/.test(r1), '0026 rollback R1: one transaction, 0025 function first, then drop the 0026 columns');
+      const o = k => r2.indexOf(k);
+      assert(o('begin;') >= 0 && o('begin;') < o('drop trigger') && o('drop trigger') < o('drop function') && o('drop function') < o('materials_request_seq') && o('materials_request_seq') < o('materials_approved_cents') && o('materials_approved_cents') < o('commit;'), '0026 rollback R2: one transaction, undo 0026 trigger/function, then 0026 columns, then 0025 columns');
     });
   } catch (e) {
     fail++;
