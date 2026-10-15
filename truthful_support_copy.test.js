@@ -1,30 +1,33 @@
 /**
- * COPY-01 (Customer): no unsupported guarantee, refund, cancellation-fee or
- * support-response claims in the shipped page.
- * Haven has no established guarantee, insurance, refund policy, cancellation
- * fee, or monitored support channel yet, so the app must not claim them.
- * (The receipt's support email and the simulated support chat are covered by
- * Grokbot's PRs #47/#49 and are not changed here.)
+ * COPY-01 (Customer): remove the unsupported guarantee, 48-hour refund and
+ * cancellation-fee wording, and nothing else. The Report-an-issue and
+ * Trust & safety topics and the receipt card's styling must match master.
+ * (Receipt and cancel-sheet support lines are handled by PR #86, not here.)
  */
 const fs = require('fs');
 let pass = 0, fail = 0;
 const ok = (c, m) => { if (c) pass++; else { fail++; console.error('  ✗ ' + m); } };
-const html = fs.readFileSync('prototype.html', 'utf8');
-const built = fs.readFileSync('index.html', 'utf8');
-for (const [name, src] of [['source page', html], ['built page', built]]) {
-  ok(!/satisfaction guarantee|trust & safety guarantee/.test(src), name + ': no guarantee claims');
-  ok(!/within 48 hours of completion|partial or full refund/.test(src), name + ': no 48-hour refund promise');
-  ok(!/cancellations may include a small fee/.test(src), name + ': no cancellation-fee claim');
-  ok(!/Our support team can review/.test(src), name + ': no promise that a support team reviews issues');
-  ok(!/Haven Support is not a substitute/.test(src), name + ': Trust & safety no longer implies a support team');
-  ok(/Rated \{starDisplay\(vj\.stars,13\)\}\. Thanks for rating this job\./.test(src) || /Thanks for rating this job\./.test(src), name + ': rated job thanks the customer');
-  ok(/Something not right with this job\? In-app support isn't available yet\./.test(src), name + ': unrated job says support is not available yet');
-  ok(/Payments aren't collected in the app yet, so there are no in-app charges to refund\./.test(src), name + ': refunds FAQ is truthful');
-  ok(/You can cancel for free from the Bookings tab any time before a Pro accepts\./.test(src), name + ': cancellation FAQ matches what the app does');
-  ok(/call 911 or your local emergency services/.test(src), name + ': safety FAQ points to emergency services');
+const jsx = fs.readFileSync('home_services_app.jsx', 'utf8');
+const pages = [['source jsx', jsx], ['prototype.html', fs.readFileSync('prototype.html', 'utf8')], ['index.html', fs.readFileSync('index.html', 'utf8')]];
+for (const [name, src] of pages) {
+  ok(!/satisfaction guarantee|trust & safety guarantee|covered by Haven/i.test(src), name + ': no guarantee claims');
+  ok(!/48 hours|partial or full refund/i.test(src), name + ': no 48-hour refund promise');
+  ok(!/may include a small fee|compensate their travel time/i.test(src), name + ': no cancellation-fee claim in the FAQ');
+  ok(!/In-app support isn't available yet/.test(src), name + ": no 'In-app support isn't available yet' text");
 }
-// Formatting-tolerant: under the compiled suite prototype.html holds esbuild output
-// ("vj.rated ? SL2 : W2"), so match the expression, not the exact Babel spacing.
-ok(/vj\.rated\s*\?\s*"✅"\s*:\s*"🎧"/.test(html) && /background:\s*vj\.rated\s*\?\s*SL\d*\s*:\s*W\d*\b/.test(html), 'unrated card uses 🎧 with neutral styling; rated keeps the green thanks');
+// Reverted screens: exact master copy (from master b798bd5).
+const MASTER_REPORT = '{t:"Report an issue with a pro",a:"If you experience a problem with a pro or a completed job, contact Haven Support. Our support team can review the booking details, messages, photos, and receipt and help determine the next steps."},';
+const MASTER_SAFETY = '{t:"Trust & safety",a:"If you\'re ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},';
+const MASTER_CARD = [
+  '<div style={{background:SL,borderRadius:14,padding:14,display:"flex",gap:10,alignItems:"center",marginBottom:20}}>',
+  '<span style={{fontSize:16}}>✅</span>',
+  '<span style={{fontSize:12,color:SC,fontWeight:600,lineHeight:1.4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>',
+];
+ok(jsx.includes(MASTER_REPORT), 'Report-an-issue topic matches master');
+ok(jsx.includes(MASTER_SAFETY), 'Trust & safety topic matches master');
+let at = jsx.indexOf(MASTER_CARD[0]);
+ok(at > 0 && MASTER_CARD.every(l => { const i = jsx.indexOf(l, at); const good = i >= at && i - at < 400; at = i; return good; }), 'receipt card styling matches master');
+const card = jsx.slice(jsx.indexOf(MASTER_CARD[0]), jsx.indexOf(MASTER_CARD[0]) + 600);
+ok(!/🎧|aria-hidden|vj\.rated\?SL:W|color:vj\.rated/.test(card), 'receipt card restyle (🎧 / aria-hidden / conditional colours) reverted');
 console.log(`--- COPY-01 truthful support copy: ${pass} passing, ${fail} failing ---`);
 process.exit(fail ? 1 : 0);
