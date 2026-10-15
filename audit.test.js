@@ -1951,7 +1951,7 @@ function runHomeIntentArchitectureChecks(){
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 
-  runA2QaTesterGateChecks().then(() => runArrivedVisibilityChecks()).then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runReceiptTotalsChecks()).then(() => {
+  runA2QaTesterGateChecks().then(() => runArrivedVisibilityChecks()).then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runReceiptTotalsChecks()).then(() => runRls0027MigrationStaticChecks()).then(() => {
     assert(unexpectedRequests.length === 0, `No request left the mocked backend (unexpected: ${JSON.stringify(unexpectedRequests.slice(0,3))})`);
     console.log(`\n--- Full audit: ${pass} passing, ${fail} failing ---`);
     if (fail > 0) process.exit(1);
@@ -2377,6 +2377,70 @@ async function runLockedPriceChecks(){
 // Materials mapping stays. Later statuses are not walked backward.
 
 // ── Phase 1B A2: QA tester gate ─────────────────────────────────────────
+// 0027 migration text (static). The behaviour is proven by
+// supabase/tests/rls_0027_policy_matrix.py against a local Postgres; this
+// pins the file's shape so a later edit cannot quietly widen it.
+function runRls0027MigrationStaticChecks(){
+  const before = { pass, fail };
+  step('RLS-0027. migration text (static)', () => {
+    const path = require('path');
+    const sql = fs.readFileSync(path.join(__dirname, 'supabase/migrations/0027_jobs_read_rls_and_unused_tables.sql'), 'utf8');
+    const rollbackAt = sql.indexOf('-- ── Rollback');
+    assert(rollbackAt > 0, '0027 has a Rollback section');
+    const body = sql.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');   // executable SQL only
+    const rollback = sql.slice(rollbackAt).split('\n').filter((l) => /^-- /.test(l)).map((l) => l.slice(3)).join('\n');
+    const unused = ['job_status_events','materials_requests','materials_receipts','tips','job_messages','job_media','job_notes','earnings_statements'];
+
+    // Header and paste order.
+    assert(/PASTE ORDER: 0025 body, then 0027 \(this file\), then 0026, then 0028/.test(sql) && /Safe to re-run/i.test(sql), '0027 header: paste order 0025, 0027, 0026, 0028; safe to re-run');
+    assert(/What changes/.test(sql) && /Does not change/.test(sql) && /Must keep working/.test(sql), '0027 header lists what changes, what does not, and what must keep working');
+    assert(/^begin;$/m.test(body) && /^commit;$/m.test(body), '0027 runs in one transaction');
+    assert(/raise exception '0027: prerequisites missing/.test(body) && body.indexOf('prerequisites missing') < body.indexOf('drop policy'), '0027 fails fast before changing anything');
+    assert(/relforcerowsecurity/.test(body) && /prosecdef/.test(body), '0027 checks jobs RLS is not forced and the RPCs are SECURITY DEFINER');
+
+    // jobs: SELECT policies only.
+    assert(/drop policy if exists jobs_select_assigned_or_active on public\.jobs;/.test(body), '0027 drops 0007 jobs_select_assigned_or_active');
+    assert(/create policy jobs_select_own_customer\s+on public\.jobs\s+for select\s+to authenticated\s+using \(customer_id = auth\.uid\(\)\);/.test(body), '0027: customers read only their own jobs (authenticated)');
+    assert(/create policy jobs_select_assigned_pro\s+on public\.jobs\s+for select\s+to authenticated\s+using \(pro_id = auth\.uid\(\)\);/.test(body), '0027: Pros read only jobs assigned to them (authenticated)');
+    const creates = body.match(/create policy[\s\S]*?;/g) || [];
+    assert(creates.length === 2 && creates.every((c) => /for select\s+to authenticated/.test(c)), '0027 creates only SELECT policies, none for anon');
+    assert(!/for (insert|update|delete|all)\b/i.test(body), '0027 adds no INSERT / UPDATE / DELETE policy');
+    const drops = (body.match(/drop policy if exists (\w+)/g) || []).map((d) => d.split(' ').pop());
+    assert(drops.every((d) => ['jobs_select_assigned_or_active','jobs_select_own_customer','jobs_select_assigned_pro'].includes(d)), '0027 drops no write policy and keeps jobs_select_own_posted');
+    assert(!/create (or replace )?(function|trigger)|drop (function|trigger)|alter function|disable trigger/i.test(body), '0027 does not touch functions or triggers');
+    assert(!/(grant|revoke)[^;]*on (table )?public\.(jobs|profiles)\b/i.test(body), '0027 changes no grant on jobs or profiles');
+    assert(!/force row level security/i.test(body), '0027 never forces RLS');
+    assert(!/\b0025_|\b0026_|materials_lock|customer_only_materials/i.test(body), '0027 does not depend on 0025 / 0026 objects');
+
+    // Unused tables: RLS on, no policies, anon/authenticated revoked.
+    assert(unused.every((t) => body.includes(`'${t}'`)), '0027 covers all eight unused 0001 tables');
+    // S1 (QA #88): each table must be in the section-2 loop itself, not only in the section-0 prerequisite list.
+    const s2 = sql.slice(sql.indexOf('-- ── 2. Unused tables'), sql.indexOf('-- ── 3.'));
+    const s2live = s2.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');
+    const s2arr = (s2live.match(/foreach t in array array\[([^\]]*)\] loop/) || [])[1] || '';
+    const s2list = (s2arr.match(/'(\w+)'/g) || []).map((x) => x.slice(1, -1));
+    assert(sql.indexOf('-- ── 2. Unused tables') > 0 && s2list.length === 8 && unused.every((t) => s2list.includes(t)) && /enable row level security/.test(s2live), '0027 section-2 loop itself lists exactly the eight unused tables');
+    assert(/enable row level security/.test(body) && /revoke all on table public\.%I from public, anon, authenticated/.test(body) && /revoke all on sequence %s from public, anon, authenticated/.test(body), '0027 enables RLS and revokes anon / authenticated table and sequence rights');
+    assert(!/service_role/.test(body), '0027 does not change service_role');
+
+    // Founder query + verify.
+    assert(/Founder query \(read-only\)\. Run BEFORE and AFTER/.test(sql) && /-- select c\.relname/.test(sql) && /relforcerowsecurity\s+as rls_forced/.test(sql) && /'authenticated'::regrole/.test(sql), '0027 has the commented founder query (RLS, forced, policies, anon / authenticated grants)');
+    assert(/-- ── Verify/.test(sql) && /jobs_posted_within_radius\(\)/.test(sql.slice(sql.indexOf('-- ── Verify'))), '0027 has commented Verify queries incl. the board RPC');
+
+    // Rollback restores 0007 exactly and turns RLS back off.
+    assert(/create policy jobs_select_assigned_or_active\s+on public\.jobs\s+for select\s+to anon, authenticated\s+using \(\s+pro_id is not null\s+or status in \(\s+'en_route','arrived','diagnosing',\s+'materials_requested','materials_approved','in_progress',\s+'inspection_completed','materials_declined','complete','cancelled'\s+\)\s+\);/.test(rollback), '0027 rollback recreates 0007 exactly');
+    const p0007 = fs.readFileSync(path.join(__dirname, 'supabase/migrations/0007_chunk3_select_assigned.sql'), 'utf8');
+    const norm = (x) => x.replace(/\s+/g, ' ').trim();
+    const m0007 = p0007.match(/create policy jobs_select_assigned_or_active[\s\S]*?\);\s*\n/);
+    const mRb = rollback.match(/create policy jobs_select_assigned_or_active[\s\S]*?\);\s*\n/);
+    assert(m0007 && mRb && norm(m0007[0]) === norm(mRb[0]), '0027 rollback policy text matches 0007 byte-for-byte (whitespace-normalized)');
+    assert(unused.every((t) => new RegExp(`alter table public\\.${t}\\s+disable row level security`).test(rollback)), '0027 rollback disables the new RLS');
+    assert(/drop policy if exists jobs_select_own_customer/.test(rollback) && /drop policy if exists jobs_select_assigned_pro/.test(rollback), '0027 rollback drops the two new policies');
+    assert(fs.existsSync(path.join(__dirname, 'supabase/tests/rls_0027_policy_matrix.py')), '0027 policy-matrix test exists');
+  });
+  console.log(`\n--- RLS 0027 static audit: ${pass - before.pass} passing, ${fail - before.fail} failing ---`);
+}
+
 async function runA2QaTesterGateChecks(){
   const saved = { ...storedData };
   try {
