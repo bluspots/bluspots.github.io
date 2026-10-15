@@ -150,9 +150,9 @@ const SHOW_HOME_REPORT_CARD=false;
 
 const TOPICS=[
   {t:"Booking & pricing questions",a:"All prices shown are fixed — what you see at booking is what you pay, plus a surge fee only if you choose ASAP scheduling. There are no hidden fees or hourly surprises."},
-  {t:"Cancel or reschedule a job",a:"You can cancel a job any time before a pro accepts it for free from the Bookings tab. Once a pro is en route, cancellations may include a small fee to compensate their travel time."},
+  {t:"Cancel or reschedule a job",a:"You can cancel a job any time before a pro accepts it for free from the Bookings tab."},
   {t:"Report an issue with a pro",a:"If you experience a problem with a pro or a completed job, contact Haven Support. Our support team can review the booking details, messages, photos, and receipt and help determine the next steps."},
-  {t:"Refunds & billing",a:"If a job wasn't completed to your satisfaction, contact support within 48 hours of completion and we'll review it for a partial or full refund."},
+  {t:"Refunds & billing",a:"Payments aren't collected in the app yet, so there are no in-app charges to refund. Haven doesn't offer a refund policy or guarantee in the app at this time."},
   {t:"Trust & safety",a:"If you're ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},
 ];
 
@@ -3920,7 +3920,7 @@ export default function App(){
             <div style={{background:SL,borderRadius:14,padding:14,display:"flex",gap:10,alignItems:"center",marginBottom:20}}>
               <span style={{fontSize:16}}>✅</span>
               <span style={{fontSize:12,color:SC,fontWeight:600,lineHeight:1.4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                {vj.rated?<>Rated {starDisplay(vj.stars,13)} — covered by Haven's satisfaction guarantee.</>:"This job is covered by Haven's trust & safety guarantee."}
+                {vj.rated?<>Rated {starDisplay(vj.stars,13)} — thanks for rating this job.</>:"This job is complete."}
               </span>
             </div>
 
