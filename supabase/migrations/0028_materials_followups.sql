@@ -42,8 +42,8 @@
 --       materials_requested) by the job's assigned Pro (auth.uid() =
 --       jobs.pro_id) that keeps the SAME estimate may now fill in an item
 --       list that is null or [], as long as the written items are a JSON
---       array whose cost_cents (all numbers) sum exactly to the frozen
---       estimate. Anyone else (customer, other Pro, stranger, no JWT) gets
+--       array whose cost_cents (each a whole number >= 0) sum exactly to
+--       the frozen estimate. Anyone else (customer, other Pro, stranger, no JWT) gets
 --       42501; privileged callers are not limited by C2 at all. Money is
 --       counted from the estimate, which stays frozen. A re-send that
 --       changes the estimate, replaces a non-empty item list, or writes
@@ -179,8 +179,9 @@ begin
   -- LEGACY-FILL (0028, QA #85 v3 O4 + QA #89 O1/O2): computed before C2.
   --     Only the job's assigned Pro (privileged callers skip C2 entirely),
   --     same request, same estimate, stored items still empty, and the new
-  --     items must be a JSON array whose cost_cents are all numbers that
-  --     sum exactly to the frozen estimate.
+  --     items must be a JSON array whose cost_cents are all whole,
+  --     non-negative numbers (0 allowed) that sum exactly to the frozen
+  --     estimate.
   if not privileged
      and auth.uid() is not null
      and auth.uid() = old.pro_id
@@ -189,7 +190,10 @@ begin
      and new.materials_estimate_cents is not distinct from old.materials_estimate_cents
      and coalesce(old.materials_items, '[]'::jsonb) = '[]'::jsonb
      and jsonb_typeof(new.materials_items) = 'array' then
-    select count(*) filter (where jsonb_typeof(e -> 'cost_cents') is distinct from 'number'),
+    select count(*) filter (where case when jsonb_typeof(e -> 'cost_cents') = 'number'
+                                       then (e ->> 'cost_cents')::numeric < 0
+                                            or (e ->> 'cost_cents')::numeric <> trunc((e ->> 'cost_cents')::numeric)
+                                       else true end),
            sum(case when jsonb_typeof(e -> 'cost_cents') = 'number' then (e ->> 'cost_cents')::numeric end)
       into bad_items, items_sum
       from jsonb_array_elements(new.materials_items) as e;
