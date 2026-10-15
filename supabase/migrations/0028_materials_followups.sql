@@ -8,9 +8,9 @@
 -- connection, so begin; would not carry over. The rollback block below is
 -- also one block, one run.
 --
--- PASTE ORDER: 0025 body, then 0026, then 0027, then 0028 (this file).
--- 0028 does not depend on 0027 (it only replaces the 0026 trigger function
--- and adds no column, policy or grant), but keep the numbered order.
+-- PASTE ORDER: 0025 body, then 0027, then 0026, then 0028 (this file),
+-- each pasted as its own run. 0028 does not depend on 0027 (it only
+-- replaces the 0026 trigger function and adds no column, policy or grant).
 -- Paste as the database owner. Do not apply it from the app, from CI, or
 -- from an agent. Safe to re-run. Section 0 stops with an error, and nothing
 -- is applied, if 0026 is not installed.
@@ -38,13 +38,17 @@
 --       (each still adds its own request-time estimate), privileged
 --       corrections (SQL editor / service_role).
 --   (c) LEGACY-FILL (O4). A request pending since before 0026 may have no
---       stored item list. A same-request Pro re-send (materials_requested ->
---       materials_requested) that keeps the SAME estimate may now fill in
---       an item list that is null or [] instead of failing 42501. Money is
+--       stored item list. A same-request re-send (materials_requested ->
+--       materials_requested) by the job's assigned Pro (auth.uid() =
+--       jobs.pro_id) that keeps the SAME estimate may now fill in an item
+--       list that is null or [], as long as the written items are a JSON
+--       array whose cost_cents (all numbers) sum exactly to the frozen
+--       estimate. Anyone else (customer, other Pro, stranger, no JWT) gets
+--       42501; privileged callers are not limited by C2 at all. Money is
 --       counted from the estimate, which stays frozen. A re-send that
---       changes the estimate, or that replaces a non-empty item list, is
---       still 42501 on purpose: the customer approves exactly the amount
---       shown at request time. A Pro whose legacy retry still fails should
+--       changes the estimate, replaces a non-empty item list, or writes
+--       items that do not add up to the estimate is still 42501 on purpose:
+--       the customer approves exactly the amount shown at request time. A Pro whose legacy retry still fails should
 --       re-send without estimate/items, or wait for the customer.
 --   (d) ABANDON (O1). When the customer leaves materials_requested without
 --       a decision (arrived, en_route, complete, ...), the request is
@@ -55,12 +59,19 @@
 --       request afterwards still gets its own number and counts on its own.
 --       Privileged callers that leave materials_requested keep 0026's
 --       behaviour (no stamp), for manual correction.
+--       (d) covers ONLY abandonments that happen after 0028 is applied.
+--       Rows abandoned earlier (left undecided under 0026) stay as they are
+--       (CoS ruling): this file does not close them and no later status
+--       change closes them either, because the stamp only runs on the move
+--       OUT of materials_requested. Such a row keeps seq > decided through
+--       in_progress and complete, and G3 still refuses the Pro's
+--       inspection_completed on it. A new request on it still counts once.
 --   O5 (separate-session pasting) is a paste-procedure risk; see HOW TO RUN.
 --
 -- No column, policy, grant, status value or data row is added or changed.
 -- Existing abandoned requests (seq > decided, status not
--- materials_requested) are NOT rewritten by this file; they close on the
--- next status change by a client, as before (see Verify).
+-- materials_requested) are NOT rewritten by this file and stay undecided
+-- as they are; nothing in 0028 closes them later (see (d) and Verify).
 
 begin;
 
@@ -96,6 +107,9 @@ declare
   is_customer boolean;
   undecided boolean;
   new_request_move boolean;
+  legacy_fill_ok boolean := false;
+  bad_items integer;
+  items_sum numeric;
 begin
   if tg_op = 'INSERT' then
     if not privileged then
@@ -162,26 +176,42 @@ begin
             hint = 'A customer cannot reopen or create a materials request.';
   end if;
 
+  -- LEGACY-FILL (0028, QA #85 v3 O4 + QA #89 O1/O2): computed before C2.
+  --     Only the job's assigned Pro (privileged callers skip C2 entirely),
+  --     same request, same estimate, stored items still empty, and the new
+  --     items must be a JSON array whose cost_cents are all numbers that
+  --     sum exactly to the frozen estimate.
+  if not privileged
+     and auth.uid() is not null
+     and auth.uid() = old.pro_id
+     and old.status = 'materials_requested'
+     and new.status = 'materials_requested'
+     and new.materials_estimate_cents is not distinct from old.materials_estimate_cents
+     and coalesce(old.materials_items, '[]'::jsonb) = '[]'::jsonb
+     and jsonb_typeof(new.materials_items) = 'array' then
+    select count(*) filter (where jsonb_typeof(e -> 'cost_cents') is distinct from 'number'),
+           sum(case when jsonb_typeof(e -> 'cost_cents') = 'number' then (e ->> 'cost_cents')::numeric end)
+      into bad_items, items_sum
+      from jsonb_array_elements(new.materials_items) as e;
+    legacy_fill_ok := bad_items = 0
+                      and coalesce(items_sum, 0) = coalesce(old.materials_estimate_cents, 0);
+  end if;
+
   -- C2: while a request is pending, the requested amount is frozen for
   --     EVERY client caller, the job's customer included (only privileged
   --     callers may correct it). The new-request move itself (allowed
   --     statuses -> materials_requested) sets it.
-  --     LEGACY-FILL (0028, QA #85 v3 O4): a same-request re-send
-  --     (materials_requested -> materials_requested) with the SAME estimate
-  --     by a non-customer (the assigned Pro) may fill in an item list that
-  --     is still empty (null or []), as on requests made before 0026. The counted amount is the estimate,
-  --     which stays frozen, so this cannot change money.
+  --     LEGACY-FILL (0028): the assigned Pro may fill in an item list that
+  --     is still empty (null or []), as on requests made before 0026, only
+  --     when legacy_fill_ok (see above). The counted amount is the
+  --     estimate, which stays frozen, so this cannot change money.
   if not privileged
      and (old.status = 'materials_requested'
           or old.materials_request_seq > old.materials_decided_seq)
      and not new_request_move
      and (new.materials_estimate_cents is distinct from old.materials_estimate_cents
           or new.materials_items is distinct from old.materials_items)
-     and not (not is_customer
-              and old.status = 'materials_requested'
-              and new.status = 'materials_requested'
-              and new.materials_estimate_cents is not distinct from old.materials_estimate_cents
-              and coalesce(old.materials_items, '[]'::jsonb) = '[]'::jsonb) then
+     and not legacy_fill_ok then
     raise exception 'The requested materials amount cannot change while the request is pending'
       using errcode = '42501',
             hint = 'The customer approves the amount shown at request time. Make a new request for a different amount.';
@@ -261,8 +291,9 @@ commit;
 --        prosrc like '%can only change with a new materials request%' as has_c4,
 --        prosrc like '%ABANDON (0028%' as has_abandon
 --   from pg_proc where proname = 'jobs_lock_materials_approved';
--- Abandoned requests left by 0026 (read-only; they close on the next
--- client status change):
+-- Abandoned requests left by 0026 (read-only). These stay undecided as
+-- they are (CoS ruling); 0028 does not close them, now or on any later
+-- status change:
 -- select id, status, materials_request_seq, materials_decided_seq
 --   from public.jobs
 --  where status <> 'materials_requested'
