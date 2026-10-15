@@ -52,8 +52,10 @@
 --        C2. While a request is pending (status materials_requested, or
 --            materials_request_seq > materials_decided_seq) the requested
 --            amount columns (materials_estimate_cents, materials_items) are
---            frozen: changing them is refused (42501). The customer approves
---            exactly the amount shown at request time. A Pro who wants a
+--            frozen for every non-privileged caller, the job's customer
+--            included: changing them is refused (42501), also in the same
+--            PATCH as the approval. The customer approves exactly the amount
+--            the Pro requested. A Pro who wants a
 --            different amount must make a NEW request (see counting rule),
 --            which gets its own number. The only allowed change is the
 --            new-request move itself (en_route / arrived / diagnosing /
@@ -248,10 +250,10 @@ begin
   end if;
 
   -- C2: while a request is pending, the requested amount is frozen for
-  --     everyone but the customer and privileged callers. The new-request
-  --     move itself (allowed statuses -> materials_requested) sets it.
+  --     EVERY client caller, the job's customer included (only privileged
+  --     callers may correct it). The new-request move itself (allowed
+  --     statuses -> materials_requested) sets it.
   if not privileged
-     and (auth.uid() is null or auth.uid() is distinct from old.customer_id)
      and (old.status = 'materials_requested'
           or old.materials_request_seq > old.materials_decided_seq)
      and not (new.status = 'materials_requested'
