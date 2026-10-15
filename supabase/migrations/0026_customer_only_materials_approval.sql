@@ -13,6 +13,8 @@
 -- AFTER 0025 (it needs 0025's columns and replaces 0025's trigger function;
 -- section 0 stops with an error if 0025 is missing). Do not apply it from
 -- the app, from CI, or from an agent. Safe to re-run.
+-- PASTE ORDER: 0025 body, then 0027, then 0026 (this file), then 0028,
+-- each pasted as its own run. 0026 does not depend on 0027.
 -- The whole migration (sections 0-3) is one transaction (begin; ... commit;):
 -- if the 0025 check or any statement fails, nothing is applied, as long as
 -- the file goes in as one single run (see HOW TO RUN above; this holds
