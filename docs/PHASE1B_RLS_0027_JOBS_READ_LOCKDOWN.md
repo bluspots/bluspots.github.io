@@ -1,7 +1,7 @@
 # Phase 1B: 0027 jobs read lockdown + RLS on unused tables
 
 File: `supabase/migrations/0027_jobs_read_rls_and_unused_tables.sql`
-(paste after 0026, as the database owner, in the Supabase SQL editor; safe to re-run).
+(paste order: 0025 body, then 0027, then 0026, then 0028, each as its own run; as the database owner, in the Supabase SQL editor; safe to re-run).
 
 ## What it does
 

@@ -5,7 +5,9 @@
 -- PASTE THIS WHOLE FILE AS ONE SINGLE RUN (select all, run once) in the
 -- Supabase SQL editor as the database owner. Do not run it in pieces;
 -- it is wrapped in BEGIN/COMMIT so it applies fully or not at all.
--- AFTER 0026. Do not apply it from the app, from CI, or from an agent.
+-- PASTE ORDER: 0025 body, then 0027 (this file), then 0026, then 0028,
+-- each pasted as its own run. 0027 does not depend on 0026.
+-- Do not apply it from the app, from CI, or from an agent.
 -- Safe to re-run. It runs in one transaction and stops before changing
 -- anything if a prerequisite is missing (section 0).
 -- Run the founder query at the bottom (section 4) BEFORE and AFTER pasting

@@ -2392,7 +2392,7 @@ function runRls0027MigrationStaticChecks(){
     const unused = ['job_status_events','materials_requests','materials_receipts','tips','job_messages','job_media','job_notes','earnings_statements'];
 
     // Header and paste order.
-    assert(/AFTER 0026/.test(sql) && /Safe to re-run/i.test(sql), '0027 header: paste after 0026, safe to re-run');
+    assert(/PASTE ORDER: 0025 body, then 0027 \(this file\), then 0026, then 0028/.test(sql) && /Safe to re-run/i.test(sql), '0027 header: paste order 0025, 0027, 0026, 0028; safe to re-run');
     assert(/What changes/.test(sql) && /Does not change/.test(sql) && /Must keep working/.test(sql), '0027 header lists what changes, what does not, and what must keep working');
     assert(/^begin;$/m.test(body) && /^commit;$/m.test(body), '0027 runs in one transaction');
     assert(/raise exception '0027: prerequisites missing/.test(body) && body.indexOf('prerequisites missing') < body.indexOf('drop policy'), '0027 fails fast before changing anything');
@@ -2414,6 +2414,12 @@ function runRls0027MigrationStaticChecks(){
 
     // Unused tables: RLS on, no policies, anon/authenticated revoked.
     assert(unused.every((t) => body.includes(`'${t}'`)), '0027 covers all eight unused 0001 tables');
+    // S1 (QA #88): each table must be in the section-2 loop itself, not only in the section-0 prerequisite list.
+    const s2 = sql.slice(sql.indexOf('-- ── 2. Unused tables'), sql.indexOf('-- ── 3.'));
+    const s2live = s2.split('\n').filter((l) => !/^\s*--/.test(l)).join('\n');
+    const s2arr = (s2live.match(/foreach t in array array\[([^\]]*)\] loop/) || [])[1] || '';
+    const s2list = (s2arr.match(/'(\w+)'/g) || []).map((x) => x.slice(1, -1));
+    assert(sql.indexOf('-- ── 2. Unused tables') > 0 && s2list.length === 8 && unused.every((t) => s2list.includes(t)) && /enable row level security/.test(s2live), '0027 section-2 loop itself lists exactly the eight unused tables');
     assert(/enable row level security/.test(body) && /revoke all on table public\.%I from public, anon, authenticated/.test(body) && /revoke all on sequence %s from public, anon, authenticated/.test(body), '0027 enables RLS and revokes anon / authenticated table and sequence rights');
     assert(!/service_role/.test(body), '0027 does not change service_role');
 
