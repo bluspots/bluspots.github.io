@@ -77,6 +77,165 @@ function proProfileFacts(p){
     ].filter(([,v])=>v!=null),
   };
 }
+// ── Phase 1B B4: cross-device bookings ─────────────────────────────────────
+// Bookings come from the signed-in account's backend rows (jobs where
+// customer_id = auth.uid(), read with fetchMyCanonicalJobs). haven_jobs in
+// localStorage is only a cache of that account's jobs:
+//   - haven_jobs_owner records which account the cache belongs to. A cache
+//     for another account (or with no owner) is not shown and is cleared.
+//   - A backend row replaces or merges over the local entry with the same
+//     backend id. Its status wins over a stale local status.
+//   - A row this browser has never seen is built from backend columns.
+//   - A cached backend-linked job the account read does not return is
+//     dropped (not this account's, or gone), unless it was added after the
+//     read started (just posted in this tab).
+//   - A local-only entry (no backend id) is not a real booking: once the
+//     account read lands it is dropped. Since Slice 5 every job posted with
+//     Supabase configured has a backend id before it is saved.
+// With no Supabase config (local preview / harness) none of this runs.
+const HAVEN_JOBS_OWNER_KEY = "haven_jobs_owner";
+const HAVEN_NO_JOBS = Object.freeze([]);
+const HAVEN_MATERIALS_STATUSES = new Set(["materials_requested","materials_approved","inspection_completed","materials_declined"]);
+function havenReadJobsOwner(){
+  try{ return String(localStorage.getItem(HAVEN_JOBS_OWNER_KEY)||"").trim(); }catch{ return ""; }
+}
+function havenWriteJobsOwner(userId){
+  try{
+    if(userId) localStorage.setItem(HAVEN_JOBS_OWNER_KEY, String(userId));
+    else localStorage.removeItem(HAVEN_JOBS_OWNER_KEY);
+  }catch{}
+}
+// MAP-03 storage cleanup only: the raw stored jobs cache whatever its owner
+// (master caches have no owner key). Never used for display.
+function havenReadStoredJobsAnyOwner(){
+  try{
+    const parsed=JSON.parse(localStorage.getItem("haven_jobs")||"null");
+    const data=parsed&&typeof parsed==="object"&&!Array.isArray(parsed)&&"data" in parsed?parsed.data:parsed;
+    return Array.isArray(data)?data:[];
+  }catch{ return []; }
+}
+// Signed-in account id for the jobs cache. "" when signed out. Never a demo id.
+function havenJobsAccountId(){
+  try{ return (typeof havenJobCustomerId==="function" && havenJobCustomerId()) || ""; }catch{ return ""; }
+}
+// True when the cached jobs may be shown: no backend configured (local
+// preview), or the cache owner is the signed-in account.
+function havenJobsCacheIsCurrentAccount(){
+  if(typeof getSupabaseConfig!=="function" || !getSupabaseConfig()) return true;
+  const uid = havenJobsAccountId();
+  if(!uid) return false;
+  const owner = havenReadJobsOwner();
+  return !!owner && owner.toLowerCase()===uid.toLowerCase();
+}
+function havenBackendTime(v){
+  if(v==null || v==="") return null;
+  const t = Date.parse(v);
+  return Number.isFinite(t) ? t : null;
+}
+function havenBackendKey(id){ return id==null ? "" : String(id).trim().toLowerCase(); }
+// Materials request shown while awaiting approval, from the backend row.
+// Shared by the active-job poll and the account read.
+function havenMaterialsRequestFromRow(row){
+  if(!row || !(Array.isArray(row.materials_items)||typeof row.materials_estimate_cents==="number")) return null;
+  const items=(Array.isArray(row.materials_items)?row.materials_items:[]).map(it=>({
+    description: it?.name ?? "",
+    qty: (it&&typeof it.qty==="number"&&it.qty>0)?it.qty:1,
+    amount: Math.max(0, Math.floor((it?.cost_cents||0)))/100,
+  }));
+  const estCents = typeof row.materials_estimate_cents==="number"?row.materials_estimate_cents:null;
+  const est = estCents!=null ? Math.max(0, Math.floor(estCents))/100
+    : items.reduce((s,m)=>s+m.amount*(m.qty||1),0);
+  return {items,estimatedTotal:est};
+}
+// A job this browser has never seen, built only from backend columns. No
+// demo pro, no demo completion details, no local payment card.
+function havenJobFromBackendRow(row){
+  const status = VALID_JOB_STATUSES.has(String(row.status)) ? String(row.status) : "posted";
+  const title = typeof row.title==="string" && row.title.trim() ? row.title.trim() : "Service";
+  const cat = typeof row.category==="string" ? row.category : "";
+  const laborCents = typeof row.fixed_customer_labor_price_cents==="number" && row.fixed_customer_labor_price_cents>=0 ? row.fixed_customer_labor_price_cents : 0;
+  const feeCents = typeof row.emergency_fee_cents==="number" && row.emergency_fee_cents>=0 ? row.emergency_fee_cents : 0;
+  // Catalog jobs are posted with the catalog name as title (postJob).
+  const task = TASKS.find(t=>t.n===title && (!cat || t.c===cat)) || null;
+  const prefs = Array.isArray(row.customer_preferences_snapshot) ? row.customer_preferences_snapshot.filter(x=>typeof x==="string") : [];
+  const job = makeJob({
+    taskId: task ? task.id : null,
+    custom: task ? null : {title, cat, price: laborCents/100},
+    status,
+    emergency: !!row.emergency,
+    emergencyFee: feeCents/100,
+    addressText: (typeof row.address_snapshot==="string" && row.address_snapshot.trim()) || (typeof row.city_label==="string" && row.city_label.trim()) || "—",
+    jobPreferences: prefs,
+    lockedPrice: task ? laborCents/100 : null,
+    requiresDiagnosis: !!row.requires_diagnosis,
+    materialsRequest: HAVEN_MATERIALS_STATUSES.has(status) ? havenMaterialsRequestFromRow(row) : null,
+    acceptedAt: havenBackendTime(row.accepted_at),
+    completedAt: status==="complete" ? havenBackendTime(row.completed_at) : null,
+    backendJobId: String(row.id),
+  });
+  // Same convention as a local job: the id is the posting time.
+  job.id = havenBackendTime(row.posted_at) ?? Date.now();
+  return job;
+}
+// Backend values over a cached entry for the same backend id. Local-only
+// details (messages, photos, rating) stay. keepLocalStatus is set when the
+// local status changed after the read started (a write from this tab).
+function havenMergeBackendRow(local, row, keepLocalStatus){
+  const j = {...local, backendJobId:String(row.id)};
+  const status = VALID_JOB_STATUSES.has(String(row.status)) ? String(row.status) : null;
+  if(status && !keepLocalStatus && status!==j.status){
+    j.status = status;
+    j.justAccepted = false;
+  }
+  if(HAVEN_MATERIALS_STATUSES.has(j.status)){
+    j.materialsRequest = havenMaterialsRequestFromRow(row) || j.materialsRequest;
+  }
+  if(j.acceptedAt==null) j.acceptedAt = havenBackendTime(row.accepted_at);
+  if(j.completedAt==null && j.status==="complete") j.completedAt = havenBackendTime(row.completed_at);
+  return j;
+}
+// The account read applied to the cached list. rows: this account's jobs
+// rows. startStatus: Map of backend key -> local status when the read began.
+// labels: {backend id: pro display name}.
+function havenReconcileJobsWithBackend(list, rows, startStatus, labels){
+  const current = Array.isArray(list) ? list : [];
+  const started = startStatus instanceof Map ? startStatus : new Map();
+  const names = labels || {};
+  const byKey = new Map();
+  current.forEach(j=>{ if(j && j.backendJobId) byKey.set(havenBackendKey(j.backendJobId), j); });
+  const rowKeys = new Set();
+  const usedIds = new Set();
+  const sorted = (Array.isArray(rows)?rows:[]).filter(r=>r && r.id)
+    .slice().sort((a,b)=>(havenBackendTime(a.posted_at)||0)-(havenBackendTime(b.posted_at)||0));
+  const out = [];
+  sorted.forEach(row=>{
+    const key = havenBackendKey(row.id);
+    if(rowKeys.has(key)) return;
+    rowKeys.add(key);
+    const local = byKey.get(key);
+    let job;
+    if(local){
+      const keepLocalStatus = !started.has(key) || started.get(key)!==local.status;
+      job = havenMergeBackendRow(local, row, keepLocalStatus);
+    }else{
+      job = havenJobFromBackendRow(row);
+      while(usedIds.has(job.id) || current.some(j=>j && j.id===job.id && havenBackendKey(j.backendJobId)!==key)) job.id += 1;
+    }
+    usedIds.add(job.id);
+    out.push(attachBackendPro(job, row, names[row.id]||names[String(row.id)]||""));
+  });
+  // Posted in this tab after the read began: keep. Everything else not in
+  // the account read is dropped, including local-only entries.
+  current.forEach(j=>{
+    if(!j || !j.backendJobId) return;
+    const key = havenBackendKey(j.backendJobId);
+    if(rowKeys.has(key) || started.has(key)) return;
+    if(usedIds.has(j.id)) return;
+    usedIds.add(j.id);
+    out.push(j);
+  });
+  return out;
+}
 const trustColor=score=>score>=97?SC:score>=90?AM:"#EF4444";
 const TIME_PREFS=[
   {id:1,label:"ASAP",          sub:"As soon as a Pro is available",surge:10},
@@ -395,10 +554,12 @@ export default function App(){
   const [ctitle,setCtitle] = useState("");
   const [ccat,setCcat]     = useState("Repair");
   const [cprice,setCprice] = useState("");
-  const [jobs,setJobs] = usePersistedState("haven_jobs",[],{
+  const [jobsState,setJobs] = usePersistedState("haven_jobs",[],{
     version:1,
     validate:v=>{
       if(!Array.isArray(v))return null;
+      // Phase 1B B4: another account's cache (or one with no owner) never loads.
+      if(!havenJobsCacheIsCurrentAccount())return [];
       const seenIds=new Set();
       return v
         .filter(j=>j&&typeof j==="object"&&typeof j.id!=="undefined")
@@ -411,9 +572,32 @@ export default function App(){
         });
     },
   });
+  // Phase 1B B4: the cache is shown only to the account that owns it. Right
+  // after a sign-out or account switch (before the owner effect clears it)
+  // this renders no jobs rather than the previous account's.
+  // Strict source of truth: with a backend configured, cached jobs are shown
+  // (Bookings, status, history, receipts) only after this account's read has
+  // landed. Before that, or after a failed read, nothing cached is presented
+  // as current; Bookings shows loading or the error with Retry.
+  const [jobsVerifiedFor,setJobsVerifiedFor] = useState("");
+  const jobsVerified = !getSupabaseConfig() || (!!jobsVerifiedFor && havenSameCustomerId(jobsVerifiedFor, havenJobsAccountId()||""));
+  // A job whose backend create landed in this tab is backend-confirmed even
+  // before (or without) a successful account read.
+  const [jobsCreatedHere,setJobsCreatedHere] = useState(()=>new Set());
+  const jobs = React.useMemo(()=>{
+    if(!havenJobsCacheIsCurrentAccount()) return HAVEN_NO_JOBS;
+    if(jobsVerified) return jobsState;
+    if(jobsCreatedHere.size===0) return HAVEN_NO_JOBS;
+    return jobsState.filter(j=>j&&j.backendJobId&&jobsCreatedHere.has(havenBackendKey(j.backendJobId)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[jobsState, jobsVerified, jobsCreatedHere, jobsVerifiedFor]);
   // Live jobs ref to avoid effect thrash on polling
   const jobsRef = useRef(jobs);
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+  // The raw per-account cache (not shown until verified). The account read
+  // reconciles against it, so a stale cached status is never kept by it.
+  const jobsCacheRef = useRef(jobsState);
+  useEffect(()=>{ jobsCacheRef.current = havenJobsCacheIsCurrentAccount() ? jobsState : HAVEN_NO_JOBS; },[jobsState]);
   const [vjid,setVjid]     = useState(null);
   const [scr,setScr]       = useState("home");
   const [tab,setTab]       = useState("home");
@@ -538,6 +722,9 @@ export default function App(){
     if(!qaTester) return;
     PERSISTED_KEYS.forEach(k=>{ try{ localStorage.removeItem(k); }catch{} });
     setJobs([]); setVjid(null);
+    // Phase 1B B4: the emptied cache still belongs to this account; its
+    // bookings load again from the backend.
+    if(getSupabaseConfig()){ havenWriteJobsOwner(havenAccountId); if(havenAccountId) void hydrateMyJobs(); }
     setAddresses(DEFAULT_ADDRESSES.map(a=>({...a})));
     setCards(DEFAULT_CARDS.map(c=>({...c})));
     setProfile({name:"Jane Doe",bio:"",photo:null,accountCreatedAt:Date.now()});
@@ -929,7 +1116,12 @@ export default function App(){
             :null,
         }));
       // MAP-03: drop the old untouched sample addresses (see SAMPLE_ADDRESSES).
-      const kept=cleaned.filter(a=>!isUntouchedSampleAddress(a,jobs));
+      // Storage cleanup, not display: check the stored jobs cache (shown or
+      // not yet verified), so a sample with a job at it is never removed.
+      // Owner is deliberately not checked here: master caches have no owner
+      // key, and this check can only keep more addresses (nothing is shown).
+      const storedJobs=jobsState.length?jobsState:havenReadStoredJobsAnyOwner();
+      const kept=cleaned.filter(a=>!isUntouchedSampleAddress(a,storedJobs));
       if(kept.length!==cleaned.length){ cleaned.length=0; cleaned.push(...kept); }
       if(cleaned.length===0)return cleaned; // zero properties is valid — booking will require adding one
       const primaries=cleaned.filter(a=>a.isPrimary);
@@ -1214,14 +1406,116 @@ export default function App(){
   };
   const receiptForJob=(job)=> job&&job.backendJobId ? (backendReceipts[String(job.backendJobId)]||null) : null;
 
+  // ── Phase 1B B4: bookings from the signed-in account ──────────────────────
+  // Read the account's jobs on load, on sign-in / account switch, and when
+  // Bookings opens (first tick of the poll below). See havenReconcileJobsWithBackend.
+  const havenAccountId = havenAuth && havenAuth.accessToken ? havenJobsAccountId() : "";
+  // idle | loading | ok | error. Drives only the Bookings empty/error copy.
+  const [bookingsLoad,setBookingsLoad]=useState("idle");
+  const hydrateSeqRef=useRef(0);
+  // True while an account read is in flight, so opening Bookings during the
+  // load read does not send the same read a second time.
+  const hydrateInFlightRef=useRef(false);
+  const hydrateMyJobs=async()=>{
+    if(!getSupabaseConfig()) return;
+    const uid=havenJobsAccountId();
+    if(!uid) return;
+    const seq=++hydrateSeqRef.current;
+    const startStatus=new Map();
+    (jobsCacheRef.current||[]).forEach(j=>{ if(j&&j.backendJobId) startStatus.set(havenBackendKey(j.backendJobId), j.status); });
+    setBookingsLoad("loading");
+    hydrateInFlightRef.current=true;
+    let result;
+    try{ result=await fetchMyCanonicalJobs(); }
+    finally{ if(seq===hydrateSeqRef.current) hydrateInFlightRef.current=false; }
+    if(seq!==hydrateSeqRef.current) return; // superseded: account switch or a newer read
+    const sameAccount=havenSameCustomerId(result.customerId, uid) && havenSameCustomerId(havenJobsAccountId(), uid);
+    if(!sameAccount){ setBookingsLoad("idle"); return; } // the new account's read reports its own state
+    if(!result.ok){
+      // Nothing read: the cache stays in storage but is not shown. Bookings
+      // shows only the error with Retry; no cached or local entries.
+      setJobsVerifiedFor("");
+      setBookingsLoad("error");
+      return;
+    }
+    rememberBackendReceipts(result.rows);
+    let labels={};
+    try{
+      const labelIds=result.rows.filter(r=>r.pro_id&&String(r.pro_id).toLowerCase()!==String(DEMO_PRO_ID).toLowerCase()).map(r=>r.id);
+      if(labelIds.length&&typeof fetchAssignedProLabels==="function"){
+        labels=await fetchAssignedProLabels(labelIds)||{};
+      }
+    }catch(e){ labels={}; }
+    if(seq!==hydrateSeqRef.current) return;
+    result.rows.forEach(r=>{ proLabelTriedRef.current[String(r.id)]=true; });
+    // Same "Job completed" notice the active poll emits, for a cached active
+    // job the account read finds complete (so Rate / receipt stay reachable).
+    const rowByKey=new Map(result.rows.map(r=>[havenBackendKey(r.id), r]));
+    const completedNow=[];
+    (jobsCacheRef.current||[]).forEach(j=>{
+      if(!j||!j.backendJobId) return;
+      const key=havenBackendKey(j.backendJobId);
+      const row=rowByKey.get(key);
+      if(!row||String(row.status)!=="complete") return;
+      if(!startStatus.has(key)||startStatus.get(key)!==j.status) return;
+      if(TERMINAL_STATUSES.has(j.status)||j.status==="cancelled") return;
+      completedNow.push({id:j.id, proName:(j.pro&&j.pro.n)||"Your pro"});
+    });
+    setJobs(list=>havenReconcileJobsWithBackend(list, result.rows, startStatus, labels));
+    setJobsVerifiedFor(uid);
+    setBookingsLoad("ok");
+    completedNow.forEach(({id,proName})=>handleJobTransition(id,"complete",proName));
+  };
+  // The auth session has finished loading once the backend connect resolved
+  // (session read and applied, listener attached). Before that, an empty
+  // account id means "not known yet", not "signed out".
+  const havenSessionLoaded = backendStatus==="ready";
+  useEffect(()=>{
+    if(!getSupabaseConfig()) return; // local preview: unchanged
+    // Never clear on the initial mount (or a reconnect) before the session
+    // resolves: an empty id then is not a sign-out.
+    if(!havenSessionLoaded) return;
+    const uid=havenAccountId;
+    const owner=havenReadJobsOwner();
+    const sameOwner=uid ? (!!owner && owner.toLowerCase()===uid.toLowerCase()) : !owner;
+    if(!sameOwner){
+      // Sign-out or a different account: drop the previous account's cache,
+      // receipts and job notifications before anything else renders them.
+      hydrateSeqRef.current++;
+      jobsRef.current=HAVEN_NO_JOBS;
+      jobsCacheRef.current=HAVEN_NO_JOBS;
+      hydrateInFlightRef.current=false;
+      setJobsVerifiedFor("");
+      setJobsCreatedHere(new Set());
+      setJobs([]);
+      setVjid(null);
+      setBackendReceipts({});
+      proLabelTriedRef.current={};
+      if(owner) setNotifications(prev=>prev.filter(n=>n.jobId==null));
+      havenWriteJobsOwner(uid);
+    }
+    if(uid) hydrateMyJobs();
+    else setBookingsLoad("idle");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[havenAccountId, havenSessionLoaded]);
+
   // Lightweight polling while Tracking, Bookings, or Posted are open and there are backend-linked active jobs
   const isTerminalStatus=(s)=>TERMINAL_STATUSES.has(s)||s==="cancelled";
   useEffect(()=>{
     const onScreen = (scr==="tracking") || (scr==="home" && tab==="bookings") || (scr==="posted");
     if(!onScreen) return;
     let cancelled=false;
+    let firstTick=true;
     const tick=async()=>{
       if(cancelled) return;
+      // Phase 1B B4: opening Bookings re-reads the account's jobs once, so a
+      // job posted or moved on another device shows up. Later ticks keep
+      // polling only the known active jobs.
+      if(firstTick){
+        firstTick=false;
+        if(scr==="home" && tab==="bookings" && !hydrateInFlightRef.current) await hydrateMyJobs();
+        if(cancelled) return;
+      }
       const currentJobs = jobsRef.current||[];
       const activeLinked = currentJobs.filter(j=>j.backendJobId && !isTerminalStatus(j.status));
       if(activeLinked.length===0) return;
@@ -1278,18 +1572,7 @@ export default function App(){
           return {job:{...j,status:"complete",justAccepted:false,completedAt:Date.now(),workPerformed,materials,proNotes},accepted:null,arrived:null,track:j.id,completed:j.id,proName:j.pro?.n||"Your pro"};
         }
         // Map materials metadata if present
-        let mappedRequest=null;
-        if(Array.isArray(row.materials_items)||typeof row.materials_estimate_cents==="number"){
-          const items=(Array.isArray(row.materials_items)?row.materials_items:[]).map(it=>({
-            description: it?.name ?? "",
-            qty: (it&&typeof it.qty==="number"&&it.qty>0)?it.qty:1,
-            amount: Math.max(0, Math.floor((it?.cost_cents||0)))/100,
-          }));
-          const estCents = typeof row.materials_estimate_cents==="number"?row.materials_estimate_cents:null;
-          const est = estCents!=null ? Math.max(0, Math.floor(estCents))/100
-            : items.reduce((s,m)=>s+m.amount*(m.qty||1),0);
-          mappedRequest={items,estimatedTotal:est};
-        }
+        const mappedRequest=havenMaterialsRequestFromRow(row);
         // Remote wins over local for these transitions
         if(remoteStatus==="materials_requested"){
           return {job:{...j,status:"materials_requested",materialsRequest:mappedRequest||j.materialsRequest},accepted:null,arrived:null};
@@ -2040,6 +2323,7 @@ export default function App(){
         return;
       }
       nj.backendJobId=backendId;
+      setJobsCreatedHere(prev=>{ const next=new Set(prev); next.add(havenBackendKey(backendId)); return next; });
     }
     setJobs(p=>[...p,nj]);setVjid(nj.id);
     setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
@@ -2504,6 +2788,20 @@ export default function App(){
 
   // ── BOOKINGS ───────────────────────────────────────────────────────────────
   const bookingsScreen=()=>{
+    // Phase 1B B4: while the account read is loading or after it failed, an
+    // empty list is not "No bookings yet".
+    const bookingsRetry=bookingsLoad==="error"&&(
+      <div style={{fontSize:13,color:TS,marginBottom:12}}>
+        Couldn't load your bookings. <button onClick={()=>hydrateMyJobs()} style={{background:"none",border:"none",padding:0,color:N,fontWeight:700,fontSize:13,cursor:"pointer",textDecoration:"underline"}}>Retry</button>
+      </div>
+    );
+    if(allJobs.length===0&&(bookingsLoad==="loading"||bookingsLoad==="error"||!jobsVerified)) return(
+      <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,textAlign:"center",background:BG}}>
+        {bookingsLoad!=="error"
+          ? <div style={{color:TS,fontSize:14}}>Loading your bookings…</div>
+          : bookingsRetry}
+      </div>
+    );
     if(allJobs.length===0) return(
       <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,textAlign:"center",background:BG}}>
         <div style={{fontSize:52,marginBottom:16}}>📋</div>
@@ -2515,6 +2813,7 @@ export default function App(){
     return(
       <div className="sc" style={{flex:1,overflowY:"auto",background:BG,padding:"20px 20px 100px"}}>
         <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:16}}>Bookings</div>
+        {bookingsRetry}
         <div style={{display:"flex",gap:8,marginBottom:18}}>
           {[["all",`All (${allJobs.length})`],["active",`Active (${activeCount})`],["done",`Done (${doneCount})`]].map(([id,lb])=>{
             const a=bFilter===id;
@@ -2531,7 +2830,13 @@ export default function App(){
           const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
           const jtp=ALL_TIME_PREFS.find(t=>t.id===j.tpId);
           const basePrice=j.taskId?(j.lockedPrice??(jt?jt.p:0)):(j.custom?.price||0);
-          const jTotal=basePrice+(j.surge||0)+(j.emergencyFee||0);
+          // Display only: with a backend row, the card shows the same backend
+          // total as the Booking Summary and receipt (labor + approved
+          // materials + priority fee + tip). No pricing logic changes.
+          const jReceipt=receiptForJob(j);
+          const jTotal=jReceipt&&typeof jReceipt.totalCents==="number"
+            ? (jReceipt.totalCents%100===0?jReceipt.totalCents/100:(jReceipt.totalCents/100).toFixed(2))
+            : basePrice+(j.surge||0)+(j.emergencyFee||0);
           const isPending=j.status==="posted";
           const isDone=TERMINAL_STATUSES.has(j.status);
           const isCancelPending=j.cancelStatus==="requested"&&!isDone;

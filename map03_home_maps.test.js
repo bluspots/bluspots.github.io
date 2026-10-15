@@ -91,10 +91,29 @@ const JOB_UUID = 'cccccccc-1111-4222-8333-444444444444';
 const PRO_UUID = 'dddddddd-1111-4222-8333-555555555555';
 let remoteRows = [];
 const fetchLog = [];
+// Phase 1B B4: the backend is the source of truth, so the seeded jobs are
+// real mocked backend rows too: every seeded job gets a backend id, and the
+// account read (order=posted_at) returns this account's rows for them with
+// the stored amounts (labor = the job's locked price; nothing else added).
+let seededBackendRows = [];
+function havenSeedBackendRows(jobs) {
+  seededBackendRows = [];
+  return jobs.map((j, i) => {
+    const backendJobId = j.backendJobId || `5eed0000-0000-4000-8000-${String(Math.abs(Number(j.id) || i) % 1e12).padStart(12, '0')}`;
+    seededBackendRows.push({
+      id: backendJobId, status: j.status, customer_id: CUSTOMER_ID, pro_id: j.backendProId || null,
+      fixed_customer_labor_price_cents: Math.round((j.lockedPrice ?? 0) * 100), emergency_fee_cents: 0, tip_amount_cents: 0,
+      materials_items: [], materials_estimate_cents: 0, materials_approved_cents: null,
+      address_snapshot: j.addressText || null,
+    });
+    return { ...j, backendJobId };
+  });
+}
 global.fetch = async (url) => {
   const u = String(url);
   fetchLog.push(u);
   const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+  if (u.includes('/rest/v1/jobs') && u.includes('order=posted_at')) return ok(seededBackendRows);
   if (u.endsWith('/auth/v1/health')) return ok({});
   if (u.includes('/rest/v1/rpc/is_qa_tester')) return ok(false);
   if (u.includes('/rest/v1/jobs?id=in.') && remoteRows.length) return ok(remoteRows);
@@ -132,6 +151,8 @@ function seedBase() {
   Object.keys(storedData).forEach(k => delete storedData[k]);
   storedData['haven_auth_access_token'] = 'signed-in-access-token';
   storedData['haven_auth_user_id'] = CUSTOMER_ID;
+  // Phase 1B B4: the jobs cache belongs to the signed-in customer.
+  storedData['haven_jobs_owner'] = CUSTOMER_ID;
   storedData['haven_auth_email'] = 'qa-customer@example.com';
   storedData['haven_auth_role'] = 'customer';
   storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
@@ -160,7 +181,7 @@ async function tap(el, label) { if (!el) throw new Error('missing ' + label + '\
 const saved = () => JSON.parse(storedData['haven_addresses']).data;
 const ids = () => saved().map(a => a.id).sort((a, b) => a - b);
 const setAddrs = list => { storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: list }); };
-const setJobs = list => { storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: list }); };
+const setJobs = list => { storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: havenSeedBackendRows(list) }); };
 async function openMyHome() {
   await tap(screen.getAllByText('Profile').pop(), 'Profile');
   await tap(btn(/^🏡\s*My Home/), 'My Home');
@@ -206,6 +227,9 @@ async function openMyHome() {
   assert(/123 Market Street/.test(bodyText()) && /1 completed/.test(bodyText()), 'the kept sample still shows its service history on My Home');
   await mount(() => { setAddrs([SAMPLE_HOME, SAMPLE_WORK]); setJobs([activeAtSample]); });
   assert(JSON.stringify(ids()) === '[1]', 'a sample with an open (not yet complete) job at it is also kept');
+  // MAP-03 upgrade from master: master caches have no haven_jobs_owner; the sample with a job is still kept
+  await mount(() => { delete storedData['haven_jobs_owner']; setAddrs([SAMPLE_HOME, SAMPLE_WORK]); setJobs([jobAtSample]); });
+  assert(JSON.stringify(ids()) === '[1]' && saved()[0].street === '123 Market Street', 'master-style storage (no jobs owner): a sample with a completed job at it is kept');
 
   // a real address that happens to match the sample text but is the customer's own (different id) is kept
   await mount(() => setAddrs([{ ...SAMPLE_HOME, id: 1761000000000 }]));

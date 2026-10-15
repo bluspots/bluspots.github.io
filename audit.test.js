@@ -111,7 +111,8 @@ async function defaultBackendFetch(url, opts){
         if (id) ids.push(id);
       });
     }
-    const eqMatch = u.match(/id=eq\.([^&]+)/);
+    // Phase 1B B4: match the id column only, not customer_id=eq. (the account read).
+    const eqMatch = u.match(/[?&]id=eq\.([^&]+)/);
     if (eqMatch) ids.push(decodeURIComponent(eqMatch[1]));
     const rows = ids.length
       ? ids.map(id => mockJobsById.get(id)).filter(Boolean)
@@ -156,7 +157,8 @@ function makeMockSupabaseClient(){
         const session = mockStoredSession();
         return { data: { user: session ? session.user : null }, error: null };
       },
-      onAuthStateChange: () => ({ data: { subscription: { unsubscribe(){} } } }),
+      // Phase 1B B4: keep the latest listener so a test can raise auth events.
+      onAuthStateChange: (cb) => { backendMock.authCb = cb; return { data: { subscription: { unsubscribe(){} } } }; },
       signOut: async () => { backendMock.signOutCalls += 1; return { error: null }; },
       signInWithPassword: async () => ({ data: { session: null, user: null }, error: { name: 'AuthApiError', status: 400, message: 'Invalid login credentials' } }),
       signUp: async () => ({ data: { session: null, user: null }, error: { name: 'AuthApiError', status: 400, message: 'Sign up disabled in audit' } }),
@@ -573,6 +575,8 @@ const wrapped = `(function(React, useState, useRef, useEffect, module){ ${code}
   module.exports21 = typeof havenNavigation !== 'undefined' ? havenNavigation : undefined;
   module.exports22 = typeof havenReceiptFromBackendRow !== 'undefined' ? havenReceiptFromBackendRow : undefined;
   module.exports23 = typeof havenReceiptPaymentState !== 'undefined' ? havenReceiptPaymentState : undefined;
+  module.exports24 = typeof fetchMyCanonicalJobs !== 'undefined' ? fetchMyCanonicalJobs : undefined;
+  module.exports25 = typeof havenReconcileJobsWithBackend !== 'undefined' ? havenReconcileJobsWithBackend : undefined;
 })`;
 const moduleObj = { exports: {} };
 eval(wrapped)(React, React.useState, React.useRef, React.useEffect, moduleObj);
@@ -601,6 +605,8 @@ const havenSupabaseCreateClient = moduleObj.exports20;
 const havenNavigation = moduleObj.exports21;
 const havenReceiptFromBackendRow = moduleObj.exports22;
 const havenReceiptPaymentState = moduleObj.exports23;
+const fetchMyCanonicalJobs = moduleObj.exports24;
+const havenReconcileJobsWithBackend = moduleObj.exports25;
 
 function havenTestJwt(sub){
   const b64 = (obj) => Buffer.from(JSON.stringify(obj)).toString('base64url');
@@ -1951,7 +1957,7 @@ function runHomeIntentArchitectureChecks(){
   console.log(`\n--- Home intent architecture audit: ${pass} passing, ${fail} failing ---`);
   if (fail > 0) process.exit(1);
 
-  runA2QaTesterGateChecks().then(() => runArrivedVisibilityChecks()).then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runReceiptTotalsChecks()).then(() => {
+  runA2QaTesterGateChecks().then(() => runArrivedVisibilityChecks()).then(() => runApproveAndDeclineChecks()).then(() => runSlice2SessionWriteChecks()).then(() => runReceiptTotalsChecks()).then(() => runCrossDeviceBookingsChecks()).then(() => {
     assert(unexpectedRequests.length === 0, `No request left the mocked backend (unexpected: ${JSON.stringify(unexpectedRequests.slice(0,3))})`);
     console.log(`\n--- Full audit: ${pass} passing, ${fail} failing ---`);
     if (fail > 0) process.exit(1);
@@ -2011,6 +2017,8 @@ async function runSlice2SessionWriteChecks(){
     storedData['haven_auth_email'] = 'customer@example.com';
     storedData['haven_auth_role'] = 'customer';
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [] });
+    // Phase 1B B4: this cache belongs to the signed-in test customer.
+    storedData['haven_jobs_owner'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     delete storedData['haven_draft'];
     storedData['haven_addresses'] = JSON.stringify({__v:1, data:[
       {id:1,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1650",beds:"4",baths:"2.5"},
@@ -2153,6 +2161,9 @@ async function runApproveAndDeclineChecks(){
   const origFetch = global.fetch;
   let patchOk = false;
   let remoteStatus = 'materials_requested';
+  // Phase 1B B4: a landed account read drops a local-only entry, so the
+  // no-backend-id case keeps it by having that read fail (cache kept as is).
+  let failJobsRead = false;
   const patches = [];
   global.fetch = withBackendHealth(async (url, opts) => {
     const method = (opts && opts.method) || 'GET';
@@ -2166,7 +2177,8 @@ async function runApproveAndDeclineChecks(){
       return { ok: true, json: async () => [{ id: backendId, status: remoteStatus, ...body }], text: async () => '' };
     }
     if (u.includes('/rest/v1/jobs')) {
-      return { ok: true, json: async () => [{ id: backendId, status: remoteStatus }], text: async () => '' };
+      if (failJobsRead) return { ok: false, status: 503, json: async () => ({}), text: async () => 'unavailable' };
+      return { ok: true, json: async () => [{ id: backendId, status: remoteStatus, customer_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' }], text: async () => '' };
     }
     return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
   });
@@ -2196,13 +2208,16 @@ async function runApproveAndDeclineChecks(){
     storedData['haven_auth_email'] = 'qa-customer@example.com';
     storedData['haven_auth_role'] = 'customer';
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
+    // Phase 1B B4: this cache belongs to the signed-in test customer.
+    storedData['haven_jobs_owner'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
     const container = document.createElement('div');
     document.body.appendChild(container);
     await mountApp(container);
     clickTab('Bookings');
     const cards = screen.queryAllByText(/Assemble furniture/);
-    act(() => { fireEvent.click(cards[cards.length - 1]); });
+    // Phase 1B B4: a job that is not shown has no card to open.
+    if (cards.length) act(() => { fireEvent.click(cards[cards.length - 1]); });
     await act(async () => { await delay(50); });
   };
 
@@ -2230,7 +2245,7 @@ async function runApproveAndDeclineChecks(){
         return { ok: true, status: 200, json: async () => [], text: async () => '' };
       }
       if (u.includes('/rest/v1/jobs')) {
-        return { ok: true, json: async () => [{ id: backendId, status: remoteStatus }], text: async () => '' };
+        return { ok: true, json: async () => [{ id: backendId, status: remoteStatus, customer_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' }], text: async () => '' };
       }
       return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
     });
@@ -2257,15 +2272,17 @@ async function runApproveAndDeclineChecks(){
 
     // Phase 1B A1: no demo path. A local-only job (no backend id) does not
     // advance on approve; it fails closed like any other unsynced write.
+    // Phase 1B B4 (strict): a local-only job is not a booking and is never
+    // shown, even when the account read fails, so there is no Approve button
+    // to press. The no-demo-advance checks below still hold.
     patches.length = 0;
+    failJobsRead = true;
     await mount(makeJob(9103, { backendJobId: null }));
-    const approveDemo = byText('Approve materials');
-    await act(async () => { fireEvent.click(approveDemo); });
-    await act(async () => { await delay(40); });
-    assert(existsRegex("Couldn't sync approval"), 'Approve on a job with no backend id shows the sync error (no demo advance)');
+    assert(!existsRegex('Approve materials') && !existsRegex('Materials needed'), 'A job with no backend id is not shown, so it cannot be approved (no demo advance)');
     assert(!existsRegex('pro is buying'), 'Approve on a job with no backend id does not advance locally');
     assert(JSON.parse(storedData['haven_jobs']).data[0].status === 'materials_requested', 'Approve on a job with no backend id does not persist a local advance');
     assert(patches.length === 0, 'Approve on a job with no backend id sends no PATCH');
+    failJobsRead = false;
 
     patchOk = true;
     patches.length = 0;
@@ -2495,12 +2512,18 @@ async function runArrivedVisibilityChecks(){
   const backendId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   const origFetch = global.fetch;
   let remoteStatus = 'en_route';
+  // Phase 1B B4: the account read (order=posted_at) is authoritative. The
+  // "not walked backward" cases below test the active poll's forward-only
+  // rule against a stale poll read, so there the account read returns the
+  // job's real (local) status and only the poll read is stale.
+  let accountStatus = null;
   let fetches = 0;
   global.fetch = withBackendHealth(async (url) => {
     const u = String(url);
     if (u.includes('/rest/v1/jobs')) {
       fetches += 1;
-      return { ok: true, json: async () => [{ id: backendId, status: remoteStatus, customer_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' }], text: async () => '' };
+      const st = (accountStatus && u.includes('order=posted_at')) ? accountStatus : remoteStatus;
+      return { ok: true, json: async () => [{ id: backendId, status: st, customer_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' }], text: async () => '' };
     }
     return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
   });
@@ -2527,6 +2550,8 @@ async function runArrivedVisibilityChecks(){
     storedData['haven_auth_email'] = 'qa-customer@example.com';
     storedData['haven_auth_role'] = 'customer';
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
+    // Phase 1B B4: this cache belongs to the signed-in test customer.
+    storedData['haven_jobs_owner'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
     const container = document.createElement('div');
     document.body.appendChild(container);
@@ -2661,6 +2686,7 @@ async function runArrivedVisibilityChecks(){
       } catch { return false; }
     }, { timeout: 3000, message: 'Complete poll did not create the job-completed notification' });
 
+    accountStatus = 'materials_requested';
     remoteStatus = 'arrived';
     await mountWithJob({
       ...baseJob,
@@ -2672,6 +2698,7 @@ async function runArrivedVisibilityChecks(){
     assert(existsRegex('Materials needed'), 'A job already past arrived is not walked backward');
     assert(!existsRegex('Pro has arrived'), 'Arrived mapping does not replace materials_requested');
 
+    accountStatus = 'materials_requested';
     remoteStatus = 'diagnosing';
     await mountWithJob({
       ...baseJob,
@@ -2683,6 +2710,7 @@ async function runArrivedVisibilityChecks(){
     assert(existsRegex('Materials needed'), 'A materials job is not walked backward to diagnosing');
     assert(!existsRegex('Assessing the job'), 'Diagnosing mapping does not replace materials_requested');
 
+    accountStatus = null;
     remoteStatus = 'in_progress';
     await mountWithJob({
       ...baseJob,
@@ -2710,6 +2738,7 @@ async function runArrivedVisibilityChecks(){
     assert(existsRegex('Job in progress'), 'Bookings shows in_progress when a materials request is already in progress remotely');
     assert(!existsRegex('Materials needed'), 'in_progress replaces materials_requested');
 
+    accountStatus = 'materials_approved';
     remoteStatus = 'arrived';
     await mountWithJob({
       ...baseJob,
@@ -2721,12 +2750,14 @@ async function runArrivedVisibilityChecks(){
     assert(existsRegex('Materials approved'), 'A materials-approved job is not walked backward to arrived');
     assert(!existsRegex('Pro has arrived'), 'Arrived mapping does not replace materials_approved');
 
+    accountStatus = 'in_progress';
     remoteStatus = 'diagnosing';
     await mountWithJob({ ...baseJob, id: 9012, status: 'in_progress' });
     await openBookingsAndPoll();
     assert(existsRegex('Job in progress'), 'in_progress is not walked backward to diagnosing');
     assert(!existsRegex('Assessing the job'), 'Diagnosing mapping does not replace in_progress');
 
+    accountStatus = null;
     remoteStatus = 'materials_requested';
     await mountWithJob({ ...baseJob, id: 9013, status: 'arrived' });
     await openBookingsAndPoll();
@@ -2784,6 +2815,11 @@ async function runReceiptTotalsChecks(){
   const origClipboard = global.navigator.clipboard;
   const origJspdf = global.window.jspdf;
   let remoteRow = null;
+  // Phase 1B B4: the account read (order=posted_at) confirms the job and its
+  // status, without stored amounts, so Bookings shows it (strict: nothing
+  // unconfirmed is shown). The receipt / Booking Summary amounts come from
+  // the by-id read, exactly as before: remoteRow, or 200 with no row.
+  const accountJobsResponse = () => ({ ok: true, json: async () => [{ id: backendId, status: remoteRow ? remoteRow.status : 'complete', customer_id: authUserId }], text: async () => '' });
   // Phase 1B A1 harness: jobs reads return remoteRow; everything else (Auth
   // health, is_qa_tester RPC, unexpected-request guard) goes to the shared
   // mocked backend so the app connects and signs in like every other phase.
@@ -2792,6 +2828,7 @@ async function runReceiptTotalsChecks(){
     const u = String(url);
     if (u.includes('/rest/v1/jobs')) {
       fetchLog.push({ url: u, opts: opts || {} });
+      if (u.includes('order=posted_at')) return accountJobsResponse();
       return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' };
     }
     return defaultBackendFetch(url, opts);
@@ -2844,6 +2881,8 @@ async function runReceiptTotalsChecks(){
       clearHavenAuthTestKeys();
     }
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job] });
+    // Phase 1B B4: this cache belongs to the signed-in test customer.
+    storedData['haven_jobs_owner'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
     const container = document.createElement('div');
     document.body.appendChild(container);
@@ -2956,7 +2995,7 @@ async function runReceiptTotalsChecks(){
     assert(/Total\$107\.00/.test(out.inApp) && out.share.includes('Total: $107.00') && out.pdf.includes('$107.00'), 'changing local price/surge/tip/materials does not change the $107.00 total');
     assert(!/\$999/.test(out.inApp + out.share + out.pdf), 'local price 999 never prints');
 
-    // Backend returns no row: no amounts at all, and still no PAID.
+    // Backend returns no row (200, empty): no amounts at all, and still no PAID.
     remoteRow = null;
     await mountCompleted(localJob({ id: 9704 }));
     await openReceiptsList();
@@ -3004,7 +3043,11 @@ async function runReceiptTotalsChecks(){
     // (Auth health, is_qa_tester RPC) goes to the shared mocked backend.
     global.fetch = async (url, opts) => {
       const u = String(url);
-      if (u.includes('/rest/v1/jobs')) { fetchLog.push({ url: u, opts: opts || {} }); return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' }; }
+      if (u.includes('/rest/v1/jobs')) {
+        fetchLog.push({ url: u, opts: opts || {} });
+        if (u.includes('order=posted_at')) return accountJobsResponse();
+        return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' };
+      }
       return defaultBackendFetch(url, opts);
     };
     remoteRow = row({ materials_estimate_cents: 1800, materials_approved_cents: 0 });
@@ -3094,6 +3137,7 @@ async function runReceiptTotalsChecks(){
       global.fetch = async (url, opts) => {
         const u = String(url);
         if (u.includes('/rest/v1/jobs')) {
+          if (u.includes('order=posted_at')) return { ok: true, json: async () => [{ id: backendId, status: 'complete', customer_id: authUserId }], text: async () => '' };
           await jobsGate;
           return { ok: true, json: async () => [row({ materials_estimate_cents: 1800, materials_approved_cents: 1800, emergency_fee_cents: 2500 })], text: async () => '' };
         }
@@ -3201,4 +3245,391 @@ async function runReceiptTotalsChecks(){
     cleanup();
   }
   console.log(`\n--- Receipt totals audit: ${pass} passing, ${fail} failing ---`);
+}
+
+// Phase 1B B4: cross-device bookings. Customer jobs, status, history and
+// receipts load from the signed-in account's backend rows (jobs where
+// customer_id = auth.uid()). localStorage is only a per-account cache.
+// Uses a stub supabase-js client (session events only, no passwords) and a
+// fetch stub that, like RLS plus the customer_id filter, only returns the
+// bearer's own rows.
+async function runCrossDeviceBookingsChecks(){
+  const userA = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+  const userB = 'bbbbbbbb-1111-4222-8333-444444444444';
+  const proId = 'dddddddd-eeee-4fff-8aaa-000000000001';
+  const demoCustomer = '11111111-1111-4111-8111-111111111111';
+  const demoPro = '22222222-2222-4222-8222-222222222222';
+  const jobComplete = 'cccccccc-0000-4000-8000-000000000001';
+  const jobEnRoute = 'cccccccc-0000-4000-8000-000000000002';
+  const jobPosted = 'cccccccc-0000-4000-8000-000000000003';
+  const jobB = 'cccccccc-0000-4000-8000-0000000000b1';
+  const tokenFor = { [userA]: havenTestJwt(userA), [userB]: havenTestJwt(userB), [demoCustomer]: havenTestJwt(demoCustomer) };
+  const baseRow = (f) => ({
+    customer_id: userA, pro_id: null, category: 'Plumbing', title: 'Leaky faucet repair', requires_diagnosis: false,
+    city_label: 'San Francisco, CA', address_snapshot: null, emergency: false, emergency_fee_cents: 0, tip_amount_cents: 0,
+    fixed_customer_labor_price_cents: 8900, materials_items: [], materials_estimate_cents: 0, materials_approved_cents: null,
+    customer_preferences_snapshot: [], accepted_at: null, completed_at: null, cancelled_at: null, ...f,
+  });
+  const rowsByUser = {
+    [userA]: [
+      // $89 labor + $18 approved materials = $107.
+      baseRow({ id: jobComplete, status: 'complete', pro_id: proId, address_snapshot: '123 Market Street, Apt 4B, San Francisco, CA 94103', materials_estimate_cents: 1800, materials_approved_cents: 1800, posted_at: '2026-10-01T14:00:00Z', accepted_at: '2026-10-01T14:05:00Z', completed_at: '2026-10-01T16:00:00Z' }),
+      baseRow({ id: jobEnRoute, status: 'en_route', pro_id: proId, category: 'Assembly', title: 'Assemble furniture', fixed_customer_labor_price_cents: 6500, posted_at: '2026-10-05T14:00:00Z', accepted_at: '2026-10-05T14:10:00Z' }),
+      baseRow({ id: jobPosted, status: 'posted', category: 'Cleaning', title: 'Window washing', fixed_customer_labor_price_cents: 12000, posted_at: '2026-10-07T14:00:00Z' }),
+    ],
+    [userB]: [
+      baseRow({ id: jobB, customer_id: userB, status: 'en_route', pro_id: demoPro, category: 'Outdoor', title: 'Gutter cleaning', posted_at: '2026-10-06T10:00:00Z' }),
+    ],
+  };
+  const origFetch = global.fetch;
+  const calls = [];
+  let failJobs = false;
+  let gateFor = null; let gate = null;
+  global.fetch = async (url, opts) => {
+    const u = String(url); const o = opts || {};
+    calls.push({ url: u, opts: o });
+    const auth = (o.headers && o.headers.Authorization) || '';
+    const who = Object.keys(tokenFor).find(id => auth === `Bearer ${tokenFor[id]}`) || null;
+    if (u.includes('/rest/v1/rpc/job_assigned_pro_labels')) {
+      let ids = [];
+      try { ids = JSON.parse(o.body || '{}').p_job_ids || []; } catch { ids = []; }
+      return { ok: true, status: 200, json: async () => ids.map(id => ({ job_id: id, display_name: 'Dana R.' })), text: async () => '' };
+    }
+    if (u.includes('/rest/v1/jobs')) {
+      if (gate && who === gateFor) await gate;
+      if (failJobs) return { ok: false, status: 503, json: async () => ({}), text: async () => 'unavailable' };
+      let rows = who && u.includes(`customer_id=eq.${who}`) ? (rowsByUser[who] || []) : [];
+      const m = /id=in\.\(([^)]*)\)/.exec(u);
+      if (m) { const ids = decodeURIComponent(m[1]).split(','); rows = rows.filter(r => ids.includes(r.id)); }
+      return { ok: true, status: 200, json: async () => rows.map(r => ({ ...r })), text: async () => '' };
+    }
+    // Auth health, is_qa_tester RPC, unexpected-request guard: the shared
+    // mocked backend (#43 harness), like every other phase.
+    return defaultBackendFetch(url, opts);
+  };
+  // Sessions go through the shared mocked supabase-js client (#43 harness):
+  // it reads the session from the mirrored auth keys and keeps the latest
+  // onAuthStateChange listener, so tests raise auth events through it.
+  let session = null;
+  const sessionFor = (id) => ({ access_token: tokenFor[id], user: { id, email: `${id.slice(0, 4)}@example.com`, user_metadata: { role: 'customer' } } });
+  const setSession = (s) => {
+    session = s;
+    if (!s) { clearHavenAuthTestKeys(); return; }
+    storedData['haven_auth_access_token'] = s.access_token;
+    storedData['haven_auth_user_id'] = s.user.id;
+    storedData['haven_auth_email'] = s.user.email;
+    storedData['haven_auth_role'] = 'customer';
+  };
+  const authCb = (event, s) => backendMock.authCb(event, s);
+
+  const storedJobs = () => { try { return JSON.parse(storedData['haven_jobs'] || '{}').data || []; } catch { return []; } };
+  const jobsReads = () => calls.filter(c => c.url.includes('/rest/v1/jobs'));
+  const settle = async (ms = 80) => { await act(async () => { await delay(ms); }); };
+  // Fresh browser: no Customer app storage at all, only the Auth session.
+  const freshBrowser = () => {
+    ['haven_jobs', 'haven_jobs_owner', 'haven_notifications', 'haven_draft'].forEach(k => delete storedData[k]);
+    clearHavenAuthTestKeys();
+  };
+  const mount = async (who) => {
+    cleanup();
+    setSession(who ? sessionFor(who) : null);
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    await act(async () => { render(React.createElement(App), container); });
+    // Every mount connects to the (mocked) backend first (#43 harness).
+    await waitForCondition(() => !connectionScreenShowing(container), { timeout: 3000, message: 'App never finished connecting to the mocked backend.' });
+    await settle();
+  };
+  const openBookings = async () => { clickTab('Bookings'); await settle(); };
+  const bookingSummaryText = () => {
+    const label = screen.queryAllByText((c, el) => el && el.textContent === 'Booking Summary')[0];
+    const card = label && label.parentElement && label.parentElement.parentElement;
+    return card ? card.textContent : '';
+  };
+
+  try {
+    // ── X1. Fresh browser: Bookings lists the account's backend jobs ──────
+    freshBrowser();
+    calls.length = 0;
+    await mount(userA);
+    const read = jobsReads().find(c => c.url.includes('order=posted_at'));
+    assert(!!read, 'X1: a fresh browser reads the signed-in account\'s jobs');
+    assert(!!read && (!read.opts.method || read.opts.method === 'GET'), 'X1: the account read is a GET');
+    assert(!!read && read.url.includes(`customer_id=eq.${userA}`) && !read.url.includes('id=in.'), 'X1: the account read is jobs where customer_id = the signed-in user (not a list of local ids)');
+    assert(!!read && read.opts.headers.Authorization === `Bearer ${tokenFor[userA]}` && read.opts.headers.apikey === PUBLIC_SUPABASE_KEY, 'X1: user access token as Bearer, anon key only as apikey');
+    assert(!!read && ['title', 'category', 'posted_at', 'fixed_customer_labor_price_cents', 'materials_estimate_cents', 'emergency_fee_cents', 'tip_amount_cents'].every(c => read.url.includes(c)), 'X1: the account read selects the columns needed to build the job and its receipt');
+    assert(!!read && !read.url.includes('payment_snapshot'), 'X1: the account read does not select payment_snapshot');
+    assert(storedData['haven_jobs_owner'] === userA, 'X1: the jobs cache is keyed to the signed-in account');
+    await openBookings();
+    assert(existsRegex('All (3)'), 'X1: Bookings lists the 3 backend jobs in a fresh browser');
+    assert(existsRegex('Leaky faucet repair') && existsRegex('Assemble furniture') && existsRegex('Window washing'), 'X1: titles come from the backend rows');
+    assert(existsRegex('Completed') && existsRegex('Pro is on the way') && existsRegex('Waiting for pro'), 'X1: each job shows its backend status');
+    const body = document.body.textContent;
+    assert(body.indexOf('Window washing') < body.indexOf('Assemble furniture') && body.indexOf('Assemble furniture') < body.indexOf('Leaky faucet repair'), 'X1: newest posted job first');
+    assert(!existsRegex('Marcus') && !existsRegex('No bookings yet'), 'X1: no demo pro, no empty state');
+    const built = storedJobs();
+    assert(built.length === 3 && built.every(j => j.backendJobId), 'X1: the cache holds only backend-linked jobs');
+    assert(built.every(j => j.paymentLast4 === '----' && (!j.materials || j.materials.length === 0)), 'X1: built jobs carry no local card and no demo completion materials');
+    // Job detail / tracking.
+    click('Assemble furniture');
+    await settle();
+    assert(existsRegex('Pro is on the way') && existsRegex('Dana R.'), 'X1: tracking opens with the backend status and the assigned pro label');
+    assert(!existsRegex('Marcus'), 'X1: tracking never shows the catalog demo pro');
+    // Completed job: Booking Summary and receipt use the backend total.
+    await mount(userA);
+    await openBookings();
+    click('Leaky faucet repair');
+    await settle();
+    assert(existsRegex('Job Complete'), 'X1: completed job detail opens');
+    assert(/Total\$107\.00/.test(bookingSummaryText()), 'X1: Booking Summary total is the backend $107.00');
+    click('🧾 View Receipt');
+    await settle();
+    const receiptText = document.body.textContent;
+    assert(/Labor\$89\.00/.test(receiptText) && /Approved materials\$18\.00/.test(receiptText) && /Total\$107\.00/.test(receiptText), 'X1: receipt opens with $89 + $18 approved = $107.00');
+    assert(!/Total paid|4242|Visa/.test(receiptText), 'X1: receipt shows no PAID total or card without a payment record');
+    // My Home receipts are per saved property, matched by the job's address
+    // (master's per-property My Home), so this customer has the job's home saved.
+    seedTestAddresses();
+    await mount(userA);
+    forceProfileRoot();
+    click('My Home');
+    click('Receipts');
+    await settle();
+    assert(existsRegex('$107.00'), 'X1: Receipts list shows the backend total $107.00');
+
+    // ── X2. Backend overrides a stale local status; cache rules ────────────
+    cleanup();
+    freshBrowser();
+    // Returning browser: the Auth mirror from the last visit is still there.
+    storedData['haven_auth_access_token'] = tokenFor[userA];
+    storedData['haven_auth_user_id'] = userA;
+    storedData['haven_jobs_owner'] = userA;
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [
+      { id: 5001, status: 'en_route', custom: { title: 'Leaky faucet repair', cat: 'Plumbing', price: 89 }, tpId: 2, backendJobId: jobComplete, desc: 'Under the kitchen sink', msgs: [], photos: [] },
+      { id: 5002, status: 'en_route', custom: { title: 'Demo seed booking', cat: 'Repair', price: 50 }, tpId: 2, msgs: [], photos: [] },
+      { id: 5003, status: 'en_route', custom: { title: 'Other account job', cat: 'Repair', price: 70 }, tpId: 2, backendJobId: 'eeeeeeee-0000-4000-8000-000000000999', msgs: [], photos: [] },
+    ] });
+    await mount(userA);
+    await openBookings();
+    const merged = storedJobs().find(j => j.backendJobId === jobComplete);
+    assert(!!merged && merged.status === 'complete', 'X2: backend complete overrides the stale local en_route');
+    assert(!!merged && merged.id === 5001 && merged.desc === 'Under the kitchen sink', 'X2: the local entry keeps its id and local-only details');
+    assert(existsRegex('All (3)') && existsRegex('Completed'), 'X2: Bookings shows the backend status');
+    assert(!existsRegex('Demo seed booking') && !storedJobs().some(j => j.id === 5002), 'X2: a local-only entry (no backend id) is not shown as a booking and is dropped');
+    assert(!existsRegex('Other account job') && !storedJobs().some(j => j.id === 5003), 'X2: a cached job the account read does not return is dropped');
+    let notifs = [];
+    try { notifs = JSON.parse(storedData['haven_notifications'] || '{}').data || []; } catch { notifs = []; }
+    assert(notifs.some(n => n.title === 'Job completed' && n.jobId === 5001), 'X2: the same Job completed notice as the poll');
+
+    step('X2b. reconcile keeps a job posted during the read and a status written during the read', () => {
+      assert(typeof havenReconcileJobsWithBackend === 'function', 'havenReconcileJobsWithBackend loaded');
+      const row = rowsByUser[userA][1]; // en_route
+      const local = { id: 7001, status: 'arrived', backendJobId: jobEnRoute, msgs: [], photos: [] };
+      const justPosted = { id: 7002, status: 'posted', backendJobId: 'cccccccc-0000-4000-8000-0000000000ff', msgs: [], photos: [] };
+      const started = new Map([[jobEnRoute, 'en_route']]); // local moved to arrived while the read was in flight
+      const out = havenReconcileJobsWithBackend([local, justPosted], [row], started, {});
+      assert(out.find(j => j.id === 7001).status === 'arrived', 'a status written during the read is not walked back by that read');
+      assert(out.some(j => j.id === 7002), 'a job posted in this tab after the read began is kept');
+      const out2 = havenReconcileJobsWithBackend([{ ...local, status: 'posted' }], [row], new Map([[jobEnRoute, 'posted']]), {});
+      assert(out2[0].status === 'en_route', 'otherwise the backend status wins');
+    });
+
+    // ── X3. Account switch and sign-out in the same tab do not leak jobs ──
+    cleanup();
+    freshBrowser();
+    await mount(userA);
+    await openBookings();
+    assert(existsRegex('Leaky faucet repair'), 'X3: account A sees its jobs');
+    let releaseB;
+    gate = new Promise(r => { releaseB = r; }); gateFor = userB;
+    await act(async () => { setSession(sessionFor(userB)); authCb('SIGNED_IN', session); });
+    await settle(30);
+    assert(existsRegex('Loading your bookings'), 'X3: Bookings stays open and shows B\'s read loading');
+    assert(!existsRegex('Leaky faucet repair') && !existsRegex('Assemble furniture') && !existsRegex('Window washing'), 'X3: while B\'s read is loading, none of A\'s jobs show');
+    assert(!storedJobs().some(j => [jobComplete, jobEnRoute, jobPosted].includes(j.backendJobId)), 'X3: A\'s jobs are cleared from the cache on the switch');
+    releaseB(); gate = null; gateFor = null;
+    await settle();
+    clickTab('Bookings'); clickTab('Bookings');
+    await settle();
+    assert(existsRegex('Gutter cleaning') && existsRegex('All (1)'), 'X3: account B sees only its own job');
+    assert(!existsRegex('Leaky faucet repair'), 'X3: account B never sees A\'s job');
+    assert(storedData['haven_jobs_owner'] === userB, 'X3: the cache is re-keyed to B');
+    assert(!existsRegex('Marcus'), 'X3: a row with the demo pro id does not show the demo pro');
+    assert(jobsReads().filter(c => c.opts.headers.Authorization === `Bearer ${tokenFor[userB]}`).every(c => c.url.includes(`customer_id=eq.${userB}`)), 'X3: B\'s reads are scoped to B');
+    await act(async () => { setSession(null); authCb('SIGNED_OUT', null); });
+    await settle();
+    assert(storedJobs().length === 0 && !storedData['haven_jobs_owner'], 'X3: sign-out clears the jobs cache and its owner');
+    assert(!existsRegex('Gutter cleaning') && !existsRegex('Leaky faucet repair'), 'X3: signed out, no jobs show');
+    await act(async () => { setSession(sessionFor(userA)); authCb('SIGNED_IN', session); });
+    await settle();
+    clickTab('Bookings'); clickTab('Bookings');
+    await settle();
+    assert(existsRegex('All (3)') && !existsRegex('Gutter cleaning'), 'X3: signing back in as A loads A\'s jobs from the backend again');
+
+    // A cache left by another account (or with no owner) never renders.
+    cleanup();
+    freshBrowser();
+    storedData['haven_jobs_owner'] = userB;
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [{ id: 6001, status: 'en_route', custom: { title: 'Gutter cleaning', cat: 'Outdoor', price: 89 }, tpId: 2, backendJobId: jobB, msgs: [], photos: [] }] });
+    await mount(userA);
+    await openBookings();
+    assert(!existsRegex('Gutter cleaning') && existsRegex('All (3)'), 'X3: a cache owned by another account is discarded on load');
+
+    // ── X4. Loading / error: no crash, no fake jobs ─────────────────────────
+    cleanup();
+    freshBrowser();
+    failJobs = true;
+    await mount(userA);
+    await openBookings();
+    assert(existsRegex("Couldn't load your bookings."), 'X4: a failed account read says so on Bookings');
+    assert(!existsRegex('No bookings yet') && !existsRegex('All ('), 'X4: no empty-state claim and no fake jobs after a failed read');
+    failJobs = false;
+    click('Retry');
+    await settle();
+    assert(existsRegex('All (3)'), 'X4: Retry loads the account\'s jobs');
+    {
+      cleanup();
+      freshBrowser();
+      let release;
+      gate = new Promise(r => { release = r; }); gateFor = userA;
+      await mount(userA);
+      clickTab('Bookings');
+      await settle(20);
+      assert(existsRegex('Loading your bookings') && !existsRegex('No bookings yet'), 'X4: Bookings says loading, not "No bookings yet", while the read is pending');
+      release(); gate = null; gateFor = null;
+      await settle();
+      assert(existsRegex('All (3)'), 'X4: jobs appear once the read lands');
+    }
+
+    // ── X4e. QA (e): own cache + failed read shows ONLY the error ──────────
+    // The backend is the source of truth: with this account's own cache (a
+    // forged local-only job and a stale status) and a 503, Bookings shows the
+    // error and Retry, and no cached or local entry anywhere.
+    {
+      cleanup();
+      freshBrowser();
+      storedData['haven_jobs_owner'] = userA;
+      storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [
+        { id: 8001, status: 'en_route', custom: { title: 'FORGED local fake job', cat: 'Repair', price: 50 }, tpId: 2, msgs: [], photos: [] },
+        { id: 8002, status: 'en_route', custom: { title: 'Leaky faucet repair', cat: 'Plumbing', price: 89 }, tpId: 2, backendJobId: jobComplete, msgs: [], photos: [] },
+      ] });
+      failJobs = true;
+      await mount(userA);
+      await openBookings();
+      assert(existsRegex("Couldn't load your bookings.") && existsRegex('Retry'), 'X4e: own cache + 503: Bookings shows the error with Retry');
+      assert(!existsRegex('FORGED local fake job'), 'X4e: own cache + 503: the forged local-only job is not listed');
+      assert(!existsRegex('Leaky faucet repair') && !existsRegex('Pro is on the way'), 'X4e: own cache + 503: the stale cached status is not listed');
+      assert(!existsRegex('All (') && !existsRegex('No bookings yet'), 'X4e: own cache + 503: no list and no empty-state claim, only the error');
+      forceProfileRoot();
+      click('My Home');
+      assert(!existsRegex('Leaky faucet repair') && !existsRegex('FORGED local fake job'), 'X4e: own cache + 503: My Home history shows no cached job');
+      click('Receipts');
+      await settle();
+      assert(!existsRegex('Leaky faucet repair') && !existsRegex('$89') && !existsRegex('$50'), 'X4e: own cache + 503: Receipts list shows no cached job');
+      clickTab('Bookings');
+      await settle();
+      assert(existsRegex("Couldn't load your bookings.") && !existsRegex('FORGED local fake job'), 'X4e: back on Bookings while the backend is still down: only the error');
+      failJobs = false;
+      click('Retry');
+      await settle();
+      assert(existsRegex('All (3)') && existsRegex('Completed'), 'X4e: Retry re-reads and lists the backend jobs with the backend status');
+      assert(!existsRegex('FORGED local fake job'), 'X4e: after Retry the forged local-only job is still not listed');
+      assert(!storedJobs().some(j => j.id === 8001), 'X4e: after a landed read the local-only entry is dropped from the cache');
+    }
+
+    // ── X1c. The Bookings card shows the same backend total as the receipt ─
+    {
+      cleanup();
+      freshBrowser();
+      await mount(userA);
+      await openBookings();
+      const card = screen.queryAllByText(/Leaky faucet repair/).map(el => el.closest('div') && el.closest('div').parentElement).filter(Boolean)[0];
+      const cardText = card ? card.textContent : '';
+      assert(/\$107\b/.test(cardText) && !/\$89\b/.test(cardText), 'X1c: the completed job\'s Bookings card shows the backend total $107 ($89 + $18 approved), not $89');
+    }
+
+    // ── X6. Session-loaded guard: clear only on a real sign-out or switch ──
+    // The account-switch / sign-out check waits for the auth session to
+    // finish loading. An empty account before then is "not known yet".
+    const seedReturningA = (tag) => {
+      cleanup();
+      freshBrowser();
+      storedData['haven_jobs_owner'] = userA;
+      storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [
+        { id: 6001, status: 'en_route', custom: { title: 'Assemble furniture', cat: 'Assembly', price: 65 }, tpId: 2, backendJobId: jobEnRoute, msgs: [], photos: [] },
+      ] });
+      storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [
+        { id: `x6-${tag}-job`, type: 'JOB_UPDATE', title: 'X6 job notice', body: 'Your pro is on the way.', jobId: 6001, destination: { screen: 'tracking', jobId: 6001 }, isRead: false, createdAt: Date.now(), priority: 'normal', conversationId: null, propertyId: null, receiptId: null, count: 1 },
+      ] });
+    };
+    const storedNotifs = () => { try { return JSON.parse(storedData['haven_notifications'] || '{}').data || []; } catch { return []; } };
+    const hasA = () => storedJobs().some(j => j.backendJobId === jobEnRoute);
+    const hasANotice = () => storedNotifs().some(n => n.jobId === 6001);
+
+    // (a) Remount with the same signed-in customer keeps the cache and the
+    // job notifications, including while the session is still loading.
+    seedReturningA('a');
+    setSession(sessionFor(userA));
+    backendMock.health = 'hang';
+    backendMock.hangResolvers.length = 0;
+    {
+      const container = document.createElement('div');
+      document.body.appendChild(container);
+      await act(async () => { render(React.createElement(App), container); });
+      await settle(40);
+      assert(backendMock.hangResolvers.length > 0, 'X6a: the session is still loading (connect pending)');
+      assert(storedData['haven_jobs_owner'] === userA && hasA(), 'X6a: before the session resolves, the cached bookings are not cleared');
+      assert(hasANotice(), 'X6a: before the session resolves, job notifications are not cleared');
+      backendMock.health = 'ok';
+      await act(async () => { backendMock.hangResolvers.splice(0).forEach(r => r.resolve(mockResponse(200, { name: 'GoTrue' }))); });
+      await waitForCondition(() => !connectionScreenShowing(container), { timeout: 3000, message: 'X6a: app never finished connecting' });
+      await settle();
+    }
+    assert(storedData['haven_jobs_owner'] === userA && hasA(), 'X6a: remount as the same customer keeps the cached booking');
+    assert(hasANotice(), 'X6a: remount as the same customer keeps the job notification');
+
+    // (b) A real sign-out after the session has loaded clears them.
+    await act(async () => { setSession(null); authCb('SIGNED_OUT', null); });
+    await settle();
+    assert(storedJobs().length === 0 && !storedData['haven_jobs_owner'], 'X6b: sign-out after load clears the jobs cache and its owner');
+    assert(!hasANotice(), 'X6b: sign-out after load clears the job notifications');
+
+    // (c) Switching to a different account clears the previous account's
+    // cache and notifications.
+    seedReturningA('c');
+    await mount(userA);
+    assert(hasA() && hasANotice(), 'X6c: account A starts with its cache and job notification');
+    await act(async () => { setSession(sessionFor(userB)); authCb('SIGNED_IN', session); });
+    await settle();
+    assert(!hasA(), 'X6c: switching to account B clears A\'s cached booking');
+    assert(!hasANotice(), 'X6c: switching to account B clears A\'s job notification');
+    assert(storedData['haven_jobs_owner'] === userB, 'X6c: the cache is re-keyed to B');
+
+    // ── X5. Never the demo ids ──────────────────────────────────────────────
+    assert(calls.every(c => !c.url.includes(demoCustomer) && !c.url.includes(demoPro)), 'X5: no request names the demo customer or demo pro id');
+    cleanup();
+    freshBrowser();
+    storedData['haven_jobs_owner'] = demoCustomer;
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [{ id: 6101, status: 'en_route', custom: { title: 'Leaky faucet repair', cat: 'Plumbing', price: 89 }, tpId: 2, backendJobId: jobComplete, msgs: [], photos: [] }] });
+    calls.length = 0;
+    await mount(demoCustomer);
+    assert(jobsReads().length === 0, 'X5: a session whose user id is the demo customer reads no jobs');
+    clickTab('Bookings');
+    await settle();
+    assert(!existsRegex('Leaky faucet repair'), 'X5: a demo-id session shows no cached jobs');
+    assert(typeof fetchMyCanonicalJobs === 'function', 'fetchMyCanonicalJobs loaded');
+    clearHavenAuthTestKeys();
+    const signedOut = await fetchMyCanonicalJobs();
+    assert(signedOut.ok === false && signedOut.rows.length === 0, 'X5: signed out, the account read does not run');
+  } catch (e) {
+    fail++;
+    console.error('FAIL (cross-device bookings):', (e && e.stack) || e);
+  } finally {
+    global.fetch = origFetch;
+    gate = null;
+    delete storedData['haven_jobs_owner'];
+    clearHavenAuthTestKeys();
+    cleanup();
+  }
+  console.log(`\n--- Cross-device bookings audit: ${pass} passing, ${fail} failing ---`);
 }
