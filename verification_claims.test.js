@@ -105,10 +105,29 @@ const SIMULATED_PRO_WORKSPACE = {
   credentials: [{ id: 1, type: 'license', name: 'Master Plumber', status: 'verified' }],
 };
 const requests = [];
+// Phase 1B B4: the backend is the source of truth, so the seeded jobs are
+// real mocked backend rows too: every seeded job gets a backend id, and the
+// account read (order=posted_at) returns this account's rows for them with
+// the stored amounts (labor = the job's locked price; nothing else added).
+let seededBackendRows = [];
+function havenSeedBackendRows(jobs) {
+  seededBackendRows = [];
+  return jobs.map((j, i) => {
+    const backendJobId = j.backendJobId || `5eed0000-0000-4000-8000-${String(Math.abs(Number(j.id) || i) % 1e12).padStart(12, '0')}`;
+    seededBackendRows.push({
+      id: backendJobId, status: j.status, customer_id: CUSTOMER_ID, pro_id: j.backendProId || null,
+      fixed_customer_labor_price_cents: Math.round((j.lockedPrice ?? 0) * 100), emergency_fee_cents: 0, tip_amount_cents: 0,
+      materials_items: [], materials_estimate_cents: 0, materials_approved_cents: null,
+      address_snapshot: j.addressText || null,
+    });
+    return { ...j, backendJobId };
+  });
+}
 global.fetch = async (url, init) => {
   const u = String(url);
   requests.push(u);
   const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
+  if (u.includes('/rest/v1/jobs') && u.includes('order=posted_at')) return ok(seededBackendRows);
   if (u.endsWith('/auth/v1/health')) return ok({});
   if (u.includes('/rest/v1/rpc/is_qa_tester')) return ok(false);
   if (u.includes('/rest/v1/rpc/job_assigned_pro_labels')) {
@@ -121,12 +140,6 @@ global.fetch = async (url, init) => {
   }
   if (u.includes('/rest/v1/profiles')) {
     return ok([{ id: PRO_UUID, role: 'pro', display_name: 'Grace Hopper', pro_workspace: SIMULATED_PRO_WORKSPACE }]);
-  }
-  if (u.includes('/rest/v1/jobs') && u.includes('order=posted_at')) {
-    // Phase 1B B4: the account read is unavailable here, so the seeded cache
-    // (legacy local jobs included) stays as it is and these claim checks
-    // still render it. Cross-device loading is covered in audit.test.js.
-    return { ok: false, status: 503, json: async () => ({}), text: async () => 'unavailable' };
   }
   if (u.includes('/rest/v1/jobs')) {
     return ok([{ id: BACKEND_JOB, status: 'complete', customer_id: CUSTOMER_ID, pro_id: PRO_UUID, verified_pro: true }]);
@@ -161,7 +174,7 @@ function seed(jobs) {
   storedData['haven_auth_user_id'] = CUSTOMER_ID;
   storedData['haven_auth_email'] = 'qa-customer@example.com';
   storedData['haven_auth_role'] = 'customer';
-  storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: jobs });
+  storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: havenSeedBackendRows(jobs) });
   // Phase 1B B4: the jobs cache belongs to the signed-in customer.
   storedData['haven_jobs_owner'] = CUSTOMER_ID;
   storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });

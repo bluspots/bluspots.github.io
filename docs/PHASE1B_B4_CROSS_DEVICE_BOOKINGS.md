@@ -24,7 +24,8 @@ It runs on app load, on sign-in / account switch, and when Bookings opens (the f
 - Backend row with no cached entry: built from backend columns (title/category, labor, emergency fee, preferences, accepted/completed time, materials request). Catalog titles map back to the catalog task. No demo pro, no demo completion details, no local card.
 - Cached backend-linked job that the account read does not return: dropped, unless it was posted in this tab after the read began.
 - Local-only entry (no backend id): not a booking. Dropped once the account read lands. With Supabase configured, Slice 5 already saves a job only after its backend create lands, so these come only from older builds or the unconfigured preview.
-- A failed read keeps the cache as it is (this account's only) and Bookings says "Couldn't load your bookings. Retry". While the first read is loading and nothing is cached, Bookings says "Loading your bookings…" instead of "No bookings yet".
+- Strict source of truth: cached jobs are shown (Bookings, status, history, receipts) only after this account's read has landed. Until then Bookings says "Loading your bookings…"; after a failed read it shows ONLY "Couldn't load your bookings. Retry", with no cached or local entries, and Retry re-reads. The cache stays in storage (it is not deleted by a failed read). A job whose backend create landed in this tab is shown even before the read.
+- The account-switch / sign-out check runs only after the auth session has finished loading.
 - No Supabase config (local preview / test harness): unchanged.
 
 Receipts and the Booking Summary keep using the backend totals (#45 / #50 / #51); the account read fills the same receipt map.

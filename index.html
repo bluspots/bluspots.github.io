@@ -2635,11 +2635,23 @@ function App() {
       });
     }
   });
-  const jobs = havenJobsCacheIsCurrentAccount() ? jobsState : HAVEN_NO_JOBS;
+  const [jobsVerifiedFor, setJobsVerifiedFor] = useState("");
+  const jobsVerified = !getSupabaseConfig() || !!jobsVerifiedFor && havenSameCustomerId(jobsVerifiedFor, havenJobsAccountId() || "");
+  const [jobsCreatedHere, setJobsCreatedHere] = useState(() => /* @__PURE__ */ new Set());
+  const jobs = React.useMemo(() => {
+    if (!havenJobsCacheIsCurrentAccount()) return HAVEN_NO_JOBS;
+    if (jobsVerified) return jobsState;
+    if (jobsCreatedHere.size === 0) return HAVEN_NO_JOBS;
+    return jobsState.filter((j) => j && j.backendJobId && jobsCreatedHere.has(havenBackendKey(j.backendJobId)));
+  }, [jobsState, jobsVerified, jobsCreatedHere, jobsVerifiedFor]);
   const jobsRef = useRef(jobs);
   useEffect(() => {
     jobsRef.current = jobs;
   }, [jobs]);
+  const jobsCacheRef = useRef(jobsState);
+  useEffect(() => {
+    jobsCacheRef.current = havenJobsCacheIsCurrentAccount() ? jobsState : HAVEN_NO_JOBS;
+  }, [jobsState]);
   const [vjid, setVjid] = useState(null);
   const [scr, setScr] = useState("home");
   const [tab, setTab] = useState("home");
@@ -3197,7 +3209,8 @@ function App() {
         // Map location confirmed by the customer (Mapbox, permanent lookup). Kept only if well-formed.
         geo: a.geo && typeof a.geo === "object" && Number.isFinite(a.geo.lat) && Number.isFinite(a.geo.lng) ? { lat: a.geo.lat, lng: a.geo.lng, accuracy: typeof a.geo.accuracy === "string" ? a.geo.accuracy : "unknown", mapboxId: a.geo.mapboxId || null, source: "mapbox", confirmedAt: a.geo.confirmedAt || null } : null
       }));
-      const kept = cleaned.filter((a) => !isUntouchedSampleAddress(a, jobs));
+      const storedJobs = havenJobsCacheIsCurrentAccount() ? jobsState : [];
+      const kept = cleaned.filter((a) => !isUntouchedSampleAddress(a, storedJobs));
       if (kept.length !== cleaned.length) {
         cleaned.length = 0;
         cleaned.push(...kept);
@@ -3453,17 +3466,24 @@ function App() {
   const havenAccountId = havenAuth && havenAuth.accessToken ? havenJobsAccountId() : "";
   const [bookingsLoad, setBookingsLoad] = useState("idle");
   const hydrateSeqRef = useRef(0);
+  const hydrateInFlightRef = useRef(false);
   const hydrateMyJobs = async () => {
     if (!getSupabaseConfig()) return;
     const uid = havenJobsAccountId();
     if (!uid) return;
     const seq = ++hydrateSeqRef.current;
     const startStatus = /* @__PURE__ */ new Map();
-    (jobsRef.current || []).forEach((j) => {
+    (jobsCacheRef.current || []).forEach((j) => {
       if (j && j.backendJobId) startStatus.set(havenBackendKey(j.backendJobId), j.status);
     });
     setBookingsLoad("loading");
-    const result = await fetchMyCanonicalJobs();
+    hydrateInFlightRef.current = true;
+    let result;
+    try {
+      result = await fetchMyCanonicalJobs();
+    } finally {
+      if (seq === hydrateSeqRef.current) hydrateInFlightRef.current = false;
+    }
     if (seq !== hydrateSeqRef.current) return;
     const sameAccount = havenSameCustomerId(result.customerId, uid) && havenSameCustomerId(havenJobsAccountId(), uid);
     if (!sameAccount) {
@@ -3471,6 +3491,7 @@ function App() {
       return;
     }
     if (!result.ok) {
+      setJobsVerifiedFor("");
       setBookingsLoad("error");
       return;
     }
@@ -3490,7 +3511,7 @@ function App() {
     });
     const rowByKey = new Map(result.rows.map((r) => [havenBackendKey(r.id), r]));
     const completedNow = [];
-    (jobsRef.current || []).forEach((j) => {
+    (jobsCacheRef.current || []).forEach((j) => {
       if (!j || !j.backendJobId) return;
       const key = havenBackendKey(j.backendJobId);
       const row = rowByKey.get(key);
@@ -3500,6 +3521,7 @@ function App() {
       completedNow.push({ id: j.id, proName: j.pro && j.pro.n || "Your pro" });
     });
     setJobs((list) => havenReconcileJobsWithBackend(list, result.rows, startStatus, labels));
+    setJobsVerifiedFor(uid);
     setBookingsLoad("ok");
     completedNow.forEach(({ id, proName }) => handleJobTransition(id, "complete", proName));
   };
@@ -3513,6 +3535,10 @@ function App() {
     if (!sameOwner) {
       hydrateSeqRef.current++;
       jobsRef.current = HAVEN_NO_JOBS;
+      jobsCacheRef.current = HAVEN_NO_JOBS;
+      hydrateInFlightRef.current = false;
+      setJobsVerifiedFor("");
+      setJobsCreatedHere(/* @__PURE__ */ new Set());
       setJobs([]);
       setVjid(null);
       setBackendReceipts({});
@@ -3533,7 +3559,7 @@ function App() {
       if (cancelled) return;
       if (firstTick) {
         firstTick = false;
-        if (scr === "home" && tab === "bookings") await hydrateMyJobs();
+        if (scr === "home" && tab === "bookings" && !hydrateInFlightRef.current) await hydrateMyJobs();
         if (cancelled) return;
       }
       const currentJobs = jobsRef.current || [];
@@ -4355,6 +4381,11 @@ function App() {
         return;
       }
       nj.backendJobId = backendId;
+      setJobsCreatedHere((prev) => {
+        const next = new Set(prev);
+        next.add(havenBackendKey(backendId));
+        return next;
+      });
     }
     setJobs((p) => [...p, nj]);
     setVjid(nj.id);
@@ -4678,7 +4709,7 @@ function App() {
   }, style: { width: "100%", padding: 12, borderRadius: 16, border: "none", background: "none", color: TS, fontWeight: 600, fontSize: 13, cursor: "pointer" } }, "Try a different description")))));
   const bookingsScreen = () => {
     const bookingsRetry = bookingsLoad === "error" && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginBottom: 12 } }, "Couldn't load your bookings. ", /* @__PURE__ */ React.createElement("button", { onClick: () => hydrateMyJobs(), style: { background: "none", border: "none", padding: 0, color: N, fontWeight: 700, fontSize: 13, cursor: "pointer", textDecoration: "underline" } }, "Retry"));
-    if (allJobs.length === 0 && (bookingsLoad === "loading" || bookingsLoad === "error")) return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", background: BG } }, bookingsLoad === "loading" ? /* @__PURE__ */ React.createElement("div", { style: { color: TS, fontSize: 14 } }, "Loading your bookings…") : bookingsRetry);
+    if (allJobs.length === 0 && (bookingsLoad === "loading" || bookingsLoad === "error" || !jobsVerified)) return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", background: BG } }, bookingsLoad !== "error" ? /* @__PURE__ */ React.createElement("div", { style: { color: TS, fontSize: 14 } }, "Loading your bookings…") : bookingsRetry);
     if (allJobs.length === 0) return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 52, marginBottom: 16 } }, "📋"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 20, color: TX, marginBottom: 8 } }, "No bookings yet"), /* @__PURE__ */ React.createElement("div", { style: { color: TS, fontSize: 14, lineHeight: 1.6, marginBottom: 24 } }, "Post a job and a pro will accept it. You'll track everything here."), /* @__PURE__ */ React.createElement("button", { onClick: () => goTab("home"), style: { background: N, color: ON, border: "none", padding: "14px 30px", borderRadius: 16, fontWeight: 700, fontSize: 15, cursor: "pointer" } }, "Browse services"));
     return /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", background: BG, padding: "20px 20px 100px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 22, color: TX, marginBottom: 16 } }, "Bookings"), bookingsRetry, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 18 } }, [["all", `All (${allJobs.length})`], ["active", `Active (${activeCount})`], ["done", `Done (${doneCount})`]].map(([id, lb]) => {
       const a = bFilter === id;
@@ -4687,7 +4718,8 @@ function App() {
       const jt = j.taskId ? TASKS.find((t) => t.id === j.taskId) : j.custom ? { e: "🔧", n: j.custom.title, p: j.custom.price } : null;
       const jtp = ALL_TIME_PREFS.find((t) => t.id === j.tpId);
       const basePrice = j.taskId ? j.lockedPrice ?? (jt ? jt.p : 0) : j.custom?.price || 0;
-      const jTotal = basePrice + (j.surge || 0) + (j.emergencyFee || 0);
+      const jReceipt = receiptForJob(j);
+      const jTotal = jReceipt && typeof jReceipt.totalCents === "number" ? jReceipt.totalCents % 100 === 0 ? jReceipt.totalCents / 100 : (jReceipt.totalCents / 100).toFixed(2) : basePrice + (j.surge || 0) + (j.emergencyFee || 0);
       const isPending = j.status === "posted";
       const isDone = TERMINAL_STATUSES.has(j.status);
       const isCancelPending = j.cancelStatus === "requested" && !isDone;

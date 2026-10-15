@@ -566,10 +566,29 @@ export default function App(){
   // Phase 1B B4: the cache is shown only to the account that owns it. Right
   // after a sign-out or account switch (before the owner effect clears it)
   // this renders no jobs rather than the previous account's.
-  const jobs = havenJobsCacheIsCurrentAccount() ? jobsState : HAVEN_NO_JOBS;
+  // Strict source of truth: with a backend configured, cached jobs are shown
+  // (Bookings, status, history, receipts) only after this account's read has
+  // landed. Before that, or after a failed read, nothing cached is presented
+  // as current; Bookings shows loading or the error with Retry.
+  const [jobsVerifiedFor,setJobsVerifiedFor] = useState("");
+  const jobsVerified = !getSupabaseConfig() || (!!jobsVerifiedFor && havenSameCustomerId(jobsVerifiedFor, havenJobsAccountId()||""));
+  // A job whose backend create landed in this tab is backend-confirmed even
+  // before (or without) a successful account read.
+  const [jobsCreatedHere,setJobsCreatedHere] = useState(()=>new Set());
+  const jobs = React.useMemo(()=>{
+    if(!havenJobsCacheIsCurrentAccount()) return HAVEN_NO_JOBS;
+    if(jobsVerified) return jobsState;
+    if(jobsCreatedHere.size===0) return HAVEN_NO_JOBS;
+    return jobsState.filter(j=>j&&j.backendJobId&&jobsCreatedHere.has(havenBackendKey(j.backendJobId)));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[jobsState, jobsVerified, jobsCreatedHere, jobsVerifiedFor]);
   // Live jobs ref to avoid effect thrash on polling
   const jobsRef = useRef(jobs);
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+  // The raw per-account cache (not shown until verified). The account read
+  // reconciles against it, so a stale cached status is never kept by it.
+  const jobsCacheRef = useRef(jobsState);
+  useEffect(()=>{ jobsCacheRef.current = havenJobsCacheIsCurrentAccount() ? jobsState : HAVEN_NO_JOBS; },[jobsState]);
   const [vjid,setVjid]     = useState(null);
   const [scr,setScr]       = useState("home");
   const [tab,setTab]       = useState("home");
@@ -1088,7 +1107,10 @@ export default function App(){
             :null,
         }));
       // MAP-03: drop the old untouched sample addresses (see SAMPLE_ADDRESSES).
-      const kept=cleaned.filter(a=>!isUntouchedSampleAddress(a,jobs));
+      // Storage cleanup, not display: check the stored jobs cache (shown or
+      // not yet verified), so a sample with a job at it is never removed.
+      const storedJobs=havenJobsCacheIsCurrentAccount()?jobsState:[];
+      const kept=cleaned.filter(a=>!isUntouchedSampleAddress(a,storedJobs));
       if(kept.length!==cleaned.length){ cleaned.length=0; cleaned.push(...kept); }
       if(cleaned.length===0)return cleaned; // zero properties is valid — booking will require adding one
       const primaries=cleaned.filter(a=>a.isPrimary);
@@ -1380,20 +1402,28 @@ export default function App(){
   // idle | loading | ok | error. Drives only the Bookings empty/error copy.
   const [bookingsLoad,setBookingsLoad]=useState("idle");
   const hydrateSeqRef=useRef(0);
+  // True while an account read is in flight, so opening Bookings during the
+  // load read does not send the same read a second time.
+  const hydrateInFlightRef=useRef(false);
   const hydrateMyJobs=async()=>{
     if(!getSupabaseConfig()) return;
     const uid=havenJobsAccountId();
     if(!uid) return;
     const seq=++hydrateSeqRef.current;
     const startStatus=new Map();
-    (jobsRef.current||[]).forEach(j=>{ if(j&&j.backendJobId) startStatus.set(havenBackendKey(j.backendJobId), j.status); });
+    (jobsCacheRef.current||[]).forEach(j=>{ if(j&&j.backendJobId) startStatus.set(havenBackendKey(j.backendJobId), j.status); });
     setBookingsLoad("loading");
-    const result=await fetchMyCanonicalJobs();
+    hydrateInFlightRef.current=true;
+    let result;
+    try{ result=await fetchMyCanonicalJobs(); }
+    finally{ if(seq===hydrateSeqRef.current) hydrateInFlightRef.current=false; }
     if(seq!==hydrateSeqRef.current) return; // superseded: account switch or a newer read
     const sameAccount=havenSameCustomerId(result.customerId, uid) && havenSameCustomerId(havenJobsAccountId(), uid);
     if(!sameAccount){ setBookingsLoad("idle"); return; } // the new account's read reports its own state
     if(!result.ok){
-      // Nothing read: keep this account's cache as it is. No fake jobs.
+      // Nothing read: the cache stays in storage but is not shown. Bookings
+      // shows only the error with Retry; no cached or local entries.
+      setJobsVerifiedFor("");
       setBookingsLoad("error");
       return;
     }
@@ -1411,7 +1441,7 @@ export default function App(){
     // job the account read finds complete (so Rate / receipt stay reachable).
     const rowByKey=new Map(result.rows.map(r=>[havenBackendKey(r.id), r]));
     const completedNow=[];
-    (jobsRef.current||[]).forEach(j=>{
+    (jobsCacheRef.current||[]).forEach(j=>{
       if(!j||!j.backendJobId) return;
       const key=havenBackendKey(j.backendJobId);
       const row=rowByKey.get(key);
@@ -1421,6 +1451,7 @@ export default function App(){
       completedNow.push({id:j.id, proName:(j.pro&&j.pro.n)||"Your pro"});
     });
     setJobs(list=>havenReconcileJobsWithBackend(list, result.rows, startStatus, labels));
+    setJobsVerifiedFor(uid);
     setBookingsLoad("ok");
     completedNow.forEach(({id,proName})=>handleJobTransition(id,"complete",proName));
   };
@@ -1441,6 +1472,10 @@ export default function App(){
       // receipts and job notifications before anything else renders them.
       hydrateSeqRef.current++;
       jobsRef.current=HAVEN_NO_JOBS;
+      jobsCacheRef.current=HAVEN_NO_JOBS;
+      hydrateInFlightRef.current=false;
+      setJobsVerifiedFor("");
+      setJobsCreatedHere(new Set());
       setJobs([]);
       setVjid(null);
       setBackendReceipts({});
@@ -1467,7 +1502,7 @@ export default function App(){
       // polling only the known active jobs.
       if(firstTick){
         firstTick=false;
-        if(scr==="home" && tab==="bookings") await hydrateMyJobs();
+        if(scr==="home" && tab==="bookings" && !hydrateInFlightRef.current) await hydrateMyJobs();
         if(cancelled) return;
       }
       const currentJobs = jobsRef.current||[];
@@ -2277,6 +2312,7 @@ export default function App(){
         return;
       }
       nj.backendJobId=backendId;
+      setJobsCreatedHere(prev=>{ const next=new Set(prev); next.add(havenBackendKey(backendId)); return next; });
     }
     setJobs(p=>[...p,nj]);setVjid(nj.id);
     setPhotos([]);setDesc("");setTpid(null);setTid(null);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
@@ -2748,9 +2784,9 @@ export default function App(){
         Couldn't load your bookings. <button onClick={()=>hydrateMyJobs()} style={{background:"none",border:"none",padding:0,color:N,fontWeight:700,fontSize:13,cursor:"pointer",textDecoration:"underline"}}>Retry</button>
       </div>
     );
-    if(allJobs.length===0&&(bookingsLoad==="loading"||bookingsLoad==="error")) return(
+    if(allJobs.length===0&&(bookingsLoad==="loading"||bookingsLoad==="error"||!jobsVerified)) return(
       <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,textAlign:"center",background:BG}}>
-        {bookingsLoad==="loading"
+        {bookingsLoad!=="error"
           ? <div style={{color:TS,fontSize:14}}>Loading your bookings…</div>
           : bookingsRetry}
       </div>
@@ -2783,7 +2819,13 @@ export default function App(){
           const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
           const jtp=ALL_TIME_PREFS.find(t=>t.id===j.tpId);
           const basePrice=j.taskId?(j.lockedPrice??(jt?jt.p:0)):(j.custom?.price||0);
-          const jTotal=basePrice+(j.surge||0)+(j.emergencyFee||0);
+          // Display only: with a backend row, the card shows the same backend
+          // total as the Booking Summary and receipt (labor + approved
+          // materials + priority fee + tip). No pricing logic changes.
+          const jReceipt=receiptForJob(j);
+          const jTotal=jReceipt&&typeof jReceipt.totalCents==="number"
+            ? (jReceipt.totalCents%100===0?jReceipt.totalCents/100:(jReceipt.totalCents/100).toFixed(2))
+            : basePrice+(j.surge||0)+(j.emergencyFee||0);
           const isPending=j.status==="posted";
           const isDone=TERMINAL_STATUSES.has(j.status);
           const isCancelPending=j.cancelStatus==="requested"&&!isDone;

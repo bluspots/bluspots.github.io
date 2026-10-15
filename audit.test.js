@@ -2216,7 +2216,8 @@ async function runApproveAndDeclineChecks(){
     await mountApp(container);
     clickTab('Bookings');
     const cards = screen.queryAllByText(/Assemble furniture/);
-    act(() => { fireEvent.click(cards[cards.length - 1]); });
+    // Phase 1B B4: a job that is not shown has no card to open.
+    if (cards.length) act(() => { fireEvent.click(cards[cards.length - 1]); });
     await act(async () => { await delay(50); });
   };
 
@@ -2271,13 +2272,13 @@ async function runApproveAndDeclineChecks(){
 
     // Phase 1B A1: no demo path. A local-only job (no backend id) does not
     // advance on approve; it fails closed like any other unsynced write.
+    // Phase 1B B4 (strict): a local-only job is not a booking and is never
+    // shown, even when the account read fails, so there is no Approve button
+    // to press. The no-demo-advance checks below still hold.
     patches.length = 0;
     failJobsRead = true;
     await mount(makeJob(9103, { backendJobId: null }));
-    const approveDemo = byText('Approve materials');
-    await act(async () => { fireEvent.click(approveDemo); });
-    await act(async () => { await delay(40); });
-    assert(existsRegex("Couldn't sync approval"), 'Approve on a job with no backend id shows the sync error (no demo advance)');
+    assert(!existsRegex('Approve materials') && !existsRegex('Materials needed'), 'A job with no backend id is not shown, so it cannot be approved (no demo advance)');
     assert(!existsRegex('pro is buying'), 'Approve on a job with no backend id does not advance locally');
     assert(JSON.parse(storedData['haven_jobs']).data[0].status === 'materials_requested', 'Approve on a job with no backend id does not persist a local advance');
     assert(patches.length === 0, 'Approve on a job with no backend id sends no PATCH');
@@ -2814,6 +2815,11 @@ async function runReceiptTotalsChecks(){
   const origClipboard = global.navigator.clipboard;
   const origJspdf = global.window.jspdf;
   let remoteRow = null;
+  // Phase 1B B4: the account read (order=posted_at) confirms the job and its
+  // status, without stored amounts, so Bookings shows it (strict: nothing
+  // unconfirmed is shown). The receipt / Booking Summary amounts come from
+  // the by-id read, exactly as before: remoteRow, or 200 with no row.
+  const accountJobsResponse = () => ({ ok: true, json: async () => [{ id: backendId, status: remoteRow ? remoteRow.status : 'complete', customer_id: authUserId }], text: async () => '' });
   // Phase 1B A1 harness: jobs reads return remoteRow; everything else (Auth
   // health, is_qa_tester RPC, unexpected-request guard) goes to the shared
   // mocked backend so the app connects and signs in like every other phase.
@@ -2822,11 +2828,8 @@ async function runReceiptTotalsChecks(){
     const u = String(url);
     if (u.includes('/rest/v1/jobs')) {
       fetchLog.push({ url: u, opts: opts || {} });
-      // Phase 1B B4: remoteRow null means the backend values are unavailable
-      // (the read fails). A successful account read without the job would drop
-      // it from the cache instead (covered in the cross-device checks).
-      if (!remoteRow) return { ok: false, status: 503, json: async () => ({}), text: async () => 'unavailable' };
-      return { ok: true, json: async () => [remoteRow], text: async () => '' };
+      if (u.includes('order=posted_at')) return accountJobsResponse();
+      return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' };
     }
     return defaultBackendFetch(url, opts);
   };
@@ -2992,7 +2995,7 @@ async function runReceiptTotalsChecks(){
     assert(/Total\$107\.00/.test(out.inApp) && out.share.includes('Total: $107.00') && out.pdf.includes('$107.00'), 'changing local price/surge/tip/materials does not change the $107.00 total');
     assert(!/\$999/.test(out.inApp + out.share + out.pdf), 'local price 999 never prints');
 
-    // Backend values unavailable: no amounts at all, and still no PAID.
+    // Backend returns no row (200, empty): no amounts at all, and still no PAID.
     remoteRow = null;
     await mountCompleted(localJob({ id: 9704 }));
     await openReceiptsList();
@@ -3042,8 +3045,8 @@ async function runReceiptTotalsChecks(){
       const u = String(url);
       if (u.includes('/rest/v1/jobs')) {
         fetchLog.push({ url: u, opts: opts || {} });
-        if (!remoteRow) return { ok: false, status: 503, json: async () => ({}), text: async () => 'unavailable' };
-        return { ok: true, json: async () => [remoteRow], text: async () => '' };
+        if (u.includes('order=posted_at')) return accountJobsResponse();
+        return { ok: true, json: async () => (remoteRow ? [remoteRow] : []), text: async () => '' };
       }
       return defaultBackendFetch(url, opts);
     };
@@ -3134,6 +3137,7 @@ async function runReceiptTotalsChecks(){
       global.fetch = async (url, opts) => {
         const u = String(url);
         if (u.includes('/rest/v1/jobs')) {
+          if (u.includes('order=posted_at')) return { ok: true, json: async () => [{ id: backendId, status: 'complete', customer_id: authUserId }], text: async () => '' };
           await jobsGate;
           return { ok: true, json: async () => [row({ materials_estimate_cents: 1800, materials_approved_cents: 1800, emergency_fee_cents: 2500 })], text: async () => '' };
         }
@@ -3495,6 +3499,53 @@ async function runCrossDeviceBookingsChecks(){
       release(); gate = null; gateFor = null;
       await settle();
       assert(existsRegex('All (3)'), 'X4: jobs appear once the read lands');
+    }
+
+    // ── X4e. QA (e): own cache + failed read shows ONLY the error ──────────
+    // The backend is the source of truth: with this account's own cache (a
+    // forged local-only job and a stale status) and a 503, Bookings shows the
+    // error and Retry, and no cached or local entry anywhere.
+    {
+      cleanup();
+      freshBrowser();
+      storedData['haven_jobs_owner'] = userA;
+      storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [
+        { id: 8001, status: 'en_route', custom: { title: 'FORGED local fake job', cat: 'Repair', price: 50 }, tpId: 2, msgs: [], photos: [] },
+        { id: 8002, status: 'en_route', custom: { title: 'Leaky faucet repair', cat: 'Plumbing', price: 89 }, tpId: 2, backendJobId: jobComplete, msgs: [], photos: [] },
+      ] });
+      failJobs = true;
+      await mount(userA);
+      await openBookings();
+      assert(existsRegex("Couldn't load your bookings.") && existsRegex('Retry'), 'X4e: own cache + 503: Bookings shows the error with Retry');
+      assert(!existsRegex('FORGED local fake job'), 'X4e: own cache + 503: the forged local-only job is not listed');
+      assert(!existsRegex('Leaky faucet repair') && !existsRegex('Pro is on the way'), 'X4e: own cache + 503: the stale cached status is not listed');
+      assert(!existsRegex('All (') && !existsRegex('No bookings yet'), 'X4e: own cache + 503: no list and no empty-state claim, only the error');
+      forceProfileRoot();
+      click('My Home');
+      assert(!existsRegex('Leaky faucet repair') && !existsRegex('FORGED local fake job'), 'X4e: own cache + 503: My Home history shows no cached job');
+      click('Receipts');
+      await settle();
+      assert(!existsRegex('Leaky faucet repair') && !existsRegex('$89') && !existsRegex('$50'), 'X4e: own cache + 503: Receipts list shows no cached job');
+      clickTab('Bookings');
+      await settle();
+      assert(existsRegex("Couldn't load your bookings.") && !existsRegex('FORGED local fake job'), 'X4e: back on Bookings while the backend is still down: only the error');
+      failJobs = false;
+      click('Retry');
+      await settle();
+      assert(existsRegex('All (3)') && existsRegex('Completed'), 'X4e: Retry re-reads and lists the backend jobs with the backend status');
+      assert(!existsRegex('FORGED local fake job'), 'X4e: after Retry the forged local-only job is still not listed');
+      assert(!storedJobs().some(j => j.id === 8001), 'X4e: after a landed read the local-only entry is dropped from the cache');
+    }
+
+    // ── X1c. The Bookings card shows the same backend total as the receipt ─
+    {
+      cleanup();
+      freshBrowser();
+      await mount(userA);
+      await openBookings();
+      const card = screen.queryAllByText(/Leaky faucet repair/).map(el => el.closest('div') && el.closest('div').parentElement).filter(Boolean)[0];
+      const cardText = card ? card.textContent : '';
+      assert(/\$107\b/.test(cardText) && !/\$89\b/.test(cardText), 'X1c: the completed job\'s Bookings card shows the backend total $107 ($89 + $18 approved), not $89');
     }
 
     // ── X6. Session-loaded guard: clear only on a real sign-out or switch ──
