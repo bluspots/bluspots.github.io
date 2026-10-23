@@ -2392,7 +2392,7 @@ function runRls0027MigrationStaticChecks(){
     const unused = ['job_status_events','materials_requests','materials_receipts','tips','job_messages','job_media','job_notes','earnings_statements'];
 
     // Header and paste order.
-    assert(/PASTE ORDER: 0025 body, then 0027 \(this file\), then 0026, then 0028/.test(sql) && /Safe to re-run/i.test(sql), '0027 header: paste order 0025, 0027, 0026, 0028; safe to re-run');
+    assert(/PASTE ORDER: 0025 body, then 0027 \(this file\), then 0026, then 0028/.test(sql) && !/Safe to re-run/.test(sql) && /It is NOT universally safe to re-run/.test(sql) && /a no-op ONLY while the state is exactly what this file leaves/.test(sql) && /NOT a no-op, and not guarded, if anything was changed on purpose/.test(sql) && /refused with an error by section 0, nothing applied/.test(sql), '0027 header: paste order 0025, 0027, 0026, 0028; no universal re-run claim (founder 2026-10-23): exact no-op / not-guarded / refuse conditions');
     assert(/What changes/.test(sql) && /Does not change/.test(sql) && /Must keep working/.test(sql), '0027 header lists what changes, what does not, and what must keep working');
     assert(/^begin;$/m.test(body) && /^commit;$/m.test(body), '0027 runs in one transaction');
     assert(/raise exception '0027: prerequisites missing/.test(body) && body.indexOf('prerequisites missing') < body.indexOf('drop policy'), '0027 fails fast before changing anything');

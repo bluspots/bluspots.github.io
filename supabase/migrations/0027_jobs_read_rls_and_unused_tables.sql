@@ -8,8 +8,28 @@
 -- PASTE ORDER: 0025 body, then 0027 (this file), then 0026, then 0028,
 -- each pasted as its own run. 0027 does not depend on 0026.
 -- Do not apply it from the app, from CI, or from an agent.
--- Safe to re-run. It runs in one transaction and stops before changing
--- anything if a prerequisite is missing (section 0).
+-- It is NOT universally safe to re-run. It runs in one transaction; a
+-- re-run is:
+--   - a no-op ONLY while the state is exactly what this file leaves:
+--     jobs_select_assigned_or_active is absent, jobs_select_own_customer
+--     and jobs_select_assigned_pro exist with the definitions below (they
+--     are dropped and re-created identically), and the eight tables in
+--     section 2 have RLS on and no rights for public / anon /
+--     authenticated (enabling and revoking again changes nothing). It
+--     never touches rows, other policies or grants on public.jobs.
+--   - NOT a no-op, and not guarded, if anything was changed on purpose
+--     after 0027: a re-added jobs_select_assigned_or_active is dropped
+--     again, an edited or later jobs_select_own_customer /
+--     jobs_select_assigned_pro is replaced by this file's version, and any
+--     right granted later on the eight tables is revoked again. Check
+--     pg_policies and the table grants before any re-run.
+--   - refused with an error by section 0, nothing applied, when
+--     public.jobs is missing, any prerequisite listed there is missing
+--     (public.profiles, the 0022 / 0023 functions, trigger
+--     jobs_enforce_claim_radius, policy jobs_select_own_posted,
+--     jobs.customer_id / pro_id, the eight tables), RLS on public.jobs is
+--     disabled or FORCED, or one of the four RPCs is not SECURITY DEFINER
+--     or is owned by a role that neither owns public.jobs nor bypasses RLS.
 -- Run the founder query at the bottom (section 4) BEFORE and AFTER pasting
 -- and keep both outputs.
 --
