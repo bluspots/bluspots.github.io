@@ -3199,7 +3199,8 @@ async function runReceiptTotalsChecks(){
     step('P1. 0026 customer-only materials approval (static)', () => {
       const sql = fs.readFileSync(require('path').join(__dirname, 'supabase/migrations/0026_customer_only_materials_approval.sql'), 'utf8');
       const live = sql.split('\n').filter(l => !/^\s*--/.test(l)).join('\n');
-      assert(/AFTER 0025/.test(sql) && /Safe to re-run/i.test(sql), '0026 header: paste after 0025, safe to re-run');
+      assert(/AFTER 0025/.test(sql) && /Re-run: safe ONLY while 0028 is not\s+(--\s+)?installed/.test(sql) && !/Safe to re-run/i.test(sql), '0026 header: paste after 0025, exact re-run rule (safe only while 0028 is not installed)');
+      assert(/prosrc like '%legacy_fill_ok%' or prosrc like '%ABANDON \(0028%'\s+or prosrc like '%haven-version:%'/.test(live) && /raise exception '0026 refused: 0028 or later is installed/.test(live) && live.indexOf('0026 refused') > live.indexOf('\nbegin;') && live.indexOf('0026 refused') < live.indexOf('add column materials_request_seq'), '0026 section 0b refuses (inside the transaction, before any change) when 0028 or later is installed');
       assert(/0026 needs 0025_materials_approved_lock\.sql first/.test(live), '0026 stops with a clear error when 0025 is missing');
       assert(/create or replace function public\.jobs_lock_materials_approved\(\)/.test(live) && /create trigger jobs_lock_materials_approved\s+before insert or update on public\.jobs/i.test(live), '0026 replaces the 0025 trigger function on the same BEFORE INSERT OR UPDATE trigger');
       // Exact guard structure (G1-G3). Whitespace-normalised so a logic flip
@@ -3248,7 +3249,7 @@ async function runReceiptTotalsChecks(){
       assert(founderUpdates.length === 2 && /where id = '<job uuid>'/.test(founderUpdates[1]) && /materials_approved_cents is null/.test(founderUpdates[1]) && !/fee|tip|reimbursed|labor/.test(founderUpdates[1]), '0026 founder fill is single-job, null-only, and touches no other financial column');
       const rb = sql.split('-- ── Rollback')[1] || '';
       const r1 = rb.split('-- R2.')[0], r2 = rb.split('-- R2.')[1] || '';
-      assert(/begin;[\s\S]*0025_materials_approved_lock\.sql[\s\S]*drop column if exists materials_decided_seq[\s\S]*commit;/.test(r1), '0026 rollback R1: one transaction, 0025 function first, then drop the 0026 columns');
+      assert(/For rollback use 0025-review\/recovery\/0026_R1_back_to_0025\.sql/.test(r1) && !/sections 1-3/.test(r1) && r1.split('\n').slice(1).every(l => l === '' || /^--/.test(l)), '0026 rollback R1: comment-only pointer to recovery/0026_R1_back_to_0025.sql (no "paste 0025 sections 1-3" recipe)');
       const o = k => r2.indexOf(k);
       assert(o('begin;') >= 0 && o('begin;') < o('drop trigger') && o('drop trigger') < o('drop function') && o('drop function') < o('materials_request_seq') && o('materials_request_seq') < o('materials_approved_cents') && o('materials_approved_cents') < o('commit;'), '0026 rollback R2: one transaction, undo 0026 trigger/function, then 0026 columns, then 0025 columns');
     });
