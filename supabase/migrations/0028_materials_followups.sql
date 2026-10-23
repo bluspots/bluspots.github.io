@@ -12,8 +12,28 @@
 -- each pasted as its own run. 0028 does not depend on 0027 (it only
 -- replaces the 0026 trigger function and adds no column, policy or grant).
 -- Paste as the database owner. Do not apply it from the app, from CI, or
--- from an agent. Safe to re-run. Section 0 stops with an error, and nothing
--- is applied, if 0026 is not installed.
+-- from an agent. It is NOT universally safe to re-run; a re-run is:
+--   - a no-op (same function body, same oid, so the trigger is untouched;
+--     no column, policy, grant or data change) ONLY while
+--     public.jobs_lock_materials_approved() holds the exact 0028 body
+--     (md5 970e19f091cae2544be264a113fe9541) and trigger
+--     jobs_lock_materials_approved on public.jobs runs that function.
+--     0029 does not change either, so this also holds after 0029.
+--   - refused with an error by section 0, nothing applied (one
+--     transaction), when jobs.materials_decided_seq is missing, or no
+--     function named jobs_lock_materials_approved carries the 0026 message
+--     "Only the customer can approve or decline materials on this job", or
+--     trigger jobs_lock_materials_approved on public.jobs is missing.
+--   - NOT guarded otherwise. Section 0 only matches function text by name
+--     in any schema; it does not read the trigger's function
+--     (pg_trigger.tgfoid) and 0028 has no downgrade check. Do not re-run
+--     0028 if the function holds any body other than 0026's or 0028's
+--     (e.g. a later version: 0028 would silently replace it), or if the
+--     trigger runs a renamed function or one in another schema (0028 would
+--     write public.jobs_lock_materials_approved() but the trigger would not
+--     use it). Check first: the founder paste folder's read-only
+--     0025-review/verify_materials_step_readonly.sql names the installed
+--     body by md5 and lists the jobs triggers.
 --
 -- What it does (QA #85 v3 observations; same function name, same trigger,
 -- every 0026 rule G1-G3 / C2 / C3 / counting kept as is):
