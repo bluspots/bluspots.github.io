@@ -55,6 +55,13 @@
 --     This supersedes 0026/0028's "FOUNDER DECISION PENDING" block (the
 --     null; in jobs_lock_materials_approved): that block is left in place
 --     and still allows, but this trigger now refuses those moves.
+--   D. Moves INTO diagnosing (old.status <> diagnosing) by the job's
+--     customer are refused (42501 "Only the Pro can start diagnosing this
+--     job"), from any status (CoS / founder, 2026-10-23). arrived ->
+--     diagnosing is the Pro's step and still works for the assigned Pro.
+--     Without this the customer could hop arrived -> diagnosing ->
+--     inspection_completed and end a job from arrived in two writes.
+--     Other Pros / strangers are unchanged here (RLS and 0028 as before).
 --   II. Fee integrity. Once a job row exists (it is created posted), these
 --     columns are locked against client changes (42501 "Job pricing is
 --     locked once the job is posted"):
@@ -82,8 +89,8 @@
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
 --     0025/0026/0028) skip this trigger entirely and keep their current
---     behaviour: any status move into inspection_completed and any fee or
---     price correction. Manual corrections stay possible there.
+--     behaviour: any status move into inspection_completed or diagnosing
+--     and any fee or price correction. Manual corrections stay possible there.
 --
 -- Pro app note (no Pro change in this file): on a row whose stored
 -- inspection_fee_cents is 0 the Pro terminal sync sends
@@ -92,6 +99,12 @@
 -- the same-status re-send 0 -> 4500 is a fee change (42501). The Pro app
 -- then shows "Couldn't update the job. Try again." and keeps the job
 -- active, so the Pro app needs a fix (send the stored fee or no fee).
+-- SHIP-BEFORE-0029 DEPENDENCY (CoS, 2026-10-23; owner Claude, Pro app):
+-- bestEffortPatchTerminalStatus must send the row's stored fee or omit the
+-- fee field BEFORE 0029 is applied, otherwise jobs storing 0 get stuck.
+-- Also known (Pro app, owner Claude): the Pro only polls materials_requested
+-- / materials_approved, so a customer ending from diagnosing is not seen
+-- live by the Pro app.
 
 begin;
 
@@ -171,6 +184,16 @@ begin
         using errcode = '42501',
               hint = 'This move into inspection_completed is not allowed.';
     end if;
+  end if;
+
+  -- D. Moves INTO diagnosing: never by the job's customer, from any status
+  --    (arrived -> diagnosing is the Pro's; a same-status re-send is not a move).
+  if new.status = 'diagnosing'
+     and old.status is distinct from 'diagnosing'
+     and is_customer then
+    raise exception 'Only the Pro can start diagnosing this job'
+      using errcode = '42501',
+            hint = 'arrived -> diagnosing is the Pro''s step; the customer cannot move a job into diagnosing.';
   end if;
 
   -- II. Fee integrity: price, payout, margin and fees are fixed once posted.

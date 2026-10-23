@@ -19,19 +19,22 @@ Statuses (lowercase snake_case):
 posted → en_route → arrived → diagnosing? → (materials_requested → materials_approved →) in_progress → complete
                                                                                      ↘ inspection_completed (diagnosis decline)
                                                                                      ↘ materials_declined   (standard decline)
+                                 diagnosing → inspection_completed (Customer ends after diagnosis)   [founder decision 2026-10-23]
 any pre‑complete → cancelled
 ```
+
+inspection_completed is reached ONLY by the Customer, from `diagnosing` or from `materials_requested` (diagnosis decline); never from `arrived`, never by the Pro; every other move into it is rejected. *(founder decision 2026-10-23)*
 
 Definitions:
 - posted: Job created; waiting for a pro to accept.
 - en_route: Pro accepted; traveling to the property.
 - arrived: Pro is at the property.
-- diagnosing: For categories where requires_diagnosis=true; pro is assessing scope.
+- diagnosing: For categories where requires_diagnosis=true; pro is assessing scope. Only the Pro moves a job into diagnosing (arrived → diagnosing); the Customer cannot. *(founder decision 2026-10-23)*
 - materials_requested: Pro requested customer approval to buy materials; waiting on customer.
 - materials_approved: Customer approved; pro is authorized to purchase (no reimbursement yet).
 - in_progress: Pro is actively doing the work.
 - complete: Job finished with full repair.
-- inspection_completed: Diagnosis performed; customer declined materials on a diagnosis category; job ends at the inspection fee.
+- inspection_completed: Diagnosis performed on a requires_diagnosis job; the Customer ended the job at the $45 inspection fee, either from diagnosing (no undecided materials request) or by declining materials (from materials_requested). Only the Customer, never from arrived, never the Pro. *(founder decision 2026-10-23)*
 - materials_declined: Standard category materials decline; job could not proceed; ends with a $30 convenience fee.
 - cancelled: Cancelled from any pre‑complete status (role rules below).
 
@@ -48,17 +51,20 @@ Naming principles:
 | (none) → posted | Customer | Job creation |
 | posted → en_route | Pro | Accepts job |
 | en_route → arrived | Pro | Arrival confirmation |
-| arrived → diagnosing | Pro | Diagnosis categories only |
+| arrived → diagnosing | Pro | Diagnosis categories only. The Customer can never move a job into diagnosing. *(founder decision 2026-10-23)* |
 | diagnosing → in_progress | Pro | Scope matched what was listed |
 | diagnosing → materials_requested | Pro | Scope exceeded what was listed |
 | materials_requested → materials_approved | Customer | Approves request; authorizes purchase only |
 | materials_approved → in_progress | Pro | Submits receipt w/ actual materials cost + photo |
-| materials_requested → inspection_completed | Customer | Declines on diagnosis categories |
+| materials_requested → inspection_completed | Customer | Declines on diagnosis categories (requires_diagnosis, undecided request). *(founder decision 2026-10-23)* |
+| diagnosing → inspection_completed | Customer | Ends at the $45 inspection fee after diagnosis: requires_diagnosis and no undecided materials request. *(founder decision 2026-10-23)* |
 | in_progress → complete | Pro | Mark job complete |
 | any pre‑complete → cancelled | Either | Different sub‑rules by phase; Customer after accept is “request cancel” |
 | Rating / tip | Customer | Post‑complete only |
 
 Backend enforcement must reject out‑of‑turn and role‑unauthorized transitions.
+
+*(founder decision 2026-10-23)* Every other move into `inspection_completed` is rejected for every client, the Pro included (never from `arrived`; never the Pro). A re-send of the status the job already has is not a move.
 
 ---
 
@@ -69,6 +75,7 @@ Backend enforcement must reject out‑of‑turn and role‑unauthorized transiti
 - Materials are additive to labor — never carved out of the service/labor price.
 - Diagnosis decline: `inspection_completed` with a hard‑locked $45 inspection fee (pro receives it).
 - Standard (non‑diagnosis) decline: `materials_declined` with a $30 convenience fee (pro receives it).
+- Financial amounts are locked once a job is posted (labor price, pro payout, margin, emergency fee, inspection fee, convenience fee). The only change allowed after posting is the $30 convenience fee on a standard materials decline. Nothing marks a fee collected or paid before payments exist. *(founder decision 2026-10-23)*
 
 ---
 
@@ -271,11 +278,12 @@ out of sync with each other the way job status already has.
 | `(none) → posted` | Customer App | Job creation |
 | `posted → en_route` | Pro App (Accept) | Currently simulated via Customer App's own "Demo Pro Controls" — this is explicitly a stand-in for a real Pro App action, not a real cross-app sync today |
 | `en_route → arrived` | Pro App | Same simulation caveat |
-| `arrived → diagnosing` | Pro App | Diagnosis-required categories only (§2); not coded either side yet |
+| `arrived → diagnosing` | Pro App | Diagnosis-required categories only (§2); not coded either side yet. Customer App never moves a job into diagnosing. *(founder decision 2026-10-23)* |
 | `diagnosing → in_progress` | Pro App | Scope matched what was listed |
 | `diagnosing → materials_requested` | Pro App | Scope exceeded what was listed |
 | `materials_requested → in_progress` | **Customer App** (approve) | Customer-triggered, not Pro-triggered — the Pro App is blocked waiting on this |
 | `materials_requested → inspection_completed` | **Customer App** (decline) | Same — customer-triggered terminal state |
+| `diagnosing → inspection_completed` | **Customer App** (end at inspection fee) | Customer only; requires_diagnosis, no undecided materials request. Never from `arrived`, never the Pro App. *(founder decision 2026-10-23)* |
 | `in_progress → complete` | Pro App | |
 | `(any pre-complete) → cancelled` | Either, with different sub-rules: Customer may cancel before acceptance freely, and *request* cancellation after acceptance (`cancelStatus:"requested"` — already built); Pro App cancellation/abandonment handling is an open edge case per architecture doc §23, not yet designed in detail | |
 | Rating / tip | Customer App only, post-`complete` | Already fully built on Customer side |
