@@ -101,9 +101,9 @@
 --     The contract authorizes no other change after posting: the $45
 --     inspection fee is "hard-locked" (set at posting; the Customer app
 --     writes 4500 for diagnosis jobs), and "The payout shown before accept
---     is exactly what the pro receives". Not locked here (out of scope,
---     governed elsewhere): materials_* (0025-0028), materials_reimbursed_cents
---     (receipts), tip_amount_cents, emergency (flag only), payment_snapshot.
+--     is exactly what the pro receives". Not locked by II (governed
+--     elsewhere): materials_* (0025-0028), materials_reimbursed_cents and
+--     tip_amount_cents (III.5), emergency (flag only), payment_snapshot.
 --     INSERT (posting itself) is not checked by this trigger.
 --   III. Founder decisions 2026-10-23 18:50 ET, items 1-6 (CoS relay;
 --     decisions/FOUNDER_DECISIONS_2026-10-23.md B). Non-privileged callers
@@ -142,6 +142,19 @@
 --        materials_declined is reachable only from materials_requested.
 --        II's convenience-fee rule stays as a second layer. Showing the fee
 --        before the customer decides is the Customer app's job (FE-02).
+--     5. Only the job's customer sets tip_amount_cents ("Only the customer
+--        can set the tip"; the Pro, other users and anon are refused).
+--        materials_reimbursed_cents may change only to a value at most the
+--        customer-approved amount, old.materials_approved_cents (null = $0;
+--        "Materials reimbursement cannot exceed the customer-approved
+--        materials amount"). An unchanged value is not checked. STOPPED, not
+--        implemented: "needs a valid receipt". No receipt column exists on
+--        jobs; public.materials_receipts (0001: actual_total_cents,
+--        receipt_photo_url, submitted_by) is never written by either app and
+--        0027 revokes all client rights on it (RLS on, no policies), and
+--        job_media kind 'materials_receipt' is in the same state. Checking
+--        for a receipt row would refuse every Pro receipt today; that needs a
+--        founder / CoS decision on the receipt record first.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -340,6 +353,22 @@ begin
     raise exception 'Job pricing is locked once the job is posted'
       using errcode = '42501',
             hint = 'The convenience fee is set only to $30 by the customer''s standard materials decline.';
+  end if;
+
+  -- III.5 (item 5). Only the job's customer sets the tip.
+  if new.tip_amount_cents is distinct from old.tip_amount_cents
+     and not is_customer then
+    raise exception 'Only the customer can set the tip'
+      using errcode = '42501',
+            hint = 'tip_amount_cents is the customer''s to set.';
+  end if;
+  -- Reimbursement never exceeds the customer-approved materials amount
+  -- (materials_approved_cents, kept by 0025-0028; null counts as $0).
+  if new.materials_reimbursed_cents is distinct from old.materials_reimbursed_cents
+     and new.materials_reimbursed_cents > coalesce(old.materials_approved_cents, 0) then
+    raise exception 'Materials reimbursement cannot exceed the customer-approved materials amount'
+      using errcode = '42501',
+            hint = 'The receipt amount must be at most materials_approved_cents.';
   end if;
 
   return new;

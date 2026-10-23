@@ -61,7 +61,7 @@ Naming principles:
 | in_progress → complete | Pro | Mark job complete |
 | any pre‑complete → cancelled | Either | Different sub‑rules by phase; Customer after accept is “request cancel” |
 | complete / cancelled → anything | Nobody (client) | `complete` and `cancelled` are terminal: no move out of them, enforced server-side (0029 III.2). *(founder decision 2026-10-23)* |
-| Rating / tip | Customer | Post‑complete only |
+| Rating / tip | Customer | Post‑complete only. Only the job's Customer may set the tip; the Pro and anyone else are rejected server-side (0029 III.5). *(founder decision 2026-10-23)* |
 
 Backend enforcement must reject out‑of‑turn and role‑unauthorized transitions.
 
@@ -76,6 +76,7 @@ Backend enforcement must reject out‑of‑turn and role‑unauthorized transiti
 - 20/80 labor split: The customer’s listed labor price is authoritative. Haven retains 20% inside that price; the pro’s fixed labor payout is 80%. The payout shown before accept is exactly what the pro receives.
 - Haven takes 0% of materials, 0% of tips, 0% of Inspection Visits, and 0% of the $30 convenience fee.
 - Materials are additive to labor — never carved out of the service/labor price.
+- Materials reimbursement (`materials_reimbursed_cents`) can never exceed the Customer-approved materials amount (`materials_approved_cents`); enforced server-side (0029 III.5). A valid receipt is also required, but there is no usable receipt record yet (`materials_receipts` is unused and client-locked), so that part is pending a decision and not enforced by the database. *(founder decision 2026-10-23)*
 - Diagnosis decline: `inspection_completed` with a hard‑locked $45 inspection fee (pro receives it).
 - Standard (non‑diagnosis) decline: `materials_declined` with a $30 convenience fee (pro receives it).
 - Financial amounts are locked once a job is posted (labor price, pro payout, margin, emergency fee, inspection fee, convenience fee). The only change allowed after posting is the $30 convenience fee on a standard materials decline. Nothing marks a fee collected or paid before payments exist. *(founder decision 2026-10-23)* That $30 fee is **required**, not optional: the server sets it on every standard decline (0029 III.4) and refuses any other value. Diagnosis jobs never end as `materials_declined`; they end at `inspection_completed`. The Customer app must show the fee before the customer decides (FE-02). *(founder decision 2026-10-23)*
