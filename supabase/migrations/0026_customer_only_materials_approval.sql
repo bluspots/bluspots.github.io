@@ -13,8 +13,15 @@
 -- AFTER 0025 (it needs 0025's columns and replaces 0025's trigger function;
 -- section 0 stops with an error if 0025 is missing). Do not apply it from
 -- the app, from CI, or from an agent. Re-run: safe ONLY while 0028 is not
--- installed (idempotent; the one-time seq init does not repeat). After 0028
--- a re-run would downgrade the trigger function, so section 0b refuses.
+-- installed AND trigger jobs_lock_materials_approved on public.jobs is
+-- absent or runs public.jobs_lock_materials_approved() with the exact 0025
+-- or 0026 body (then it is a no-op re-install; the one-time seq init does
+-- not repeat). It refuses with an error and changes nothing (one
+-- transaction) when: the public function's body carries a 0028-or-later
+-- marker (section 0b); or the trigger runs any other function: renamed,
+-- in another schema, or a public.jobs_lock_materials_approved() whose
+-- body is not the exact 0025 / 0026 text, e.g. a later body with its
+-- markers stripped (section 0c, which reads pg_trigger and pg_proc).
 -- PASTE ORDER: 0025 body, then 0027, then 0026 (this file), then 0028,
 -- each pasted as its own run. 0026 does not depend on 0027.
 -- The whole migration (sections 0-3) is one transaction (begin; ... commit;):
@@ -177,6 +184,39 @@ begin
                      or prosrc like '%haven-version:%')) then
     raise exception '0026 refused: 0028 or later is installed; re-running 0026 would downgrade jobs_lock_materials_approved. Nothing was changed.';
   end if;
+end$$;
+
+-- ── 0c. The trigger must run the 0025 or 0026 function (added 2026-10-23, QA G-2)
+-- 0b only reads the text of public.jobs_lock_materials_approved(). This
+-- check reads the catalog: if trigger jobs_lock_materials_approved exists
+-- on public.jobs, the function it runs (pg_trigger.tgfoid) must be exactly
+-- public.jobs_lock_materials_approved() and its body (pg_proc.prosrc) must
+-- be the exact 0025 or 0026 text, identified by md5 (same values as
+-- 0025-review/verify_materials_step_readonly.sql):
+--   5d40ebc014f68ed465d6f430981fc381  0025 body
+--   c8cfe568269b8e9b07937501cf16a899  0026 body (this file, section 2)
+-- Anything else (function renamed, moved to another schema, or a later
+-- body without its markers) means re-running 0026 could downgrade or
+-- bypass it, so stop here: nothing in this file runs. No trigger yet (a
+-- database where the trigger was dropped) is allowed, as before.
+do $$
+declare
+  t record;
+begin
+  for t in
+    select tg.tgfoid, tg.tgfoid::regprocedure::text as fn, md5(p.prosrc) as body_md5
+      from pg_trigger tg
+      join pg_proc p on p.oid = tg.tgfoid
+     where tg.tgrelid = 'public.jobs'::regclass
+       and tg.tgname = 'jobs_lock_materials_approved'
+  loop
+    if to_regprocedure('public.jobs_lock_materials_approved()') is null
+       or t.tgfoid <> to_regprocedure('public.jobs_lock_materials_approved()')::oid
+       or t.body_md5 not in ('5d40ebc014f68ed465d6f430981fc381',
+                             'c8cfe568269b8e9b07937501cf16a899') then
+      raise exception '0026 refused: trigger jobs_lock_materials_approved on public.jobs runs % (body md5 %), not the 0025 or 0026 public.jobs_lock_materials_approved(); re-running 0026 could downgrade or bypass it. Nothing was changed.', t.fn, t.body_md5;
+    end if;
+  end loop;
 end$$;
 
 -- ── 1. Request bookkeeping columns (+ one-time init) ──────────────────────
