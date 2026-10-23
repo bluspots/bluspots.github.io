@@ -103,7 +103,7 @@
 --     writes 4500 for diagnosis jobs), and "The payout shown before accept
 --     is exactly what the pro receives". Not locked by II (governed
 --     elsewhere): materials_* (0025-0028), materials_reimbursed_cents and
---     tip_amount_cents (III.5), emergency (flag only), payment_snapshot.
+--     tip_amount_cents (III.5), emergency (flag only), payment_snapshot (III.6).
 --     INSERT (posting itself) is not checked by this trigger.
 --   III. Founder decisions 2026-10-23 18:50 ET, items 1-6 (CoS relay;
 --     decisions/FOUNDER_DECISIONS_2026-10-23.md B). Non-privileged callers
@@ -155,6 +155,10 @@
 --        job_media kind 'materials_receipt' is in the same state. Checking
 --        for a receipt row would refuse every Pro receipt today; that needs a
 --        founder / CoS decision on the receipt record first.
+--     6. The payment note, jobs.payment_snapshot ({brand,last4}, the only
+--        payment field; written at posting by the Customer app), is locked
+--        after posting ("The payment note is locked once the job is
+--        posted"); an identical re-send is not a change.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -369,6 +373,13 @@ begin
     raise exception 'Materials reimbursement cannot exceed the customer-approved materials amount'
       using errcode = '42501',
             hint = 'The receipt amount must be at most materials_approved_cents.';
+  end if;
+
+  -- III.6 (item 6). The payment note (payment_snapshot) is fixed once posted.
+  if new.payment_snapshot is distinct from old.payment_snapshot then
+    raise exception 'The payment note is locked once the job is posted'
+      using errcode = '42501',
+            hint = 'payment_snapshot is set when the job is posted.';
   end if;
 
   return new;

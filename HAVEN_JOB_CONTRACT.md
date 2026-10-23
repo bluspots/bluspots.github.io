@@ -79,6 +79,7 @@ Backend enforcement must reject out‑of‑turn and role‑unauthorized transiti
 - Materials reimbursement (`materials_reimbursed_cents`) can never exceed the Customer-approved materials amount (`materials_approved_cents`); enforced server-side (0029 III.5). A valid receipt is also required, but there is no usable receipt record yet (`materials_receipts` is unused and client-locked), so that part is pending a decision and not enforced by the database. *(founder decision 2026-10-23)*
 - Diagnosis decline: `inspection_completed` with a hard‑locked $45 inspection fee (pro receives it).
 - Standard (non‑diagnosis) decline: `materials_declined` with a $30 convenience fee (pro receives it).
+- The payment note (`payment_snapshot`, `{brand,last4}`) is locked once the job is posted; enforced server-side (0029 III.6). *(founder decision 2026-10-23)*
 - Financial amounts are locked once a job is posted (labor price, pro payout, margin, emergency fee, inspection fee, convenience fee). The only change allowed after posting is the $30 convenience fee on a standard materials decline. Nothing marks a fee collected or paid before payments exist. *(founder decision 2026-10-23)* That $30 fee is **required**, not optional: the server sets it on every standard decline (0029 III.4) and refuses any other value. Diagnosis jobs never end as `materials_declined`; they end at `inspection_completed`. The Customer app must show the fee before the customer decides (FE-02). *(founder decision 2026-10-23)*
 
 ---
