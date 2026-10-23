@@ -113,6 +113,9 @@
 --        still gets rule D's message first. A same-status re-send is not a
 --        move. SHIP-BEFORE dependency (owner Claude, FE-04): the Pro app
 --        must offer Start Diagnosing only from arrived on diagnosis jobs.
+--     2. complete and cancelled are terminal: any move OUT of them (to
+--        any other status) is refused ("This job is finished; its status
+--        cannot change"). Same-status updates (tip, re-sends) are not moves.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -234,6 +237,14 @@ begin
     raise exception 'Only the assigned Pro can start diagnosing, from arrived, on a diagnosis job'
       using errcode = '42501',
             hint = 'arrived -> diagnosing is the assigned Pro''s step, only when requires_diagnosis is true.';
+  end if;
+
+  -- III.2 (item 2). complete and cancelled are terminal: no move out of them.
+  if old.status in ('complete', 'cancelled')
+     and new.status is distinct from old.status then
+    raise exception 'This job is finished; its status cannot change'
+      using errcode = '42501',
+            hint = 'complete and cancelled are terminal statuses.';
   end if;
 
   -- II. Fee integrity: price, payout, margin and fees are fixed once posted.

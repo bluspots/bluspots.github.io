@@ -60,6 +60,7 @@ Naming principles:
 | diagnosing → inspection_completed | Customer | Ends at the $45 inspection fee after diagnosis: requires_diagnosis and no undecided materials request. *(founder decision 2026-10-23)* |
 | in_progress → complete | Pro | Mark job complete |
 | any pre‑complete → cancelled | Either | Different sub‑rules by phase; Customer after accept is “request cancel” |
+| complete / cancelled → anything | Nobody (client) | `complete` and `cancelled` are terminal: no move out of them, enforced server-side (0029 III.2). *(founder decision 2026-10-23)* |
 | Rating / tip | Customer | Post‑complete only |
 
 Backend enforcement must reject out‑of‑turn and role‑unauthorized transitions.
