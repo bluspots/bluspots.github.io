@@ -12,7 +12,25 @@
 -- file), each pasted as its own run. 0029 needs 0028 (section 0 stops with
 -- an error, and nothing is applied, if 0028 is not installed). It does not
 -- depend on 0027. Paste as the database owner. Do not apply it from the
--- app, from CI, or from an agent. Safe to re-run.
+-- app, from CI, or from an agent. It is NOT universally safe to re-run; a
+-- re-run is:
+--   - a no-op in effect ONLY while public.jobs_lock_pricing_and_inspection()
+--     already holds the exact body in this file and 0028 is installed: it
+--     re-creates the same function and drops and re-creates the same
+--     trigger jobs_lock_pricing_and_inspection (new trigger oid, same
+--     definition). No column, policy, grant or data change, and
+--     jobs_lock_materials_approved is not touched.
+--   - refused with an error by section 0, nothing applied (one
+--     transaction), when jobs.materials_decided_seq is missing, or
+--     public.jobs_lock_materials_approved() does not carry all three 0028
+--     markers, or trigger jobs_lock_materials_approved on public.jobs is
+--     missing.
+--   - NOT guarded otherwise. 0029 has no downgrade check: if any other
+--     body of jobs_lock_pricing_and_inspection() is installed (an edited
+--     or later version), a re-run silently replaces it. Section 0 matches
+--     the 0028 function by text and does not read the trigger's function
+--     (pg_trigger.tgfoid). Compare the installed body with this file before
+--     any re-run.
 --
 -- What it adds: ONE new BEFORE UPDATE trigger on public.jobs,
 -- jobs_lock_pricing_and_inspection, with its own function. The 0025-0028
