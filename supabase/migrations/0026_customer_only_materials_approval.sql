@@ -12,7 +12,9 @@
 -- Paste this whole file in the Supabase SQL editor as the database owner,
 -- AFTER 0025 (it needs 0025's columns and replaces 0025's trigger function;
 -- section 0 stops with an error if 0025 is missing). Do not apply it from
--- the app, from CI, or from an agent. Safe to re-run.
+-- the app, from CI, or from an agent. Re-run: safe ONLY while 0028 is not
+-- installed (idempotent; the one-time seq init does not repeat). After 0028
+-- a re-run would downgrade the trigger function, so section 0b refuses.
 -- PASTE ORDER: 0025 body, then 0027, then 0026 (this file), then 0028,
 -- each pasted as its own run. 0026 does not depend on 0027.
 -- The whole migration (sections 0-3) is one transaction (begin; ... commit;):
@@ -159,6 +161,21 @@ begin
        and column_name = 'materials_approved_cents'
   ) then
     raise exception '0026 needs 0025_materials_approved_lock.sql first (jobs.materials_approved_cents is missing)';
+  end if;
+end$$;
+
+-- ── 0b. Refuse to downgrade (added 2026-10-23, review finding 1) ──────────
+-- 0028's body carries legacy_fill_ok and the ABANDON (0028) marker; a later
+-- body is expected to carry a "haven-version:" line. If any is present,
+-- re-running 0026 would undo it, so stop here: nothing in this file runs.
+do $$
+begin
+  if exists (select 1 from pg_proc
+              where pronamespace = 'public'::regnamespace
+                and proname = 'jobs_lock_materials_approved'
+                and (prosrc like '%legacy_fill_ok%' or prosrc like '%ABANDON (0028%'
+                     or prosrc like '%haven-version:%')) then
+    raise exception '0026 refused: 0028 or later is installed; re-running 0026 would downgrade jobs_lock_materials_approved. Nothing was changed.';
   end if;
 end$$;
 
