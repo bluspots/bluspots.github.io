@@ -79,7 +79,7 @@
 --     diagnosing is the Pro's step and still works for the assigned Pro.
 --     Without this the customer could hop arrived -> diagnosing ->
 --     inspection_completed and end a job from arrived in two writes.
---     Other Pros / strangers are unchanged here (RLS and 0028 as before).
+--     Every other caller is covered by III.1 below.
 --   II. Fee integrity. Once a job row exists (it is created posted), these
 --     columns are locked against client changes (42501 "Job pricing is
 --     locked once the job is posted"):
@@ -103,6 +103,16 @@
 --     governed elsewhere): materials_* (0025-0028), materials_reimbursed_cents
 --     (receipts), tip_amount_cents, emergency (flag only), payment_snapshot.
 --     INSERT (posting itself) is not checked by this trigger.
+--   III. Founder decisions 2026-10-23 18:50 ET, items 1-6 (CoS relay;
+--     decisions/FOUNDER_DECISIONS_2026-10-23.md B). Non-privileged callers
+--     only; each refusal is SQLSTATE 42501 and leaves the row unchanged.
+--     1. Moves INTO diagnosing (old.status <> diagnosing): only the job's
+--        assigned Pro (auth.uid() = old.pro_id), only from arrived, and only
+--        when old.requires_diagnosis = true ("Only the assigned Pro can
+--        start diagnosing, from arrived, on a diagnosis job"). The customer
+--        still gets rule D's message first. A same-status re-send is not a
+--        move. SHIP-BEFORE dependency (owner Claude, FE-04): the Pro app
+--        must offer Start Diagnosing only from arrived on diagnosis jobs.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -160,6 +170,7 @@ declare
   privileged boolean := current_user not in ('anon', 'authenticated');
   is_customer boolean;
   undecided boolean;
+  is_pro boolean;
 begin
   -- PRIVILEGED: owner / SQL editor / service_role keep their behaviour.
   if privileged then
@@ -168,6 +179,7 @@ begin
 
   is_customer := auth.uid() is not null and auth.uid() = old.customer_id;
   undecided := old.materials_request_seq > old.materials_decided_seq;
+  is_pro := auth.uid() is not null and auth.uid() = old.pro_id;
 
   -- I. Moves INTO inspection_completed (a same-status re-send is not a move).
   if new.status = 'inspection_completed'
@@ -212,6 +224,16 @@ begin
     raise exception 'Only the Pro can start diagnosing this job'
       using errcode = '42501',
             hint = 'arrived -> diagnosing is the Pro''s step; the customer cannot move a job into diagnosing.';
+  end if;
+
+  -- III.1 (founder 2026-10-23, item 1). Moves INTO diagnosing by anyone else:
+  --    only the job's assigned Pro, only from arrived, only on a diagnosis job.
+  if new.status = 'diagnosing'
+     and old.status is distinct from 'diagnosing'
+     and not (is_pro and old.status = 'arrived' and old.requires_diagnosis) then
+    raise exception 'Only the assigned Pro can start diagnosing, from arrived, on a diagnosis job'
+      using errcode = '42501',
+            hint = 'arrived -> diagnosing is the assigned Pro''s step, only when requires_diagnosis is true.';
   end if;
 
   -- II. Fee integrity: price, payout, margin and fees are fixed once posted.
