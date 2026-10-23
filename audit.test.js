@@ -3199,7 +3199,8 @@ async function runReceiptTotalsChecks(){
     step('P1. 0026 customer-only materials approval (static)', () => {
       const sql = fs.readFileSync(require('path').join(__dirname, 'supabase/migrations/0026_customer_only_materials_approval.sql'), 'utf8');
       const live = sql.split('\n').filter(l => !/^\s*--/.test(l)).join('\n');
-      assert(/AFTER 0025/.test(sql) && /Safe to re-run/i.test(sql), '0026 header: paste after 0025, safe to re-run');
+      assert(/AFTER 0025/.test(sql) && /Re-run: safe ONLY while 0028 is not\s+(--\s+)?installed/.test(sql) && !/Safe to re-run/i.test(sql), '0026 header: paste after 0025, exact re-run rule (safe only while 0028 is not installed)');
+      assert(/prosrc like '%legacy_fill_ok%' or prosrc like '%ABANDON \(0028%'\s+or prosrc like '%haven-version:%'/.test(live) && /raise exception '0026 refused: 0028 or later is installed/.test(live) && live.indexOf('0026 refused') > live.indexOf('\nbegin;') && live.indexOf('0026 refused') < live.indexOf('add column materials_request_seq'), '0026 section 0b refuses (inside the transaction, before any change) when 0028 or later is installed');
       assert(/0026 needs 0025_materials_approved_lock\.sql first/.test(live), '0026 stops with a clear error when 0025 is missing');
       assert(/create or replace function public\.jobs_lock_materials_approved\(\)/.test(live) && /create trigger jobs_lock_materials_approved\s+before insert or update on public\.jobs/i.test(live), '0026 replaces the 0025 trigger function on the same BEFORE INSERT OR UPDATE trigger');
       // Exact guard structure (G1-G3). Whitespace-normalised so a logic flip
