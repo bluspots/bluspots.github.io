@@ -97,9 +97,13 @@ const HAVEN_JOBS_OWNER_KEY = "haven_jobs_owner";
 const HAVEN_NO_JOBS = Object.freeze([]);
 const HAVEN_MATERIALS_STATUSES = new Set(["materials_requested","materials_approved","inspection_completed","materials_declined"]);
 function havenReadJobsOwner(){
+  if(havenLegacyPending) return havenLegacyMemoryOwner;
   try{ return String(localStorage.getItem(HAVEN_JOBS_OWNER_KEY)||"").trim(); }catch{ return ""; }
 }
 function havenWriteJobsOwner(userId){
+  // While the master set-aside is pending the owner is kept in memory only,
+  // so the next load still sees the store as ownerless and tries again.
+  if(havenLegacyPending){ havenLegacyMemoryOwner = userId ? String(userId) : ""; return; }
   try{
     if(userId) localStorage.setItem(HAVEN_JOBS_OWNER_KEY, String(userId));
     else localStorage.removeItem(HAVEN_JOBS_OWNER_KEY);
@@ -114,90 +118,139 @@ function havenReadStoredJobsAnyOwner(){
     return Array.isArray(data)?data:[];
   }catch{ return []; }
 }
-// Upgrade from master (QA #87 v3): master never wrote haven_jobs_owner, so
-// every master jobs cache is ownerless. It is not shown (above), but its
-// device-only details (the job's street address, which links it to a saved
-// address; messages, photos, description, rating, time window, a pending
-// cancel request; the local job id that notifications use) exist nowhere
-// else: the backend stores only city_label (address_snapshot stays null).
-// So before the ownerless cache is cleared it is set aside under its own
-// key, and an entry is restored only onto the backend row with the same id
-// that a signed-in account's own read (customer_id = auth.uid()) returns.
-//   - Only an ownerless cache is set aside. A cache owned by another account
-//     is never set aside (it is cleared as before).
-//   - Only entries with a backend id, and only the device-only fields below.
-//     Everything the backend stores (status, pricing, pro, timestamps,
-//     preferences, materials) comes from the backend row.
-//   - A field is restored only where the job still has the empty default, and
-//     the address only while the row's address_snapshot is empty, so backend
-//     data and later local changes are never overwritten.
-//   - An entry is removed from the set-aside key only after this account's
-//     owned cache has been saved with nothing left to restore from it.
-//     Entries no read claims stay (no expiry, not cleared on sign-out);
-//     Reset Prototype Data clears the key.
-// Never displayed by itself, never sent anywhere.
+// Upgrade from master (QA #87 v3/v4): master never wrote haven_jobs_owner, so
+// every master store is ownerless. Its jobs cache and notifications are not
+// shown, but the jobs' device-only details (the street address that links a
+// job to a saved address; the customer's own messages, photos, description,
+// rating, time window, a pending cancel request; the local job id that
+// notifications use) exist nowhere else: the backend stores only city_label
+// (address_snapshot stays null). So before the ownerless store is cleared it
+// is set aside under its own keys, never displayed, and a job entry (and the
+// notifications that point at it) is restored only for a backend row with
+// the same id in a signed-in account's own read (customer_id = auth.uid()).
+//   - Only an ownerless store is set aside; a store owned by another account
+//     is not (it is cleared as before).
+//   - Only device-only fields; everything the backend stores (status,
+//     pricing, pro, timestamps, preferences, materials) comes from the row.
+//   - Fields are filled only where the job still has the empty default; the
+//     address only while the row's address_snapshot is empty.
+//   - Messages: only the customer's own (f:"cu"). Replies scripted into the
+//     chat by builds before Phase 1B A2 (f:"pro") were never from a real Pro;
+//     they stay in the set-aside key untouched and are never shown.
+//   - Nothing is dropped to fit storage. If the set-aside cannot be written,
+//     the ownerless store stays exactly as it is (hidden) and the set-aside is
+//     tried again on the next load; this session keeps jobs and the owner in
+//     memory only (havenLegacyPending).
+//   - Entries are released only after this account's owned store has been
+//     saved with them. Unclaimed entries stay (no expiry, not cleared on
+//     sign-out); Reset Prototype Data clears the keys.
 const HAVEN_JOBS_LEGACY_KEY = "haven_jobs_unowned_legacy";
+const HAVEN_NOTIFS_LEGACY_KEY = "haven_notifications_unowned_legacy";
+const HAVEN_DEVICE_ONLY_LABEL = "Saved on this phone only";
 const HAVEN_LEGACY_JOB_FIELDS = ["id","addressText","addressLabel","msgs","photos","desc","rated","stars","reviewTxt","hireAgain","tpId","reqWindow","cancelStatus","cancellationRequestedAt"];
+// Set for this page load when the set-aside could not be written: the
+// ownerless store is left in place, hidden, and nothing jobs-related is
+// saved (the owner is kept in memory) so the next load tries again.
+let havenLegacyPending = false;
+let havenLegacyMemoryOwner = "";
+const havenIsCustomerMsg = (m)=> !!(m && typeof m==="object" && m.f==="cu");
 function havenLegacyEntryFromJob(j){
   if(!j || typeof j!=="object" || !havenBackendKey(j.backendJobId)) return null;
   const e = {backendJobId:String(j.backendJobId).trim()};
   HAVEN_LEGACY_JOB_FIELDS.forEach(f=>{ if(j[f]!==undefined) e[f]=j[f]; });
   return e;
 }
-function havenReadLegacyJobs(){
+function havenReadLegacyList(key){
   try{
-    const parsed = JSON.parse(localStorage.getItem(HAVEN_JOBS_LEGACY_KEY)||"null");
+    const parsed = JSON.parse(localStorage.getItem(key)||"null");
     const data = parsed&&typeof parsed==="object"&&!Array.isArray(parsed)&&"data" in parsed ? parsed.data : parsed;
-    return Array.isArray(data) ? data.filter(e=>e&&typeof e==="object"&&havenBackendKey(e.backendJobId)) : [];
+    return Array.isArray(data) ? data.filter(e=>e&&typeof e==="object") : [];
   }catch{ return []; }
 }
-// Writes the set-aside list; false if storage refused it. An empty list
+function havenReadLegacyJobs(){ return havenReadLegacyList(HAVEN_JOBS_LEGACY_KEY).filter(e=>havenBackendKey(e.backendJobId)); }
+function havenReadLegacyNotifs(){ return havenReadLegacyList(HAVEN_NOTIFS_LEGACY_KEY).filter(n=>typeof n.id!=="undefined"); }
+// Writes a set-aside list; false if storage refused it. An empty list
 // removes the key.
-function havenWriteLegacyJobs(list){
+function havenWriteLegacyList(key, list){
   try{
-    if(!list.length){ localStorage.removeItem(HAVEN_JOBS_LEGACY_KEY); return true; }
-    localStorage.setItem(HAVEN_JOBS_LEGACY_KEY, JSON.stringify({__v:1, data:list}));
+    if(!list.length){ localStorage.removeItem(key); return true; }
+    localStorage.setItem(key, JSON.stringify({__v:1, data:list}));
     return true;
   }catch{ return false; }
 }
-// Called by the jobs loader when the stored cache has no owner (Supabase
-// configured). Adds its backend-linked entries to the set-aside key (an
-// entry already set aside is kept as it is) and removes the ownerless cache
-// first, so the copy never needs more storage than the cache already used.
-// If storage still refuses, photos are dropped, then messages; the street
-// address is the last thing given up. On total failure the cache is put back
-// (the loader then clears it, as before this fix).
-function havenSetAsideUnownedJobs(rawJobs){
-  if(!Array.isArray(rawJobs) || !rawJobs.length) return;
-  const existing = havenReadLegacyJobs();
-  const have = new Set(existing.map(e=>havenBackendKey(e.backendJobId)));
-  const fresh = [];
-  rawJobs.forEach(j=>{
+function havenWriteLegacyJobs(list){ return havenWriteLegacyList(HAVEN_JOBS_LEGACY_KEY, list); }
+const havenRawData = (raw)=>{
+  try{
+    const parsed = JSON.parse(raw||"null");
+    const data = parsed&&typeof parsed==="object"&&!Array.isArray(parsed)&&"data" in parsed ? parsed.data : parsed;
+    return Array.isArray(data) ? data : [];
+  }catch{ return []; }
+};
+// Called by the jobs and notifications loaders while the store has no owner
+// (Supabase configured). Idempotent. Moves the ownerless jobs cache
+// (backend-linked entries, device-only fields) and the ownerless
+// notifications (each tagged with its job's backend id when known) into the
+// set-aside keys; an item already set aside is kept as it is. The ownerless
+// keys are removed first, so the copies never need more storage than they
+// used. If any write fails, every key is put back exactly as it was and
+// havenLegacyPending is set.
+function havenSetAsideOwnerlessStore(){
+  let rawJobs = null, rawNotifs = null, prevJobs = null, prevNotifs = null;
+  try{
+    rawJobs = localStorage.getItem("haven_jobs");
+    rawNotifs = localStorage.getItem("haven_notifications");
+    prevJobs = localStorage.getItem(HAVEN_JOBS_LEGACY_KEY);
+    prevNotifs = localStorage.getItem(HAVEN_NOTIFS_LEGACY_KEY);
+  }catch{ havenLegacyPending = true; return; }
+  const jobsIn = havenRawData(rawJobs), notifsIn = havenRawData(rawNotifs);
+  const backendIdByLocalId = new Map();
+  jobsIn.forEach(j=>{ if(j && typeof j==="object" && havenBackendKey(j.backendJobId)) backendIdByLocalId.set(j.id, String(j.backendJobId).trim()); });
+  const oldJobs = havenReadLegacyJobs(), oldNotifs = havenReadLegacyNotifs();
+  const haveJ = new Set(oldJobs.map(e=>havenBackendKey(e.backendJobId)));
+  const freshJobs = [];
+  jobsIn.forEach(j=>{
     const e = havenLegacyEntryFromJob(j);
     const k = e && havenBackendKey(e.backendJobId);
-    if(!e || have.has(k)) return;
-    have.add(k);
-    fresh.push(e);
+    if(!e || haveJ.has(k)) return;
+    haveJ.add(k); freshJobs.push(e);
   });
-  if(!fresh.length) return;
-  let raw = null;
-  try{ raw = localStorage.getItem("haven_jobs"); localStorage.removeItem("haven_jobs"); }catch{}
-  const strip = (drop)=>fresh.map(e=>{ const c={...e}; drop.forEach(f=>{ delete c[f]; }); return c; });
-  const tiers = [[], ["photos"], ["photos","msgs"], ["photos","msgs","desc","reviewTxt"]];
-  for(const drop of tiers){
-    if(havenWriteLegacyJobs(existing.concat(strip(drop)))) return;
-  }
-  try{ if(raw!=null) localStorage.setItem("haven_jobs", raw); }catch{}
+  const haveN = new Set(oldNotifs.map(n=>String(n.id)));
+  const freshNotifs = [];
+  notifsIn.forEach(n=>{
+    if(!n || typeof n!=="object" || typeof n.id==="undefined" || haveN.has(String(n.id))) return;
+    haveN.add(String(n.id));
+    const link = n.jobId!=null ? backendIdByLocalId.get(n.jobId) : null;
+    freshNotifs.push(link ? {...n, legacyBackendJobId:link} : {...n});
+  });
+  const dropJobs = rawJobs!=null && jobsIn.length>0;
+  const dropNotifs = rawNotifs!=null && notifsIn.length>0;
+  if(!freshJobs.length && !freshNotifs.length && !dropJobs && !dropNotifs) return;
+  const putBack = ()=>{
+    const restore = (k,v)=>{ try{ if(v==null) localStorage.removeItem(k); else localStorage.setItem(k, v); }catch{} };
+    restore(HAVEN_JOBS_LEGACY_KEY, prevJobs); restore(HAVEN_NOTIFS_LEGACY_KEY, prevNotifs);
+    restore("haven_jobs", rawJobs); restore("haven_notifications", rawNotifs);
+    havenLegacyPending = true;
+  };
+  try{
+    if(dropJobs) localStorage.removeItem("haven_jobs");
+    if(dropNotifs) localStorage.removeItem("haven_notifications");
+  }catch{ putBack(); return; }
+  if(freshJobs.length && !havenWriteLegacyList(HAVEN_JOBS_LEGACY_KEY, oldJobs.concat(freshJobs))){ putBack(); return; }
+  if(freshNotifs.length && !havenWriteLegacyList(HAVEN_NOTIFS_LEGACY_KEY, oldNotifs.concat(freshNotifs))){ putBack(); return; }
 }
 const havenLegacyIsEmpty = (v)=> v==null || v==="" || v===false || v===0 || (Array.isArray(v) && v.length===0);
+const havenRestored = (j, field)=> !!(j && Array.isArray(j.restoredDeviceOnly) && j.restoredDeviceOnly.includes(field));
 // The job with the set-aside details filled in where it still has the empty
 // default. The address only while the backend row has no address_snapshot
-// and the job shows the row's city (or the "—" placeholder). A pending
-// cancel request only while the backend job is still open. The id is left
-// to the caller (collisions).
+// and the job shows the row's city (or the "—" placeholder). Messages: only
+// the customer's own. A pending cancel request only while the backend job
+// is still open. Restored rating, photos and description are marked
+// device-only (restoredDeviceOnly) for the "Saved on this phone only" label.
+// The id is left to the caller (collisions).
 function havenApplyLegacyDetails(job, row, entry){
   if(!job || !entry) return job;
   const j = {...job};
+  const marks = new Set(Array.isArray(j.restoredDeviceOnly) ? j.restoredDeviceOnly : []);
   const snap = row && typeof row.address_snapshot==="string" ? row.address_snapshot.trim() : "";
   const city = row && typeof row.city_label==="string" ? row.city_label.trim() : "";
   if(!snap && typeof entry.addressText==="string" && entry.addressText.trim() && entry.addressText!=="—"
@@ -205,14 +258,18 @@ function havenApplyLegacyDetails(job, row, entry){
     j.addressText = entry.addressText;
     if(havenLegacyIsEmpty(j.addressLabel) && typeof entry.addressLabel==="string") j.addressLabel = entry.addressLabel;
   }
-  if(havenLegacyIsEmpty(j.msgs) && Array.isArray(entry.msgs) && entry.msgs.length) j.msgs = entry.msgs;
-  if(havenLegacyIsEmpty(j.photos) && Array.isArray(entry.photos) && entry.photos.length) j.photos = entry.photos.filter(p=>typeof p==="string");
-  if(havenLegacyIsEmpty(j.desc) && typeof entry.desc==="string" && entry.desc) j.desc = entry.desc;
+  const ownMsgs = Array.isArray(entry.msgs) ? entry.msgs.filter(havenIsCustomerMsg) : [];
+  if(havenLegacyIsEmpty(j.msgs) && ownMsgs.length) j.msgs = ownMsgs;
+  if(havenLegacyIsEmpty(j.photos) && Array.isArray(entry.photos) && entry.photos.some(p=>typeof p==="string")){
+    j.photos = entry.photos.filter(p=>typeof p==="string"); marks.add("photos");
+  }
+  if(havenLegacyIsEmpty(j.desc) && typeof entry.desc==="string" && entry.desc){ j.desc = entry.desc; marks.add("desc"); }
   if(!j.rated && !j.stars && entry.rated){
     j.rated = true;
     if(typeof entry.stars==="number") j.stars = entry.stars;
     if(typeof entry.reviewTxt==="string") j.reviewTxt = entry.reviewTxt;
     if(entry.hireAgain!==undefined) j.hireAgain = entry.hireAgain;
+    marks.add("rating");
   }
   if(j.tpId==null && entry.tpId!=null){
     j.tpId = entry.tpId;
@@ -222,7 +279,25 @@ function havenApplyLegacyDetails(job, row, entry){
     j.cancelStatus = entry.cancelStatus;
     if(j.cancellationRequestedAt==null && entry.cancellationRequestedAt!=null) j.cancellationRequestedAt = entry.cancellationRequestedAt;
   }
+  j.restoredDeviceOnly = Array.from(marks);
   return j;
+}
+// What stays set aside after an entry has been restored and saved: only the
+// messages that are never restored (not the customer's own), untouched.
+// null when nothing is left.
+// Once per app mount, before the jobs and notifications loaders: with a
+// backend configured and no owner in storage, set the ownerless store aside.
+function havenBootOwnerlessStore(){
+  havenLegacyPending = false;
+  havenLegacyMemoryOwner = "";
+  if(typeof getSupabaseConfig!=="function" || !getSupabaseConfig()) return;
+  let owner = "";
+  try{ owner = String(localStorage.getItem(HAVEN_JOBS_OWNER_KEY)||"").trim(); }catch{}
+  if(!owner) havenSetAsideOwnerlessStore();
+}
+function havenLegacyResidual(entry){
+  const kept = Array.isArray(entry.msgs) ? entry.msgs.filter(m=>!havenIsCustomerMsg(m)) : [];
+  return kept.length ? {backendJobId:entry.backendJobId, msgs:kept, retainedOnly:true} : null;
 }
 // Signed-in account id for the jobs cache. "" when signed out. Never a demo id.
 function havenJobsAccountId(){
@@ -674,16 +749,17 @@ export default function App(){
   const [ctitle,setCtitle] = useState("");
   const [ccat,setCcat]     = useState("Repair");
   const [cprice,setCprice] = useState("");
+  // QA #87 v4: a master (ownerless) store is set aside before the jobs and
+  // notifications loaders read it (see HAVEN_JOBS_LEGACY_KEY).
+  useState(()=>{ havenBootOwnerlessStore(); return null; });
   const [jobsState,setJobs] = usePersistedState("haven_jobs",[],{
     version:1,
+    persist:()=>!havenLegacyPending,
     validate:v=>{
       if(!Array.isArray(v))return null;
       // Phase 1B B4: another account's cache (or one with no owner) never loads.
-      if(!havenJobsCacheIsCurrentAccount()){
-        // A master (ownerless) cache: set its device-only details aside first.
-        if(getSupabaseConfig() && !havenReadJobsOwner()) havenSetAsideUnownedJobs(v);
-        return [];
-      }
+      // A master (ownerless) cache was set aside just before (havenBootOwnerlessStore).
+      if(!havenJobsCacheIsCurrentAccount())return [];
       const seenIds=new Set();
       return v
         .filter(j=>j&&typeof j==="object"&&typeof j.id!=="undefined")
@@ -773,7 +849,11 @@ export default function App(){
   // rather than crashing the app.
   const [notifications,setNotifications]=usePersistedState("haven_notifications",[],{
     version:1,
-    validate:v=>Array.isArray(v)?v.filter(n=>n&&typeof n==="object"&&typeof n.id!=="undefined"&&typeof n.createdAt==="number"):null,
+    persist:()=>!havenLegacyPending,
+    // QA #87 v4: notifications in an ownerless (master) store belong to no
+    // known account; they are set aside, never shown here (see
+    // havenBootOwnerlessStore), and restored only with a claimed job.
+    validate:v=>!Array.isArray(v)?null:(getSupabaseConfig()&&!havenReadJobsOwner())?[]:v.filter(n=>n&&typeof n==="object"&&typeof n.id!=="undefined"&&typeof n.createdAt==="number"),
   });
   const [lastDeletedNotif,setLastDeletedNotif]=useState(null);
   const [showUndoToast,setShowUndoToast]=useState(false);
@@ -1597,31 +1677,64 @@ export default function App(){
     setBookingsLoad("ok");
     completedNow.forEach(({id,proName})=>handleJobTransition(id,"complete",proName));
   };
-  // Release set-aside master details (HAVEN_JOBS_LEGACY_KEY) once this
-  // account's own cache has been saved with them: the entry's job came back
-  // in this account's landed read, the saved cache is owned by this account,
-  // and restoring the entry onto the saved job would change nothing. Runs
-  // after the jobs cache write of the same render. Unclaimed entries stay.
+  // Set-aside master store, after this account's read has landed and its
+  // owned cache is saved (runs after the jobs/notifications writes of the
+  // same render). Only for jobs this account's read returned:
+  //   - a set-aside notification whose job (by backend id, or by the restored
+  //     local id) is in this account's cache is restored, pointing at that job;
+  //     it leaves the set-aside key once it is saved in haven_notifications;
+  //   - a job entry leaves the set-aside key once restoring it onto the saved
+  //     job would change nothing; replies not written by the customer stay
+  //     set aside (havenLegacyResidual).
+  // Unclaimed entries and notifications stay. Nothing runs while pending.
   useEffect(()=>{
-    if(!getSupabaseConfig()) return;
+    if(!getSupabaseConfig() || havenLegacyPending) return;
     const uid=havenJobsAccountId();
     const last=legacyReadRef.current;
     if(!uid || !last || !havenSameCustomerId(last.uid, uid) || !havenSameCustomerId(jobsVerifiedFor, uid)) return;
     if(!havenJobsCacheIsCurrentAccount()) return;
     const legacy=havenReadLegacyJobs();
-    if(!legacy.length) return;
+    const legacyNotifs=havenReadLegacyNotifs();
+    if(!legacy.length && !legacyNotifs.length) return;
     const saved=new Map();
     havenReadStoredJobsAnyOwner().forEach(j=>{ if(j&&j.backendJobId) saved.set(havenBackendKey(j.backendJobId), j); });
-    const keep=legacy.filter(e=>{
-      const k=havenBackendKey(e.backendJobId);
-      const row=last.rows.get(k), job=saved.get(k);
-      if(!row || !job) return true;
-      const after=havenApplyLegacyDetails(job, row, e);
-      return !HAVEN_LEGACY_JOB_FIELDS.every(f=>f==="id" || JSON.stringify(after[f])===JSON.stringify(job[f]));
-    });
-    if(keep.length!==legacy.length) havenWriteLegacyJobs(keep);
+    if(legacyNotifs.length){
+      const savedNotifIds=new Set(havenRawData((()=>{ try{ return localStorage.getItem("haven_notifications"); }catch{ return null; } })()).map(n=>n&&String(n.id)));
+      const entryByLocalId=new Map(legacy.filter(e=>e.id!=null).map(e=>[e.id, e]));
+      const toShow=[], keepNotifs=[];
+      legacyNotifs.forEach(n=>{
+        const linkKey=havenBackendKey(n.legacyBackendJobId || (entryByLocalId.get(n.jobId)||{}).backendJobId);
+        const job=linkKey && last.rows.has(linkKey) ? saved.get(linkKey) : null;
+        if(!job){ keepNotifs.push(n); return; }
+        if(savedNotifIds.has(String(n.id))) return; // restored and saved: release
+        keepNotifs.push(n);
+        const {legacyBackendJobId, ...rest}=n;
+        const dest=rest.destination&&typeof rest.destination==="object"&&rest.destination.jobId!=null?{...rest.destination, jobId:job.id}:rest.destination;
+        toShow.push({...rest, jobId:job.id, ...(dest!==undefined?{destination:dest}:{})});
+      });
+      if(toShow.length) setNotifications(prev=>{
+        const have=new Set(prev.map(p=>String(p.id)));
+        const add=toShow.filter(n=>!have.has(String(n.id)));
+        return add.length ? prev.concat(add).sort((x,y)=>(y.createdAt||0)-(x.createdAt||0)) : prev;
+      });
+      if(keepNotifs.length!==legacyNotifs.length) havenWriteLegacyList(HAVEN_NOTIFS_LEGACY_KEY, keepNotifs);
+    }
+    if(legacy.length){
+      const next=[];
+      legacy.forEach(e=>{
+        const k=havenBackendKey(e.backendJobId);
+        const row=last.rows.get(k), job=saved.get(k);
+        if(!row || !job){ next.push(e); return; }
+        const after=havenApplyLegacyDetails(job, row, e);
+        const done=HAVEN_LEGACY_JOB_FIELDS.every(f=>f==="id" || JSON.stringify(after[f])===JSON.stringify(job[f]));
+        if(!done){ next.push(e); return; }
+        const rest=havenLegacyResidual(e);
+        if(rest) next.push(rest);
+      });
+      if(JSON.stringify(next)!==JSON.stringify(legacy)) havenWriteLegacyJobs(next);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  },[jobsState, jobsVerifiedFor]);
+  },[jobsState, jobsVerifiedFor, notifications]);
   // The auth session has finished loading once the backend connect resolved
   // (session read and applied, listener attached). Before that, an empty
   // account id means "not known yet", not "signed out".
@@ -3031,7 +3144,7 @@ export default function App(){
                   )}
                 {!isPending&&j.pro&&<span style={{fontSize:12,color:TS}}>Pro: {j.pro.n}</span>}
                 {isDone&&!j.rated&&<span style={{fontSize:12,color:AMT,fontWeight:700}}>⭐ Rate now</span>}
-                {isDone&&j.rated&&<span style={{fontSize:12,color:SC,fontWeight:600,display:"inline-flex",alignItems:"center",gap:4}}>{starDisplay(j.stars,11)} Reviewed</span>}
+                {isDone&&j.rated&&<span style={{fontSize:12,color:SC,fontWeight:600,display:"inline-flex",alignItems:"center",gap:4}}>{starDisplay(j.stars,11)} Reviewed{havenRestored(j,"rating")?` · ${HAVEN_DEVICE_ONLY_LABEL}`:""}</span>}
               </div>
             </div>
           );
@@ -4345,6 +4458,7 @@ export default function App(){
               <div style={{marginBottom:20}}>
                 <div style={{fontSize:10,fontWeight:700,color:TM,letterSpacing:.6,marginBottom:10}}>DESCRIPTION</div>
                 <div style={{fontSize:12,color:TS,lineHeight:1.6}}>{vj.desc}</div>
+                {havenRestored(vj,"desc")&&<div style={{fontSize:11,color:TM,marginTop:4,fontWeight:500}}>{HAVEN_DEVICE_ONLY_LABEL}</div>}
               </div>
             )}
 
@@ -5126,10 +5240,10 @@ export default function App(){
               <div style={{width:52,height:52,borderRadius:26,background:"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0}}>{vjTask?vjTask.e:"🔧"}</div>
               <div><div style={{fontWeight:700,fontSize:16,color:TX}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontWeight:800,fontSize:20,color:AMT,marginTop:2}}>${vjTotal}</div></div>
             </div>
-            {[["When",vj.reqWindow?(jobTimeConfirmed(vj)?"Confirmed":"Requested"):(vjTp?vjTp.label:"—")],["Window",vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.sub:"—")],["Photos",vj.photos?.length>0?`${vj.photos.length} added`:"None"]].map(([l,v])=>(
+            {[["When",vj.reqWindow?(jobTimeConfirmed(vj)?"Confirmed":"Requested"):(vjTp?vjTp.label:"—")],["Window",vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.sub:"—")],["Photos",vj.photos?.length>0?`${vj.photos.length} added${havenRestored(vj,"photos")?` · ${HAVEN_DEVICE_ONLY_LABEL}`:""}`:"None"]].map(([l,v])=>(
               <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:TX}}>{v}</span></div>
             ))}
-            {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5,fontStyle:"italic"}}>"{vj.desc}"</div></div>}
+            {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5,fontStyle:"italic"}}>"{vj.desc}"</div>{havenRestored(vj,"desc")&&<div style={{fontSize:11,color:TM,marginTop:4,fontWeight:500}}>{HAVEN_DEVICE_ONLY_LABEL}</div>}</div>}
           </div>
           {postedWaiting&&(!showCancelConfirm?(
             <div style={{textAlign:"center"}}>
@@ -5321,13 +5435,13 @@ export default function App(){
               <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.8,textTransform:"uppercase"}}>Booking Summary</span>
               {vj.emergency&&<span style={{fontSize:11,fontWeight:700,color:"#C2410C",background:"#FFF1EE",padding:"4px 10px",borderRadius:20}}>🚨 Emergency priority</span>}
             </div>
-            {[["Service",vjTask?vjTask.n:"Custom job"],["Time",vj.reqWindow?`${jobTimeConfirmed(vj)?"Confirmed":"Requested"}: ${windowLabel(vj.reqWindow)}`:(vjTp?vjTp.label:"—")],["Photos",vj.photos?.length>0?`${vj.photos.length} shared`:"None"],
+            {[["Service",vjTask?vjTask.n:"Custom job"],["Time",vj.reqWindow?`${jobTimeConfirmed(vj)?"Confirmed":"Requested"}: ${windowLabel(vj.reqWindow)}`:(vjTp?vjTp.label:"—")],["Photos",vj.photos?.length>0?`${vj.photos.length} shared${havenRestored(vj,"photos")?` · ${HAVEN_DEVICE_ONLY_LABEL}`:""}`:"None"],
               ...(vjReceipt&&vjReceipt.priorityFeeCents>0?[["Emergency fee",`+${receiptMoney(vjReceipt.priorityFeeCents)}`]]:[]),
               ...(vjReceipt?[["Total",receiptMoney(vjReceipt.totalCents)]]:[])].map(([l,v])=>(
               <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:l==="Total"?AMT:TX}}>{v}</span></div>
             ))}
             {!vjReceipt&&<div style={{fontSize:13,color:TS,marginBottom:9}}>Total not available yet</div>}
-            {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div></div>}
+            {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5}}>{vj.desc}</div>{havenRestored(vj,"desc")&&<div style={{fontSize:11,color:TM,marginTop:4,fontWeight:500}}>{HAVEN_DEVICE_ONLY_LABEL}</div>}</div>}
           </div>
           {(()=>{
             const isTerminal=["complete","inspection_completed","materials_declined"].includes(vj.status);
@@ -5364,6 +5478,7 @@ export default function App(){
                     <div style={{background:SL,borderRadius:18,padding:16,textAlign:"center",marginBottom:10}}>
                       <div style={{marginBottom:4}}>{starDisplay(vj.stars,22)}</div>
                       <div style={{fontWeight:700,fontSize:14,color:SC}}>Review submitted — thanks!</div>
+                      {havenRestored(vj,"rating")&&<div style={{fontSize:11,color:TM,marginTop:4,fontWeight:500}}>{HAVEN_DEVICE_ONLY_LABEL}</div>}
                     </div>
                   )}
                   {!HAVEN_TIPPING_AVAILABLE?(

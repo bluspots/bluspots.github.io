@@ -9,7 +9,7 @@
 // Legacy/pre-versioning data (a bare value with no {__v,data} wrapper) is
 // treated as version 0 and run through the same migrate() path, so nothing
 // already saved by an earlier Haven build gets silently discarded.
-function usePersistedState(key, initialValue, {version=1, migrate=null, validate=null}={}){
+function usePersistedState(key, initialValue, {version=1, migrate=null, validate=null, persist=null}={}){
   const getDefault = ()=> typeof initialValue==="function" ? initialValue() : initialValue;
   const [state,setState] = useState(()=>{
     try{
@@ -37,6 +37,7 @@ function usePersistedState(key, initialValue, {version=1, migrate=null, validate
     }
   });
   useEffect(()=>{
+    if(persist && !persist(state)) return; // caller asked to leave storage as it is (in memory only)
     try{ localStorage.setItem(key, JSON.stringify({__v:version, data:state})); }catch{}
   },[state]);
   return [state,setState];
@@ -44,5 +45,5 @@ function usePersistedState(key, initialValue, {version=1, migrate=null, validate
 // Clears every key this app persists — used by the "Reset Prototype Data"
 // testing utility. Kept as one list, next to the hook, so a newly-persisted
 // domain is easy to remember to add here too.
-const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft","haven_job_prefs","haven_jobs_owner","haven_jobs_unowned_legacy"];
+const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft","haven_job_prefs","haven_jobs_owner","haven_jobs_unowned_legacy","haven_notifications_unowned_legacy"];
 
