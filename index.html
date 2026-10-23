@@ -401,7 +401,7 @@ function usePersistedState(key, initialValue, { version = 1, migrate = null, val
   }, [state]);
   return [state, setState];
 }
-const PERSISTED_KEYS = ["haven_theme", "haven_notifications", "haven_notif_prefs", "haven_jobs", "haven_addresses", "haven_cards", "haven_profile", "haven_draft", "haven_job_prefs", "haven_jobs_owner", "haven_jobs_unowned_legacy", "haven_notifications_unowned_legacy"];
+const PERSISTED_KEYS = ["haven_theme", "haven_notifications", "haven_notif_prefs", "haven_jobs", "haven_addresses", "haven_cards", "haven_profile", "haven_draft", "haven_job_prefs", "haven_jobs_owner", "haven_jobs_unowned_legacy", "haven_notifications_unowned_legacy", "haven_jobs_local_only"];
 const INTENT_LIBRARY = [
   // Plumbing
   {
@@ -2238,6 +2238,8 @@ function havenWriteJobsOwner(userId) {
     if (userId) localStorage.setItem(HAVEN_JOBS_OWNER_KEY, String(userId));
     else localStorage.removeItem(HAVEN_JOBS_OWNER_KEY);
   } catch {
+    havenLegacyMemoryOwner = userId ? String(userId) : "";
+    havenLegacyPending = true;
   }
 }
 function havenReadStoredJobsAnyOwner() {
@@ -2252,6 +2254,7 @@ function havenReadStoredJobsAnyOwner() {
 const HAVEN_JOBS_LEGACY_KEY = "haven_jobs_unowned_legacy";
 const HAVEN_NOTIFS_LEGACY_KEY = "haven_notifications_unowned_legacy";
 const HAVEN_DEVICE_ONLY_LABEL = "Saved on this phone only";
+const HAVEN_NOT_SYNCED_LABEL = "Saved on this phone only · not synced";
 const HAVEN_LEGACY_JOB_FIELDS = ["id", "addressText", "addressLabel", "msgs", "photos", "desc", "rated", "stars", "reviewTxt", "hireAgain", "tpId", "reqWindow", "cancelStatus", "cancellationRequestedAt"];
 let havenLegacyPending = false;
 let havenLegacyMemoryOwner = "";
@@ -2303,9 +2306,64 @@ const havenRawData = (raw) => {
     return [];
   }
 };
-function havenSetAsideOwnerlessStore() {
-  let rawJobs = null, rawNotifs = null, prevJobs = null, prevNotifs = null;
+const HAVEN_LOCAL_ONLY_KEY = "haven_jobs_local_only";
+const havenIsLocalOnlyJob = (j) => !!(j && typeof j === "object" && typeof j.id !== "undefined" && !havenBackendKey(j.backendJobId));
+function havenReadLocalOnly() {
   try {
+    const p = JSON.parse(localStorage.getItem(HAVEN_LOCAL_ONLY_KEY) || "null");
+    const d = p && typeof p === "object" && p.data && typeof p.data === "object" ? p.data : {};
+    const owners = d.owners && typeof d.owners === "object" && !Array.isArray(d.owners) ? d.owners : {};
+    return { owners, ownerless: Array.isArray(d.ownerless) ? d.ownerless : [] };
+  } catch {
+    return { owners: {}, ownerless: [] };
+  }
+}
+function havenLocalOnlyMerged(owner, list) {
+  const fresh = (Array.isArray(list) ? list : []).filter(havenIsLocalOnlyJob);
+  if (!fresh.length) return null;
+  const store = havenReadLocalOnly();
+  const k = owner ? String(owner).trim().toLowerCase() : "";
+  const bucket = k ? Array.isArray(store.owners[k]) ? store.owners[k] : [] : store.ownerless;
+  const have = new Set(bucket.map((e) => e && typeof e === "object" ? String(e.id) : ""));
+  const add = fresh.filter((j) => {
+    const t = String(j.id);
+    if (have.has(t)) return false;
+    have.add(t);
+    return true;
+  });
+  if (!add.length) return null;
+  const next = bucket.concat(add);
+  const data = k ? { owners: { ...store.owners, [k]: next }, ownerless: store.ownerless } : { owners: store.owners, ownerless: next };
+  return JSON.stringify({ __v: 1, data });
+}
+function havenSetAsideLocalOnly(owner, list) {
+  if (!owner) return true;
+  let v = null;
+  try {
+    v = havenLocalOnlyMerged(owner, list);
+  } catch {
+    v = null;
+  }
+  if (v == null) return true;
+  try {
+    localStorage.setItem(HAVEN_LOCAL_ONLY_KEY, v);
+    return true;
+  } catch {
+    if (!havenLegacyPending) {
+      havenLegacyMemoryOwner = havenReadJobsOwner();
+      havenLegacyPending = true;
+    }
+    return false;
+  }
+}
+function havenReadLocalOnlyAll() {
+  const st = havenReadLocalOnly();
+  return Object.values(st.owners).filter(Array.isArray).reduce((a, l) => a.concat(l), []).concat(st.ownerless).filter((j) => j && typeof j === "object");
+}
+function havenSetAsideOwnerlessStore() {
+  let rawJobs = null, rawNotifs = null, prevJobs = null, prevNotifs = null, prevLocal = null;
+  try {
+    prevLocal = localStorage.getItem(HAVEN_LOCAL_ONLY_KEY);
     rawJobs = localStorage.getItem("haven_jobs");
     rawNotifs = localStorage.getItem("haven_notifications");
     prevJobs = localStorage.getItem(HAVEN_JOBS_LEGACY_KEY);
@@ -2337,6 +2395,13 @@ function havenSetAsideOwnerlessStore() {
     const link = n.jobId != null ? backendIdByLocalId.get(n.jobId) : null;
     freshNotifs.push(link ? { ...n, legacyBackendJobId: link } : { ...n });
   });
+  let localOnlyNext = null;
+  try {
+    localOnlyNext = havenLocalOnlyMerged("", jobsIn);
+  } catch {
+    havenLegacyPending = true;
+    return;
+  }
   const dropJobs = rawJobs != null && jobsIn.length > 0;
   const dropNotifs = rawNotifs != null && notifsIn.length > 0;
   if (!freshJobs.length && !freshNotifs.length && !dropJobs && !dropNotifs) return;
@@ -2350,6 +2415,7 @@ function havenSetAsideOwnerlessStore() {
     };
     restore(HAVEN_JOBS_LEGACY_KEY, prevJobs);
     restore(HAVEN_NOTIFS_LEGACY_KEY, prevNotifs);
+    restore(HAVEN_LOCAL_ONLY_KEY, prevLocal);
     restore("haven_jobs", rawJobs);
     restore("haven_notifications", rawNotifs);
     havenLegacyPending = true;
@@ -2368,6 +2434,14 @@ function havenSetAsideOwnerlessStore() {
   if (freshNotifs.length && !havenWriteLegacyList(HAVEN_NOTIFS_LEGACY_KEY, oldNotifs.concat(freshNotifs))) {
     putBack();
     return;
+  }
+  if (localOnlyNext != null) {
+    try {
+      localStorage.setItem(HAVEN_LOCAL_ONLY_KEY, localOnlyNext);
+    } catch {
+      putBack();
+      return;
+    }
   }
 }
 const havenLegacyIsEmpty = (v) => v == null || v === "" || v === false || v === 0 || Array.isArray(v) && v.length === 0;
@@ -2420,6 +2494,7 @@ function havenBootOwnerlessStore() {
   } catch {
   }
   if (!owner) havenSetAsideOwnerlessStore();
+  else havenSetAsideLocalOnly(owner, havenReadStoredJobsAnyOwner());
 }
 function havenLegacyResidual(entry) {
   const kept = Array.isArray(entry.msgs) ? entry.msgs.filter((m) => !havenIsCustomerMsg(m)) : [];
@@ -3422,7 +3497,7 @@ function App() {
         // Map location confirmed by the customer (Mapbox, permanent lookup). Kept only if well-formed.
         geo: a.geo && typeof a.geo === "object" && Number.isFinite(a.geo.lat) && Number.isFinite(a.geo.lng) ? { lat: a.geo.lat, lng: a.geo.lng, accuracy: typeof a.geo.accuracy === "string" ? a.geo.accuracy : "unknown", mapboxId: a.geo.mapboxId || null, source: "mapbox", confirmedAt: a.geo.confirmedAt || null } : null
       }));
-      const storedJobs = jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs());
+      const storedJobs = jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs(), havenReadLocalOnlyAll());
       const kept = cleaned.filter((a) => !isUntouchedSampleAddress(a, storedJobs));
       if (kept.length !== cleaned.length) {
         cleaned.length = 0;
@@ -6334,7 +6409,7 @@ function App() {
     const locked = vj.status === "complete";
     return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { background: W, padding: "12px 20px 14px", borderBottom: `1px solid ${BD}`, flexShrink: 0 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 14 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => backFrom("messages", { scr: "tracking", tab: "bookings" }), "aria-label": "Back", style: { background: "none", border: "none", color: NT, fontSize: 24, cursor: "pointer", padding: "10px 18px", margin: "-10px -18px", lineHeight: 1, fontWeight: 300 } }, "‹"), /* @__PURE__ */ React.createElement("div", { style: { width: 38, height: 38, borderRadius: 19, background: vjPro.col, display: "flex", alignItems: "center", justifyContent: "center", color: ON, fontWeight: 800, fontSize: 14, flexShrink: 0 } }, vjPro.i), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: TX } }, vjPro.n), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: locked ? "#EF4444" : SC, fontWeight: 600 } }, locked ? "Chat closed" : "● Active job")))), /* @__PURE__ */ React.createElement("div", { style: { background: "#FEF3C7", borderBottom: `1px solid ${BD}`, padding: "10px 20px", display: "flex", gap: 10, alignItems: "center", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 18 } }, vjTask ? vjTask.e : "🔧"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, fontWeight: 700, color: "#92400E" } }, vjTask ? vjTask.n : "Custom job"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TS } }, vj.reqWindow ? windowLabel(vj.reqWindow) : vjTp ? vjTp.label : "—", " · $", vjTotal))), locked && /* @__PURE__ */ React.createElement("div", { style: { background: "#FFF1F2", borderBottom: "1px solid #FCC", padding: "10px 20px", textAlign: "center", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: "#E11D48", fontWeight: 600 } }, "🔒 Chat closed — job completed successfully.")), !CUSTOMER_MESSAGING_CONNECTED && !locked && /* @__PURE__ */ React.createElement("div", { role: "status", style: { background: W, borderBottom: `1px solid ${BD}`, padding: "10px 20px", display: "flex", gap: 10, alignItems: "flex-start", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { "aria-hidden": "true", style: { fontSize: 16 } }, "💬"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: TS, lineHeight: 1.5 } }, "In-app messaging with your Pro isn't available yet. You can't send or receive messages here right now, and your Pro won't see anything typed in this app.")), /* @__PURE__ */ React.createElement("div", { className: "sc", role: "log", "aria-live": "polite", "aria-label": "Conversation messages", style: { flex: 1, overflowY: "auto", padding: "16px 20px" } }, vjMsgs.length === 0 && !typing ? /* @__PURE__ */ React.createElement("div", { style: { display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100%", textAlign: "center", paddingTop: 40 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 32, marginBottom: 10 } }, "💬"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: TX, marginBottom: 6 } }, locked ? "No messages were sent." : "No messages yet."), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5, maxWidth: 220 } }, locked ? "This conversation is now closed." : CUSTOMER_MESSAGING_CONNECTED ? `You'll be able to chat with ${vjPname} here now that the job's been accepted.` : "Messaging with your Pro isn't available in the app yet.")) : /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", marginBottom: 18 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, color: TM, background: BD, padding: "4px 12px", borderRadius: 12, fontWeight: 500 } }, "Today")), vjMsgs.map((m) => {
       const mine = m.f === "cu";
-      return /* @__PURE__ */ React.createElement("div", { key: m.id, style: { display: "flex", flexDirection: mine ? "row-reverse" : "row", gap: 10, marginBottom: 14, alignItems: "flex-end" } }, !mine && /* @__PURE__ */ React.createElement("div", { style: { width: 30, height: 30, borderRadius: 15, background: vjPro.col, display: "flex", alignItems: "center", justifyContent: "center", color: ON, fontWeight: 700, fontSize: 11, flexShrink: 0 } }, vjPro.i), /* @__PURE__ */ React.createElement("div", { style: { maxWidth: "72%" } }, /* @__PURE__ */ React.createElement("div", { style: { background: mine ? N : W, borderRadius: mine ? "18px 18px 4px 18px" : "18px 18px 18px 4px", padding: "10px 14px", boxShadow: mine ? "none" : "0 1px 4px rgba(28,43,58,.08)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: mine ? ON : TX, lineHeight: 1.45 } }, m.m)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: TM, marginTop: 4, textAlign: mine ? "right" : "left", fontWeight: 500 } }, m.t, mine && !CUSTOMER_MESSAGING_CONNECTED ? " · Saved on this phone · not delivered" : "")));
+      return /* @__PURE__ */ React.createElement("div", { key: m.id, style: { display: "flex", flexDirection: mine ? "row-reverse" : "row", gap: 10, marginBottom: 14, alignItems: "flex-end" } }, !mine && /* @__PURE__ */ React.createElement("div", { style: { width: 30, height: 30, borderRadius: 15, background: vjPro.col, display: "flex", alignItems: "center", justifyContent: "center", color: ON, fontWeight: 700, fontSize: 11, flexShrink: 0 } }, vjPro.i), /* @__PURE__ */ React.createElement("div", { style: { maxWidth: "72%" } }, /* @__PURE__ */ React.createElement("div", { style: { background: mine ? N : W, borderRadius: mine ? "18px 18px 4px 18px" : "18px 18px 18px 4px", padding: "10px 14px", boxShadow: mine ? "none" : "0 1px 4px rgba(28,43,58,.08)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: mine ? ON : TX, lineHeight: 1.45 } }, m.m)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: TM, marginTop: 4, textAlign: mine ? "right" : "left", fontWeight: 500 } }, m.t, mine && !CUSTOMER_MESSAGING_CONNECTED ? " · " + HAVEN_NOT_SYNCED_LABEL : "")));
     }), typing && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, marginBottom: 14, alignItems: "flex-end" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 30, height: 30, borderRadius: 15, background: vjPro.col, display: "flex", alignItems: "center", justifyContent: "center", color: ON, fontWeight: 700, fontSize: 11, flexShrink: 0 } }, vjPro.i), /* @__PURE__ */ React.createElement("div", { style: { background: W, borderRadius: "18px 18px 18px 4px", padding: "12px 16px", boxShadow: "0 1px 4px rgba(28,43,58,.08)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 4, alignItems: "center" } }, [0, 1, 2].map((i) => /* @__PURE__ */ React.createElement("div", { key: i, style: { width: 7, height: 7, borderRadius: 3.5, background: TM, opacity: 0.7, animation: `bounce 0.6s ${i * 0.15}s infinite alternate` } }))))), /* @__PURE__ */ React.createElement("div", { ref: msgEnd })), /* @__PURE__ */ React.createElement("div", { style: { flexShrink: 0, padding: "12px 16px 24px", background: W, borderTop: `1px solid ${BD}` } }, locked ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "12px 0", fontSize: 13, color: TM, fontWeight: 500 } }, "🔒 Messaging only available during an active job") : !CUSTOMER_MESSAGING_CONNECTED ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "12px 0", fontSize: 13, color: TM, fontWeight: 500 } }, "Sending messages isn't available yet") : /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 10, alignItems: "center" } }, /* @__PURE__ */ React.createElement(
       "input",
       {

@@ -4,7 +4,7 @@
  * (1) An active job's thread shows a clear unavailable notice; there is no
  *     message input or send button, so nothing can be "sent".
  * (2) Messages saved on this phone by earlier builds are kept and shown,
- *     marked "Saved on this phone · not delivered"; stored history unchanged.
+ *     marked "Saved on this phone only · not synced"; stored history unchanged.
  * (3) The empty thread no longer promises chat.
  * (4) No request carries message text; no message notification is created.
  * (5) Completed jobs keep the existing closed-chat state.
@@ -206,7 +206,7 @@ const storedMsgs = () => JSON.parse(storedData['haven_jobs']).data[0].msgs;
   const composerInputs = Array.from(document.querySelectorAll('input')).filter(i => /Message/i.test(i.getAttribute('placeholder') || ''));
   assert(composerInputs.length === 0 && /Sending messages isn't available yet/.test(bodyText()), 'no message input; composer says sending is unavailable');
   assert(!Array.from(document.querySelectorAll('button')).some(b => b.textContent.trim() === '↑' || /send/i.test(b.getAttribute('aria-label') || '')), 'no send button');
-  assert(log && /Gate code is 4821, see you soon/.test(log.textContent) && /9:41 AM · Saved on this phone · not delivered/.test(log.textContent), 'earlier local message kept and marked not delivered');
+  assert(log && /Gate code is 4821, see you soon/.test(log.textContent) && log.textContent.includes('9:41 AM · Saved on this phone only · not synced'), 'earlier local message kept and marked "Saved on this phone only · not synced"');
   assert(JSON.stringify(storedMsgs()) === JSON.stringify(OLD), 'stored message history is unchanged');
   await act(async () => { fireEvent.keyDown(document.body, { key: 'Enter' }); }); await settle(40);
   assert(JSON.stringify(storedMsgs()) === JSON.stringify(OLD), 'nothing new is added');

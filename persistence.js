@@ -45,5 +45,5 @@ function usePersistedState(key, initialValue, {version=1, migrate=null, validate
 // Clears every key this app persists — used by the "Reset Prototype Data"
 // testing utility. Kept as one list, next to the hook, so a newly-persisted
 // domain is easy to remember to add here too.
-const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft","haven_job_prefs","haven_jobs_owner","haven_jobs_unowned_legacy","haven_notifications_unowned_legacy"];
+const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft","haven_job_prefs","haven_jobs_owner","haven_jobs_unowned_legacy","haven_notifications_unowned_legacy","haven_jobs_local_only"];
 

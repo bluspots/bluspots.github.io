@@ -19,6 +19,9 @@
  * (7) Backend data and later local data are never overwritten.
  * (8) Idempotence, storage quota (nothing dropped; untouched + retried when
  *     the set-aside cannot be written), id collisions.
+ * (9) Phone-only bookings (no backend id), per-user and master: set aside
+ *     byte-for-byte, never shown, never given to another account, kept
+ *     across reloads; a refused write leaves storage untouched (retried).
  * Messages use the app's real shapes: only the customer's own (f:"cu") come
  * back; scripted pre-A2 pro replies (f:"pro") stay set aside, never shown.
  * Ownerless notifications are set aside too and come back only with a job
@@ -192,7 +195,7 @@ const masterJob = (extra) => ({
   requiresDiagnosis: false, materialsRequest: null, backendJobId: JX, ...extra,
 });
 const masterJob2 = () => ({ ...masterJob({ id: LOCAL_ID + 1, backendJobId: JX2, addressText: REAL_TEXT, addressLabel: 'Cabin', msgs: [], photos: [], desc: '', rated: false, stars: 0, reviewTxt: '', hireAgain: null }) });
-const masterLocalOnly = () => ({ ...masterJob({ id: LOCAL_ID + 2, backendJobId: null, desc: 'LOCALONLY never a booking' }) });
+const masterLocalOnly = () => ({ ...masterJob({ id: LOCAL_ID + 2, backendJobId: null, desc: 'LOCALONLY never a booking', addressText: REAL_TEXT, addressLabel: 'Cabin' }) });
 // The app's real notification shape (makeNotification).
 const notif = (id, jobId, title, body, extra) => ({ id, type: 'JOB_UPDATE', title, body, createdAt: 1759000200000 + (typeof id === 'string' ? id.length : 0), isRead: false, jobId, conversationId: null, propertyId: null, receiptId: null, destination: jobId == null ? null : { screen: 'tracking', jobId }, priority: 'normal', count: 1, ...extra });
 const X_NOTIF = notif('n1759000200000_1', LOCAL_ID, 'Pro accepted your job', 'X private notification body');
@@ -264,6 +267,9 @@ async function openJobDetail(titleRe) {
 }
 const xRows = () => [realRow(JX, X_ID), realRow(JX2, X_ID, { posted_at: '2025-09-28T19:06:40Z', city_label: 'Orlando, FL' })];
 const sameJSON = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+const inStorage = (title) => Object.values(storedData).some(v => v.includes(title));
+const bookingsText = async () => { const tab = screen.queryAllByText(/^Bookings$/).pop(); await tap(tab, 'Bookings tab'); await settle(100); return bodyText(); };
+const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_local_only'] || 'null')?.data || null; } catch { return null; } };
 
 (async () => {
   // ── (1) ownerless upgrade, signed in, read OK ──
@@ -282,7 +288,8 @@ const sameJSON = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   assert(sameJSON((j?.restoredDeviceOnly || []).slice().sort(), ['desc', 'photos', 'rating']), '(1) restored rating, photos and description are marked device-only');
   assert(j?.id === LOCAL_ID, '(1) the master local job id is kept');
   assert(j?.status === 'complete' && j?.lockedPrice === 65 && j?.paymentLast4 !== '4242' && !(j?.pro && j.pro.n === 'Marcus T.'), '(1) backend values win: status, price; no local card or local pro restored');
-  assert(!jobs().some(x => /LOCALONLY/.test(x.desc || '')), '(1) a master entry with no backend id is still not a booking');
+  assert(!jobs().some(x => /LOCALONLY/.test(x.desc || '')) && !/LOCALONLY/.test(bodyText()), '(1) a master entry with no backend id is not shown as a booking');
+  assert(sameJSON((localOnlyStore()?.ownerless || []).filter(e => /LOCALONLY/.test(e.desc || '')), [masterLocalOnly()]), '(1) a master entry with no backend id is kept, byte-for-byte, in the ownerless phone-only set-aside (not deleted)');
   assert(pending().length === 0, '(1) every claimed entry is released (only the never-restored replies remain set aside)');
   await waitFor(() => notifs().some(n => n.id === X_NOTIF.id), '(1) the job\'s notification is restored');
   const rn = notifs().find(n => n.id === X_NOTIF.id);
@@ -301,6 +308,8 @@ const sameJSON = (a, b) => JSON.stringify(a) === JSON.stringify(b);
     t = bodyText();
     assert(/Gate code is 4411/.test(t), '(1) the customer\'s own message shows in the thread');
     assert(!/Got it! 👍|On it!/.test(t), '(1) no scripted pro reply is shown in the thread');
+    assert(t.includes('2:05 PM · Saved on this phone only · not synced'), '(1) the restored own message carries the exact label "Saved on this phone only · not synced"');
+    assert(!/not delivered|not sent/.test(t), '(1) no "not delivered" / "not sent" label variant is shown');
   }
   const afterFirst = { jobs: storedData['haven_jobs'], legacy: storedData['haven_jobs_unowned_legacy'], notifs: storedData['haven_notifications'] };
 
@@ -320,7 +329,7 @@ const sameJSON = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   seedMaster(X_ID); backendDown = true;
   await boot();
   assert(jobs().length === 0 && pending().length === 2, '(3) the master cache is cleared but its two backend-linked entries are set aside');
-  assert(!(legacy() || []).some(e => /LOCALONLY/.test(e.desc || '')), '(3) the entry with no backend id is not set aside');
+  assert(!(legacy() || []).some(e => /LOCALONLY/.test(e.desc || '')) && sameJSON((localOnlyStore()?.ownerless || []).filter(e => /LOCALONLY/.test(e.desc || '')), [masterLocalOnly()]), '(3) the entry with no backend id is set aside as it is in the phone-only key (not in the claimable set-aside)');
   assert((legacy() || []).every(e => !('lockedPrice' in e) && !('pro' in e) && !('status' in e) && !('paymentLast4' in e)), '(3) only device-only fields are set aside (nothing the backend stores)');
   assert(sameJSON(legacy()?.find(e => e.backendJobId === JX)?.msgs, MSGS), '(3) the set-aside keeps every message exactly as stored');
   assert(notifs().length === 0 && legacyNotifs()?.length === 1 && legacyNotifs()?.[0]?.legacyBackendJobId === JX, '(3) the ownerless notification is set aside (tagged with its job), not shown');
@@ -457,6 +466,24 @@ const sameJSON = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   await waitFor(() => jobBy(JX), '(8) retry on the next load');
   await waitFor(() => notifs().some(n => n.id === X_NOTIF.id), '(8) notification restored on the retry');
   assert(jobBy(JX)?.addressText === SAMPLE_HOME_TEXT && jobBy(JX)?.photos?.length === 2 && sameJSON(jobBy(JX)?.msgs, [CU_MSG]), '(8) the retry sets aside and restores everything (address, photos, own messages)');
+  // QA v5 F3: the set-aside fits but the owner key does not. The account
+  // read's bookings still show this session; storage is not changed further;
+  // the next load saves the owner and links everything.
+  rowsByCustomer = { [X_ID]: xRows() };
+  seedMaster(X_ID);
+  refuseSet = (k) => k === 'haven_jobs_owner';
+  const r3 = readCount;
+  await boot();
+  await waitFor(() => readCount > r3, '(8) owner refused: account read');
+  await settle(200);
+  let bt = await bookingsText();
+  assert(/Assemble furniture/.test(bt) && !/No bookings yet/.test(bt), '(8) when the owner key cannot be saved, Bookings still shows the account read\'s bookings (no false "No bookings yet")');
+  assert(!('haven_jobs_owner' in storedData) && jobs().length === 0 && pending().length === 2 && legacyNotifs()?.length === 1, '(8) when the owner key cannot be saved, nothing is dropped: the set-aside entries and notification stay, no cache is written');
+  refuseSet = null;
+  await boot();
+  await waitFor(() => jobBy(JX) && storedData['haven_jobs_owner'] === X_ID, '(8) owner refused: saved on the next load');
+  await waitFor(() => notifs().some(n => n.id === X_NOTIF.id), '(8) owner refused: notification restored on the next load');
+  assert(jobBy(JX)?.addressText === SAMPLE_HOME_TEXT && pending().length === 0, '(8) after the owner key is saved on the next load, the job is linked and the entries released');
   // a nearly full storage: the master cache fits, a second copy would not. The
   // cache is removed before the copy is written, so photos still fit.
   const BIG = 'data:image/jpeg;base64,' + 'B'.repeat(60000);
@@ -491,6 +518,115 @@ const sameJSON = (a, b) => JSON.stringify(a) === JSON.stringify(b);
   await waitFor(() => jobBy(JX) && jobBy(JX2), '(8) collision read');
   const ids = jobs().map(x => x.id);
   assert(jobs().length === 2 && new Set(ids).size === 2 && ids.includes(LOCAL_ID), '(8) two master entries with the same local id: both jobs kept, ids stay unique');
+
+  // ── (9) phone-only bookings (no backend id): never deleted, never shown, never given to another account ──
+  // A per-user cache entry stays with that user (set aside under that
+  // account); an ownerless (master) one is set aside with no owner, because
+  // no backend id can prove whose it is. Only Reset Prototype Data clears them.
+  const phoneOnly = (id, title) => ({ ...masterJob({ id, taskId: null, custom: { title, price: '80', cat: 'Handyman' }, backendJobId: null, status: 'posted', addressText: REAL_TEXT, addressLabel: 'Cabin', rated: false, stars: 0, reviewTxt: '', hireAgain: null, msgs: [CU_MSG] }) });
+  const PHONE_X = phoneOnly(LOCAL_ID + 50, 'Phone-only shelf fix');
+  const PHONE_M = { ...phoneOnly(LOCAL_ID + 60, 'Master phone-only gutter job'), addressText: '500 Folsom Street, San Francisco, CA 94105', addressLabel: 'Work' };
+  const localOnly = () => { try { return JSON.parse(storedData['haven_jobs_local_only'] || 'null')?.data || null; } catch { return null; } };
+  const bucketOf = (uid) => (localOnly()?.owners || {})[uid.toLowerCase()] || [];
+  const ownerlessBucket = () => localOnly()?.ownerless || [];
+  const holds = (list, job) => list.filter(e => JSON.stringify(e) === JSON.stringify(job)).length;
+  // per-user cache: X's own cache holds a backend job and a phone-only one
+  const seedOwned = () => {
+    Object.keys(storedData).forEach(k => delete storedData[k]);
+    signInStorage(X_ID);
+    storedData['haven_jobs_owner'] = X_ID;
+    storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: [REAL] });
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [masterJob({ id: LOCAL_ID, backendJobId: JX }), PHONE_X] });
+  };
+  rowsByCustomer = { [X_ID]: [realRow(JX, X_ID)], [Y_ID]: [realRow(JY, Y_ID)] };
+  seedOwned();
+  await boot();
+  await waitFor(() => readCount && jobBy(JX) && !jobs().some(x => x.id === PHONE_X.id), '(9) per-user: X read lands');
+  await settle(150);
+  assert(inStorage('Phone-only shelf fix'), '(9) per-user: the phone-only booking still exists in storage after the read lands (not deleted)');
+  assert(holds(bucketOf(X_ID), PHONE_X) === 1, '(9) per-user: X\'s phone-only booking is set aside for X, byte-for-byte, after the read lands');
+  assert(!/Phone-only shelf fix/.test(await bookingsText()), '(9) per-user: the phone-only booking is not shown in Bookings');
+  assert(holds(ownerlessBucket(), PHONE_X) === 0 && Object.keys(localOnly()?.owners || {}).length === 1, '(9) per-user: it is kept only under X (not ownerless, no other account)');
+  let snapLocal = storedData['haven_jobs_local_only'];
+  for (const n of ['reload', 'second load']) {
+    const r0 = readCount;
+    await boot();
+    await waitFor(() => readCount > r0 && jobBy(JX), `(9) per-user: read after ${n}`);
+    await settle(150);
+    assert(storedData['haven_jobs_local_only'] === snapLocal && holds(bucketOf(X_ID), PHONE_X) === 1, `(9) per-user: after a ${n} the phone-only booking is still stored byte-for-byte, once`);
+    assert(!/Phone-only shelf fix/.test(await bookingsText()), `(9) per-user: after a ${n} it is still not shown`);
+  }
+  // backend down on two loads in a row: the cache keeps the entry, the set-aside holds it once
+  seedOwned(); backendDown = true;
+  await boot(); await boot();
+  assert(holds(bucketOf(X_ID), PHONE_X) === 1 && bucketOf(X_ID).length === 1 && Object.keys(localOnly()?.owners || {}).length === 1, '(9) per-user: two loads with the backend down store the phone-only booking once, byte-for-byte (no second copy)');
+  assert(sameJSON(jobs().map(x => x.id), [LOCAL_ID, PHONE_X.id]), '(9) per-user: a failed read leaves both entries in X\'s stored cache');
+  backendDown = false;
+  await boot();
+  await waitFor(() => jobBy(JX) && !jobs().some(x => x.id === PHONE_X.id), '(9) per-user: read after the backend recovers');
+  assert(holds(bucketOf(X_ID), PHONE_X) === 1, '(9) per-user: after the backend recovers it is still stored once');
+  // Y signs in on the same device: X's phone-only booking is never Y's
+  await signOutInTab();
+  rowsByCustomer[Y_ID] = [realRow(JY, Y_ID)];
+  await signInInTab(Y_ID);
+  await waitFor(() => jobBy(JY), '(9) per-user: Y read');
+  await settle(150);
+  assert(!/Phone-only shelf fix/.test(await bookingsText()) && !jobs().some(x => x.id === PHONE_X.id), '(9) per-user: Y never sees X\'s phone-only booking');
+  assert(holds(bucketOf(X_ID), PHONE_X) === 1 && bucketOf(Y_ID).length === 0, '(9) per-user: after Y signs in it is still stored under X only');
+  // a phone-only booking only in memory/cache when X switches away in-tab is set aside too
+  seedOwned();
+  await boot();
+  await signOutInTab();
+  assert(holds(bucketOf(X_ID), PHONE_X) === 1, '(9) per-user: signing out before the read lands keeps the phone-only booking for X');
+  // the set-aside write is refused: X's stored cache stays byte-identical, retried next load
+  seedOwned();
+  const ownedBefore = storedData['haven_jobs'];
+  refuseSet = (k) => k === 'haven_jobs_local_only';
+  await boot();
+  await waitFor(() => readCount && /Bookings/.test(bodyText()), '(9) per-user: app loads with the phone-only set-aside refused');
+  await settle(200);
+  assert(storedData['haven_jobs'] === ownedBefore && localOnly() === null, '(9) per-user: when the phone-only set-aside cannot be written, X\'s stored cache stays byte-identical');
+  assert(!/Phone-only shelf fix/.test(await bookingsText()), '(9) per-user: ... and the phone-only booking is still not shown');
+  refuseSet = null;
+  await boot();
+  await waitFor(() => holds(bucketOf(X_ID), PHONE_X) === 1, '(9) per-user: the set-aside is retried and succeeds on the next load');
+
+  // old master cache: an ownerless phone-only booking
+  rowsByCustomer = { [X_ID]: xRows(), [Y_ID]: [realRow(JY, Y_ID)] };
+  seedMaster(X_ID, [masterJob(), PHONE_M]);
+  await boot();
+  await waitFor(() => jobBy(JX), '(9) master: X read lands');
+  await settle(150);
+  assert(inStorage('Master phone-only gutter job'), '(9) master: the phone-only booking still exists in storage after the read lands (not deleted)');
+  assert(holds(ownerlessBucket(), PHONE_M) === 1, '(9) master: the ownerless phone-only booking is set aside, byte-for-byte');
+  assert(bucketOf(X_ID).length === 0 && !jobs().some(x => x.id === PHONE_M.id), '(9) master: it is not given to the signed-in account (no backend id proves an owner)');
+  assert(!/Master phone-only gutter job/.test(await bookingsText()), '(9) master: it is not shown');
+  snapLocal = storedData['haven_jobs_local_only'];
+  for (const n of ['reload', 'second load']) {
+    const r0 = readCount;
+    await boot();
+    await waitFor(() => readCount > r0 && jobBy(JX), `(9) master: read after ${n}`);
+    await settle(150);
+    assert(storedData['haven_jobs_local_only'] === snapLocal && holds(ownerlessBucket(), PHONE_M) === 1, `(9) master: after a ${n} it is still stored byte-for-byte, once`);
+    assert(!/Master phone-only gutter job/.test(await bookingsText()), `(9) master: after a ${n} it is still not shown`);
+    assert(addrIds().includes(2), `(9) master: after a ${n} the sample address the phone-only booking is at is kept`);
+  }
+  await signOutInTab();
+  await signInInTab(Y_ID);
+  await waitFor(() => jobBy(JY), '(9) master: Y read');
+  await settle(150);
+  assert(!/Master phone-only gutter job/.test(await bookingsText()) && holds(ownerlessBucket(), PHONE_M) === 1 && bucketOf(Y_ID).length === 0, '(9) master: another account never sees it or gets it; it stays set aside');
+  // the master set-aside write is refused: nothing is dropped, retried next load
+  seedMaster(X_ID, [masterJob(), PHONE_M]);
+  const masterBefore = storedData['haven_jobs'];
+  refuseSet = (k) => k === 'haven_jobs_local_only';
+  await boot();
+  await settle(200);
+  assert(storedData['haven_jobs'] === masterBefore && localOnly() === null && !('haven_jobs_owner' in storedData), '(9) master: when the phone-only set-aside cannot be written, the old cache stays byte-identical and ownerless');
+  refuseSet = null;
+  await boot();
+  await waitFor(() => holds(ownerlessBucket(), PHONE_M) === 1 && jobBy(JX), '(9) master: retried on the next load');
+  assert(/"haven_jobs_local_only"/.test(fs.readFileSync('persistence.js', 'utf8').match(/PERSISTED_KEYS\s*=\s*\[[^\]]*\]/)?.[0] || ''), '(9) Reset Prototype Data clears the phone-only set-aside (it is in PERSISTED_KEYS)');
 
   cleanup();
   console.log(`--- Master cache upgrade (QA #87 v3/v4): ${pass} passing, ${fail} failing ---`);

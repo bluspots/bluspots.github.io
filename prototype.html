@@ -386,7 +386,7 @@ function usePersistedState(key, initialValue, {version=1, migrate=null, validate
 // Clears every key this app persists — used by the "Reset Prototype Data"
 // testing utility. Kept as one list, next to the hook, so a newly-persisted
 // domain is easy to remember to add here too.
-const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft","haven_job_prefs","haven_jobs_owner","haven_jobs_unowned_legacy","haven_notifications_unowned_legacy"];
+const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft","haven_job_prefs","haven_jobs_owner","haven_jobs_unowned_legacy","haven_notifications_unowned_legacy","haven_jobs_local_only"];
 
 // Plain keyword table for now — deliberately kept as data, not logic, so a
 // future AI/NLP service is a drop-in replacement for matchSymptomToCategories
@@ -2045,9 +2045,11 @@ function proProfileFacts(p){
 //   - A cached backend-linked job the account read does not return is
 //     dropped (not this account's, or gone), unless it was added after the
 //     read started (just posted in this tab).
-//   - A local-only entry (no backend id) is not a real booking: once the
-//     account read lands it is dropped. Since Slice 5 every job posted with
-//     Supabase configured has a backend id before it is saved.
+//   - A local-only entry (no backend id) is not a real booking and is never
+//     shown, but it is never deleted either: it is set aside at load, before
+//     the read replaces the cache (see HAVEN_LOCAL_ONLY_KEY). Since Slice 5
+//     every job posted with Supabase configured has a backend id before it
+//     is saved.
 // With no Supabase config (local preview / harness) none of this runs.
 const HAVEN_JOBS_OWNER_KEY = "haven_jobs_owner";
 const HAVEN_NO_JOBS = Object.freeze([]);
@@ -2063,7 +2065,13 @@ function havenWriteJobsOwner(userId){
   try{
     if(userId) localStorage.setItem(HAVEN_JOBS_OWNER_KEY, String(userId));
     else localStorage.removeItem(HAVEN_JOBS_OWNER_KEY);
-  }catch{}
+  }catch{
+    // Storage full (QA #87 v5 F3): keep the owner in memory for this session
+    // so the account read's bookings still show, and save nothing
+    // jobs-related, so storage stays as it is; the next load writes it again.
+    havenLegacyMemoryOwner = userId ? String(userId) : "";
+    havenLegacyPending = true;
+  }
 }
 // MAP-03 storage cleanup only: the raw stored jobs cache whatever its owner
 // (master caches have no owner key). Never used for display.
@@ -2103,8 +2111,10 @@ function havenReadStoredJobsAnyOwner(){
 const HAVEN_JOBS_LEGACY_KEY = "haven_jobs_unowned_legacy";
 const HAVEN_NOTIFS_LEGACY_KEY = "haven_notifications_unowned_legacy";
 const HAVEN_DEVICE_ONLY_LABEL = "Saved on this phone only";
+// Label on the customer's own messages that never reached the Pro (messaging unavailable).
+const HAVEN_NOT_SYNCED_LABEL = "Saved on this phone only · not synced";
 const HAVEN_LEGACY_JOB_FIELDS = ["id","addressText","addressLabel","msgs","photos","desc","rated","stars","reviewTxt","hireAgain","tpId","reqWindow","cancelStatus","cancellationRequestedAt"];
-// Set for this page load when the set-aside could not be written: the
+// Set for this page load when the set-aside (or the owner key) could not be written: the
 // ownerless store is left in place, hidden, and nothing jobs-related is
 // saved (the owner is kept in memory) so the next load tries again.
 let havenLegacyPending = false;
@@ -2142,6 +2152,60 @@ const havenRawData = (raw)=>{
     return Array.isArray(data) ? data : [];
   }catch{ return []; }
 };
+// Phone-only bookings (no backend id) are never deleted and never shown
+// (strict mode: only the account read's jobs are bookings; with a backend
+// configured postJob never creates one, so they exist only in caches saved
+// by older builds). At mount, before the loaders read the stored cache (which
+// the account read and an account change replace), each such entry is copied
+// as it is into haven_jobs_local_only: under its account when the cache has an owner (it
+// stays with that account), under "ownerless" for a master store (no backend
+// id can prove whose it is). Never shown, never released, never moved to
+// another account; an entry with a local id already there is not added again. Only Reset
+// Prototype Data clears the key. A refused write sets havenLegacyPending, so
+// nothing jobs-related is saved this session and the next load tries again.
+const HAVEN_LOCAL_ONLY_KEY = "haven_jobs_local_only";
+const havenIsLocalOnlyJob = (j)=> !!(j && typeof j==="object" && typeof j.id!=="undefined" && !havenBackendKey(j.backendJobId));
+function havenReadLocalOnly(){
+  try{
+    const p = JSON.parse(localStorage.getItem(HAVEN_LOCAL_ONLY_KEY)||"null");
+    const d = p&&typeof p==="object"&&p.data&&typeof p.data==="object" ? p.data : {};
+    const owners = d.owners&&typeof d.owners==="object"&&!Array.isArray(d.owners) ? d.owners : {};
+    return {owners, ownerless: Array.isArray(d.ownerless) ? d.ownerless : []};
+  }catch{ return {owners:{}, ownerless:[]}; }
+}
+// The key's new value with the phone-only entries of `list` added for
+// `owner` ("" = ownerless), or null when there is nothing new.
+function havenLocalOnlyMerged(owner, list){
+  const fresh = (Array.isArray(list)?list:[]).filter(havenIsLocalOnlyJob);
+  if(!fresh.length) return null;
+  const store = havenReadLocalOnly();
+  const k = owner ? String(owner).trim().toLowerCase() : "";
+  const bucket = k ? (Array.isArray(store.owners[k]) ? store.owners[k] : []) : store.ownerless;
+  // One copy per local id: the first one kept, as it was (the loader later
+  // re-saves a cache entry with defaults filled in; that is not a new entry).
+  const have = new Set(bucket.map(e=>e&&typeof e==="object"?String(e.id):""));
+  const add = fresh.filter(j=>{ const t = String(j.id); if(have.has(t)) return false; have.add(t); return true; });
+  if(!add.length) return null;
+  const next = bucket.concat(add);
+  const data = k ? {owners:{...store.owners, [k]:next}, ownerless:store.ownerless} : {owners:store.owners, ownerless:next};
+  return JSON.stringify({__v:1, data});
+}
+function havenSetAsideLocalOnly(owner, list){
+  if(!owner) return true; // ownerless entries are set aside only with the master store
+  let v = null;
+  try{ v = havenLocalOnlyMerged(owner, list); }catch{ v = null; }
+  if(v==null) return true;
+  try{ localStorage.setItem(HAVEN_LOCAL_ONLY_KEY, v); return true; }
+  catch{
+    if(!havenLegacyPending){ havenLegacyMemoryOwner = havenReadJobsOwner(); havenLegacyPending = true; }
+    return false;
+  }
+}
+// Every set-aside phone-only entry (any account), for MAP-03 storage cleanup only.
+function havenReadLocalOnlyAll(){
+  const st = havenReadLocalOnly();
+  return Object.values(st.owners).filter(Array.isArray).reduce((a,l)=>a.concat(l), []).concat(st.ownerless).filter(j=>j&&typeof j==="object");
+}
 // Called by the jobs and notifications loaders while the store has no owner
 // (Supabase configured). Idempotent. Moves the ownerless jobs cache
 // (backend-linked entries, device-only fields) and the ownerless
@@ -2151,8 +2215,9 @@ const havenRawData = (raw)=>{
 // used. If any write fails, every key is put back exactly as it was and
 // havenLegacyPending is set.
 function havenSetAsideOwnerlessStore(){
-  let rawJobs = null, rawNotifs = null, prevJobs = null, prevNotifs = null;
+  let rawJobs = null, rawNotifs = null, prevJobs = null, prevNotifs = null, prevLocal = null;
   try{
+    prevLocal = localStorage.getItem(HAVEN_LOCAL_ONLY_KEY);
     rawJobs = localStorage.getItem("haven_jobs");
     rawNotifs = localStorage.getItem("haven_notifications");
     prevJobs = localStorage.getItem(HAVEN_JOBS_LEGACY_KEY);
@@ -2178,12 +2243,14 @@ function havenSetAsideOwnerlessStore(){
     const link = n.jobId!=null ? backendIdByLocalId.get(n.jobId) : null;
     freshNotifs.push(link ? {...n, legacyBackendJobId:link} : {...n});
   });
+  let localOnlyNext = null;
+  try{ localOnlyNext = havenLocalOnlyMerged("", jobsIn); }catch{ havenLegacyPending = true; return; }
   const dropJobs = rawJobs!=null && jobsIn.length>0;
   const dropNotifs = rawNotifs!=null && notifsIn.length>0;
   if(!freshJobs.length && !freshNotifs.length && !dropJobs && !dropNotifs) return;
   const putBack = ()=>{
     const restore = (k,v)=>{ try{ if(v==null) localStorage.removeItem(k); else localStorage.setItem(k, v); }catch{} };
-    restore(HAVEN_JOBS_LEGACY_KEY, prevJobs); restore(HAVEN_NOTIFS_LEGACY_KEY, prevNotifs);
+    restore(HAVEN_JOBS_LEGACY_KEY, prevJobs); restore(HAVEN_NOTIFS_LEGACY_KEY, prevNotifs); restore(HAVEN_LOCAL_ONLY_KEY, prevLocal);
     restore("haven_jobs", rawJobs); restore("haven_notifications", rawNotifs);
     havenLegacyPending = true;
   };
@@ -2193,6 +2260,7 @@ function havenSetAsideOwnerlessStore(){
   }catch{ putBack(); return; }
   if(freshJobs.length && !havenWriteLegacyList(HAVEN_JOBS_LEGACY_KEY, oldJobs.concat(freshJobs))){ putBack(); return; }
   if(freshNotifs.length && !havenWriteLegacyList(HAVEN_NOTIFS_LEGACY_KEY, oldNotifs.concat(freshNotifs))){ putBack(); return; }
+  if(localOnlyNext!=null){ try{ localStorage.setItem(HAVEN_LOCAL_ONLY_KEY, localOnlyNext); }catch{ putBack(); return; } }
 }
 const havenLegacyIsEmpty = (v)=> v==null || v==="" || v===false || v===0 || (Array.isArray(v) && v.length===0);
 const havenRestored = (j, field)=> !!(j && Array.isArray(j.restoredDeviceOnly) && j.restoredDeviceOnly.includes(field));
@@ -2250,6 +2318,7 @@ function havenBootOwnerlessStore(){
   let owner = "";
   try{ owner = String(localStorage.getItem(HAVEN_JOBS_OWNER_KEY)||"").trim(); }catch{}
   if(!owner) havenSetAsideOwnerlessStore();
+  else havenSetAsideLocalOnly(owner, havenReadStoredJobsAnyOwner());
 }
 function havenLegacyResidual(entry){
   const kept = Array.isArray(entry.msgs) ? entry.msgs.filter(m=>!havenIsCustomerMsg(m)) : [];
@@ -2376,7 +2445,8 @@ function havenReconcileJobsWithBackend(list, rows, startStatus, labels, legacy){
     out.push(attachBackendPro(job, row, names[row.id]||names[String(row.id)]||""));
   });
   // Posted in this tab after the read began: keep. Everything else not in
-  // the account read is dropped, including local-only entries.
+  // the account read leaves the shown list (local-only entries were set
+  // aside at load: HAVEN_LOCAL_ONLY_KEY).
   current.forEach(j=>{
     if(!j || !j.backendJobId) return;
     const key = havenBackendKey(j.backendJobId);
@@ -3282,7 +3352,7 @@ function App(){
       // key, and this check can only keep more addresses (nothing is shown).
       // The set-aside master details count too (their street address), so a
       // sample with a master job at it survives until that job is claimed.
-      const storedJobs=jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs());
+      const storedJobs=jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs(), havenReadLocalOnlyAll());
       const kept=cleaned.filter(a=>!isUntouchedSampleAddress(a,storedJobs));
       if(kept.length!==cleaned.length){ cleaned.length=0; cleaned.push(...kept); }
       if(cleaned.length===0)return cleaned; // zero properties is valid — booking will require adding one
@@ -7721,7 +7791,7 @@ function App(){
                   <div style={{background:mine?N:W,borderRadius:mine?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",boxShadow:mine?"none":"0 1px 4px rgba(28,43,58,.08)"}}>
                     <div style={{fontSize:14,color:mine?ON:TX,lineHeight:1.45}}>{m.m}</div>
                   </div>
-                  <div style={{fontSize:10,color:TM,marginTop:4,textAlign:mine?"right":"left",fontWeight:500}}>{m.t}{mine&&!CUSTOMER_MESSAGING_CONNECTED?" · Saved on this phone · not delivered":""}</div>
+                  <div style={{fontSize:10,color:TM,marginTop:4,textAlign:mine?"right":"left",fontWeight:500}}>{m.t}{mine&&!CUSTOMER_MESSAGING_CONNECTED?" · "+HAVEN_NOT_SYNCED_LABEL:""}</div>
                 </div>
               </div>
             );
