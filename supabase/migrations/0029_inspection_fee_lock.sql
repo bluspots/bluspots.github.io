@@ -37,9 +37,11 @@
 -- function jobs_lock_materials_approved and its trigger are NOT changed
 -- (byte-for-byte the 0028 text). BEFORE triggers on the same table fire in
 -- name order, so this one runs after jobs_lock_materials_approved: every
--- refusal 0026/0028 already makes keeps its message, and 0029 only adds
--- refusals. No column, policy, grant, status value or data row is added or
--- changed. Nothing here marks any fee as collected or paid.
+-- refusal 0026/0028 already makes keeps its message. 0029 adds refusals,
+-- and sets one value: convenience_fee_cents = 3000 on the customer's
+-- standard materials decline (III.4). No column, policy, grant or status
+-- value is added, and pasting changes no existing row. Nothing here marks
+-- any fee as collected or paid.
 --
 -- Founder decisions 2026-10-23 (non-privileged callers = roles anon and
 -- authenticated, i.e. every app session):
@@ -130,6 +132,16 @@
 --        request the customer leaves by cancelling. Not changed (open
 --        question for the founder): materials_declined /
 --        inspection_completed -> complete or cancelled stay as RLS allows.
+--     4. The $30 standard-decline convenience fee is REQUIRED (Quagon F1
+--        answered: always charged). On a move into materials_declined the
+--        server sets convenience_fee_cents = 3000 whether or not the client
+--        sent it; a client value other than 3000 is refused ("The standard
+--        materials decline fee is $30"). Diagnosis jobs can never end as
+--        materials_declined ("A diagnosis job cannot end as
+--        materials_declined"; they end at inspection_completed), and
+--        materials_declined is reachable only from materials_requested.
+--        II's convenience-fee rule stays as a second layer. Showing the fee
+--        before the customer decides is the Customer app's job (FE-02).
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -281,6 +293,30 @@ begin
     raise exception 'This status move goes backward and is not allowed'
       using errcode = '42501',
             hint = 'Only the assigned Pro''s new materials request from in_progress may move back to materials_requested.';
+  end if;
+
+  -- III.4 (item 4). Moves INTO materials_declined: only the standard decline
+  --    (materials_requested, requires_diagnosis = false), and the $30
+  --    convenience fee is required: the server sets it.
+  if new.status = 'materials_declined'
+     and old.status is distinct from 'materials_declined' then
+    if old.requires_diagnosis then
+      raise exception 'A diagnosis job cannot end as materials_declined'
+        using errcode = '42501',
+              hint = 'Declining materials on a diagnosis job ends at inspection_completed.';
+    end if;
+    if old.status <> 'materials_requested' then
+      raise exception 'materials_declined is only reachable from materials_requested'
+        using errcode = '42501',
+              hint = 'The standard decline is the customer''s answer to a pending materials request.';
+    end if;
+    if new.convenience_fee_cents is distinct from old.convenience_fee_cents
+       and new.convenience_fee_cents <> 3000 then
+      raise exception 'The standard materials decline fee is $30'
+        using errcode = '42501',
+              hint = 'Send convenience_fee_cents 3000 or leave it out: the server sets it.';
+    end if;
+    new.convenience_fee_cents := 3000;
   end if;
 
   -- II. Fee integrity: price, payout, margin and fees are fixed once posted.
