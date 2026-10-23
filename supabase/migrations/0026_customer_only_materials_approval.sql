@@ -540,12 +540,11 @@ commit;
 --
 -- R1. Undo 0026 only, back to 0025 behaviour (Pro-alone approval moves the
 --     status and records $0):
---     begin;
---       <paste 0025_materials_approved_lock.sql sections 1-3 here, NOT its
---        commented backfill; this restores 0025's trigger function>
---       alter table public.jobs drop column if exists materials_decided_seq;
---       alter table public.jobs drop column if exists materials_request_seq;
---     commit;
+--     For rollback use 0025-review/recovery/0026_R1_back_to_0025.sql (one
+--     run, one transaction). It restores 0025's trigger function, then drops
+--     the 0026 seq columns, and refuses while 0028 or 0029 is installed.
+--     Do not re-paste 0025 for this: the guarded 0025 refuses while the 0026
+--     columns exist.
 --
 -- R2. Undo 0026 and 0025 together:
 -- begin;
