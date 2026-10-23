@@ -3202,6 +3202,11 @@ async function runReceiptTotalsChecks(){
       assert(/AFTER 0025/.test(sql) && /Re-run: safe ONLY while 0028 is not\s+(--\s+)?installed/.test(sql) && !/Safe to re-run/i.test(sql), '0026 header: paste after 0025, exact re-run rule (safe only while 0028 is not installed)');
       assert(/prosrc like '%legacy_fill_ok%' or prosrc like '%ABANDON \(0028%'\s+or prosrc like '%haven-version:%'/.test(live) && /raise exception '0026 refused: 0028 or later is installed/.test(live) && live.indexOf('0026 refused') > live.indexOf('\nbegin;') && live.indexOf('0026 refused') < live.indexOf('add column materials_request_seq'), '0026 section 0b refuses (inside the transaction, before any change) when 0028 or later is installed');
       assert(/0026 needs 0025_materials_approved_lock\.sql first/.test(live), '0026 stops with a clear error when 0025 is missing');
+      assert(/from pg_trigger tg\s+join pg_proc p on p\.oid = tg\.tgfoid\s+where tg\.tgrelid = 'public\.jobs'::regclass\s+and tg\.tgname = 'jobs_lock_materials_approved'/.test(live)
+        && /to_regprocedure\('public\.jobs_lock_materials_approved\(\)'\) is null\s+or t\.tgfoid <> to_regprocedure\('public\.jobs_lock_materials_approved\(\)'\)::oid\s+or t\.body_md5 not in \('5d40ebc014f68ed465d6f430981fc381',\s+'c8cfe568269b8e9b07937501cf16a899'\)/.test(live)
+        && /raise exception '0026 refused: trigger jobs_lock_materials_approved on public\.jobs runs %/.test(live)
+        && live.indexOf('0026 refused: trigger') > live.indexOf('0026 refused: 0028') && live.indexOf('0026 refused: trigger') < live.indexOf('add column materials_request_seq'),
+        '0026 section 0c refuses (inside the transaction, before any change) when the materials-lock trigger runs anything but public.jobs_lock_materials_approved() with the exact 0025/0026 body (QA G-2: rename, marker-strip, other schema)');
       assert(/create or replace function public\.jobs_lock_materials_approved\(\)/.test(live) && /create trigger jobs_lock_materials_approved\s+before insert or update on public\.jobs/i.test(live), '0026 replaces the 0025 trigger function on the same BEFORE INSERT OR UPDATE trigger');
       // Exact guard structure (G1-G3). Whitespace-normalised so a logic flip
       // (or -> and, dropped `not`, dropped branch) fails here; the local SQL
