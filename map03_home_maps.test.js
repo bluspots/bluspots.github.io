@@ -230,6 +230,25 @@ async function openMyHome() {
   // MAP-03 upgrade from master: master caches have no haven_jobs_owner; the sample with a job is still kept
   await mount(() => { delete storedData['haven_jobs_owner']; setAddrs([SAMPLE_HOME, SAMPLE_WORK]); setJobs([jobAtSample]); });
   assert(JSON.stringify(ids()) === '[1]' && saved()[0].street === '123 Market Street', 'master-style storage (no jobs owner): a sample with a completed job at it is kept');
+  // The same upgrade with backend rows shaped like the real backend: postJob
+  // never stores a street address (address_snapshot null, city_label only).
+  // The link and the sample must survive the upgrade and a reload.
+  await mount(() => {
+    delete storedData['haven_jobs_owner']; setAddrs([SAMPLE_HOME, SAMPLE_WORK]); setJobs([jobAtSample]);
+    seededBackendRows = seededBackendRows.map(r => ({ ...r, address_snapshot: null, city_label: 'San Francisco, CA', posted_at: '2025-09-27T19:00:00Z' }));
+  });
+  await settle(150);
+  assert(JSON.stringify(ids()) === '[1]', 'master-style storage, real-shaped backend rows: the sample with a completed job at it is kept');
+  await openMyHome();
+  assert(/123 Market Street/.test(bodyText()) && /1 completed/.test(bodyText()) && /1 saved/.test(bodyText()), 'master-style storage, real-shaped backend rows: My Home shows 1 completed and Receipts 1 saved at the sample');
+  cleanup();
+  { const c = document.createElement('div'); document.body.appendChild(c); await act(async () => { render(React.createElement(App), c); }); }
+  await settle(60);
+  await waitFor(() => /What do you/.test(bodyText()), 'reload');
+  await settle(150);
+  assert(JSON.stringify(ids()) === '[1]', 'master-style storage, real-shaped backend rows: after a reload the sample is still kept');
+  await openMyHome();
+  assert(/1 completed/.test(bodyText()), 'master-style storage, real-shaped backend rows: after a reload the job is still linked');
 
   // a real address that happens to match the sample text but is the customer's own (different id) is kept
   await mount(() => setAddrs([{ ...SAMPLE_HOME, id: 1761000000000 }]));

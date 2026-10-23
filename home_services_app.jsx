@@ -114,6 +114,116 @@ function havenReadStoredJobsAnyOwner(){
     return Array.isArray(data)?data:[];
   }catch{ return []; }
 }
+// Upgrade from master (QA #87 v3): master never wrote haven_jobs_owner, so
+// every master jobs cache is ownerless. It is not shown (above), but its
+// device-only details (the job's street address, which links it to a saved
+// address; messages, photos, description, rating, time window, a pending
+// cancel request; the local job id that notifications use) exist nowhere
+// else: the backend stores only city_label (address_snapshot stays null).
+// So before the ownerless cache is cleared it is set aside under its own
+// key, and an entry is restored only onto the backend row with the same id
+// that a signed-in account's own read (customer_id = auth.uid()) returns.
+//   - Only an ownerless cache is set aside. A cache owned by another account
+//     is never set aside (it is cleared as before).
+//   - Only entries with a backend id, and only the device-only fields below.
+//     Everything the backend stores (status, pricing, pro, timestamps,
+//     preferences, materials) comes from the backend row.
+//   - A field is restored only where the job still has the empty default, and
+//     the address only while the row's address_snapshot is empty, so backend
+//     data and later local changes are never overwritten.
+//   - An entry is removed from the set-aside key only after this account's
+//     owned cache has been saved with nothing left to restore from it.
+//     Entries no read claims stay (no expiry, not cleared on sign-out);
+//     Reset Prototype Data clears the key.
+// Never displayed by itself, never sent anywhere.
+const HAVEN_JOBS_LEGACY_KEY = "haven_jobs_unowned_legacy";
+const HAVEN_LEGACY_JOB_FIELDS = ["id","addressText","addressLabel","msgs","photos","desc","rated","stars","reviewTxt","hireAgain","tpId","reqWindow","cancelStatus","cancellationRequestedAt"];
+function havenLegacyEntryFromJob(j){
+  if(!j || typeof j!=="object" || !havenBackendKey(j.backendJobId)) return null;
+  const e = {backendJobId:String(j.backendJobId).trim()};
+  HAVEN_LEGACY_JOB_FIELDS.forEach(f=>{ if(j[f]!==undefined) e[f]=j[f]; });
+  return e;
+}
+function havenReadLegacyJobs(){
+  try{
+    const parsed = JSON.parse(localStorage.getItem(HAVEN_JOBS_LEGACY_KEY)||"null");
+    const data = parsed&&typeof parsed==="object"&&!Array.isArray(parsed)&&"data" in parsed ? parsed.data : parsed;
+    return Array.isArray(data) ? data.filter(e=>e&&typeof e==="object"&&havenBackendKey(e.backendJobId)) : [];
+  }catch{ return []; }
+}
+// Writes the set-aside list; false if storage refused it. An empty list
+// removes the key.
+function havenWriteLegacyJobs(list){
+  try{
+    if(!list.length){ localStorage.removeItem(HAVEN_JOBS_LEGACY_KEY); return true; }
+    localStorage.setItem(HAVEN_JOBS_LEGACY_KEY, JSON.stringify({__v:1, data:list}));
+    return true;
+  }catch{ return false; }
+}
+// Called by the jobs loader when the stored cache has no owner (Supabase
+// configured). Adds its backend-linked entries to the set-aside key (an
+// entry already set aside is kept as it is) and removes the ownerless cache
+// first, so the copy never needs more storage than the cache already used.
+// If storage still refuses, photos are dropped, then messages; the street
+// address is the last thing given up. On total failure the cache is put back
+// (the loader then clears it, as before this fix).
+function havenSetAsideUnownedJobs(rawJobs){
+  if(!Array.isArray(rawJobs) || !rawJobs.length) return;
+  const existing = havenReadLegacyJobs();
+  const have = new Set(existing.map(e=>havenBackendKey(e.backendJobId)));
+  const fresh = [];
+  rawJobs.forEach(j=>{
+    const e = havenLegacyEntryFromJob(j);
+    const k = e && havenBackendKey(e.backendJobId);
+    if(!e || have.has(k)) return;
+    have.add(k);
+    fresh.push(e);
+  });
+  if(!fresh.length) return;
+  let raw = null;
+  try{ raw = localStorage.getItem("haven_jobs"); localStorage.removeItem("haven_jobs"); }catch{}
+  const strip = (drop)=>fresh.map(e=>{ const c={...e}; drop.forEach(f=>{ delete c[f]; }); return c; });
+  const tiers = [[], ["photos"], ["photos","msgs"], ["photos","msgs","desc","reviewTxt"]];
+  for(const drop of tiers){
+    if(havenWriteLegacyJobs(existing.concat(strip(drop)))) return;
+  }
+  try{ if(raw!=null) localStorage.setItem("haven_jobs", raw); }catch{}
+}
+const havenLegacyIsEmpty = (v)=> v==null || v==="" || v===false || v===0 || (Array.isArray(v) && v.length===0);
+// The job with the set-aside details filled in where it still has the empty
+// default. The address only while the backend row has no address_snapshot
+// and the job shows the row's city (or the "—" placeholder). A pending
+// cancel request only while the backend job is still open. The id is left
+// to the caller (collisions).
+function havenApplyLegacyDetails(job, row, entry){
+  if(!job || !entry) return job;
+  const j = {...job};
+  const snap = row && typeof row.address_snapshot==="string" ? row.address_snapshot.trim() : "";
+  const city = row && typeof row.city_label==="string" ? row.city_label.trim() : "";
+  if(!snap && typeof entry.addressText==="string" && entry.addressText.trim() && entry.addressText!=="—"
+     && (j.addressText==null || j.addressText==="—" || j.addressText==="" || (city && j.addressText===city))){
+    j.addressText = entry.addressText;
+    if(havenLegacyIsEmpty(j.addressLabel) && typeof entry.addressLabel==="string") j.addressLabel = entry.addressLabel;
+  }
+  if(havenLegacyIsEmpty(j.msgs) && Array.isArray(entry.msgs) && entry.msgs.length) j.msgs = entry.msgs;
+  if(havenLegacyIsEmpty(j.photos) && Array.isArray(entry.photos) && entry.photos.length) j.photos = entry.photos.filter(p=>typeof p==="string");
+  if(havenLegacyIsEmpty(j.desc) && typeof entry.desc==="string" && entry.desc) j.desc = entry.desc;
+  if(!j.rated && !j.stars && entry.rated){
+    j.rated = true;
+    if(typeof entry.stars==="number") j.stars = entry.stars;
+    if(typeof entry.reviewTxt==="string") j.reviewTxt = entry.reviewTxt;
+    if(entry.hireAgain!==undefined) j.hireAgain = entry.hireAgain;
+  }
+  if(j.tpId==null && entry.tpId!=null){
+    j.tpId = entry.tpId;
+    if(j.reqWindow==null && entry.reqWindow!=null) j.reqWindow = entry.reqWindow;
+  }
+  if(j.cancelStatus==null && entry.cancelStatus && !(TERMINAL_STATUSES.has(j.status)||j.status==="cancelled")){
+    j.cancelStatus = entry.cancelStatus;
+    if(j.cancellationRequestedAt==null && entry.cancellationRequestedAt!=null) j.cancellationRequestedAt = entry.cancellationRequestedAt;
+  }
+  return j;
+}
 // Signed-in account id for the jobs cache. "" when signed out. Never a demo id.
 function havenJobsAccountId(){
   try{ return (typeof havenJobCustomerId==="function" && havenJobCustomerId()) || ""; }catch{ return ""; }
@@ -197,10 +307,14 @@ function havenMergeBackendRow(local, row, keepLocalStatus){
 // The account read applied to the cached list. rows: this account's jobs
 // rows. startStatus: Map of backend key -> local status when the read began.
 // labels: {backend id: pro display name}.
-function havenReconcileJobsWithBackend(list, rows, startStatus, labels){
+function havenReconcileJobsWithBackend(list, rows, startStatus, labels, legacy){
   const current = Array.isArray(list) ? list : [];
   const started = startStatus instanceof Map ? startStatus : new Map();
   const names = labels || {};
+  // Set-aside master details (see HAVEN_JOBS_LEGACY_KEY), matched only by the
+  // backend id of a row in this account's read.
+  const legacyByKey = new Map();
+  (Array.isArray(legacy)?legacy:[]).forEach(e=>{ const k=e&&havenBackendKey(e.backendJobId); if(k && !legacyByKey.has(k)) legacyByKey.set(k, e); });
   const byKey = new Map();
   current.forEach(j=>{ if(j && j.backendJobId) byKey.set(havenBackendKey(j.backendJobId), j); });
   const rowKeys = new Set();
@@ -213,14 +327,20 @@ function havenReconcileJobsWithBackend(list, rows, startStatus, labels){
     if(rowKeys.has(key)) return;
     rowKeys.add(key);
     const local = byKey.get(key);
+    const entry = legacyByKey.get(key) || null;
     let job;
+    const idFree = id=> !usedIds.has(id) && !current.some(j=>j && j.id===id && havenBackendKey(j.backendJobId)!==key);
     if(local){
       const keepLocalStatus = !started.has(key) || started.get(key)!==local.status;
       job = havenMergeBackendRow(local, row, keepLocalStatus);
     }else{
       job = havenJobFromBackendRow(row);
-      while(usedIds.has(job.id) || current.some(j=>j && j.id===job.id && havenBackendKey(j.backendJobId)!==key)) job.id += 1;
+      // The master job's local id, so its notifications still open it.
+      const legacyId = entry ? entry.id : null;
+      if((typeof legacyId==="number" && Number.isFinite(legacyId)) && idFree(legacyId)) job.id = legacyId;
+      else while(!idFree(job.id)) job.id += 1;
     }
+    if(entry) job = havenApplyLegacyDetails(job, row, entry);
     usedIds.add(job.id);
     out.push(attachBackendPro(job, row, names[row.id]||names[String(row.id)]||""));
   });
@@ -559,7 +679,11 @@ export default function App(){
     validate:v=>{
       if(!Array.isArray(v))return null;
       // Phase 1B B4: another account's cache (or one with no owner) never loads.
-      if(!havenJobsCacheIsCurrentAccount())return [];
+      if(!havenJobsCacheIsCurrentAccount()){
+        // A master (ownerless) cache: set its device-only details aside first.
+        if(getSupabaseConfig() && !havenReadJobsOwner()) havenSetAsideUnownedJobs(v);
+        return [];
+      }
       const seenIds=new Set();
       return v
         .filter(j=>j&&typeof j==="object"&&typeof j.id!=="undefined")
@@ -1120,7 +1244,9 @@ export default function App(){
       // not yet verified), so a sample with a job at it is never removed.
       // Owner is deliberately not checked here: master caches have no owner
       // key, and this check can only keep more addresses (nothing is shown).
-      const storedJobs=jobsState.length?jobsState:havenReadStoredJobsAnyOwner();
+      // The set-aside master details count too (their street address), so a
+      // sample with a master job at it survives until that job is claimed.
+      const storedJobs=jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs());
       const kept=cleaned.filter(a=>!isUntouchedSampleAddress(a,storedJobs));
       if(kept.length!==cleaned.length){ cleaned.length=0; cleaned.push(...kept); }
       if(cleaned.length===0)return cleaned; // zero properties is valid — booking will require adding one
@@ -1416,6 +1542,9 @@ export default function App(){
   // True while an account read is in flight, so opening Bookings during the
   // load read does not send the same read a second time.
   const hydrateInFlightRef=useRef(false);
+  // The last landed account read ({uid, rows by backend key}), so set-aside
+  // master details are released only for jobs this account's read returned.
+  const legacyReadRef=useRef(null);
   const hydrateMyJobs=async()=>{
     if(!getSupabaseConfig()) return;
     const uid=havenJobsAccountId();
@@ -1461,11 +1590,38 @@ export default function App(){
       if(TERMINAL_STATUSES.has(j.status)||j.status==="cancelled") return;
       completedNow.push({id:j.id, proName:(j.pro&&j.pro.n)||"Your pro"});
     });
-    setJobs(list=>havenReconcileJobsWithBackend(list, result.rows, startStatus, labels));
+    const legacyJobs=havenReadLegacyJobs();
+    legacyReadRef.current={uid, rows:rowByKey};
+    setJobs(list=>havenReconcileJobsWithBackend(list, result.rows, startStatus, labels, legacyJobs));
     setJobsVerifiedFor(uid);
     setBookingsLoad("ok");
     completedNow.forEach(({id,proName})=>handleJobTransition(id,"complete",proName));
   };
+  // Release set-aside master details (HAVEN_JOBS_LEGACY_KEY) once this
+  // account's own cache has been saved with them: the entry's job came back
+  // in this account's landed read, the saved cache is owned by this account,
+  // and restoring the entry onto the saved job would change nothing. Runs
+  // after the jobs cache write of the same render. Unclaimed entries stay.
+  useEffect(()=>{
+    if(!getSupabaseConfig()) return;
+    const uid=havenJobsAccountId();
+    const last=legacyReadRef.current;
+    if(!uid || !last || !havenSameCustomerId(last.uid, uid) || !havenSameCustomerId(jobsVerifiedFor, uid)) return;
+    if(!havenJobsCacheIsCurrentAccount()) return;
+    const legacy=havenReadLegacyJobs();
+    if(!legacy.length) return;
+    const saved=new Map();
+    havenReadStoredJobsAnyOwner().forEach(j=>{ if(j&&j.backendJobId) saved.set(havenBackendKey(j.backendJobId), j); });
+    const keep=legacy.filter(e=>{
+      const k=havenBackendKey(e.backendJobId);
+      const row=last.rows.get(k), job=saved.get(k);
+      if(!row || !job) return true;
+      const after=havenApplyLegacyDetails(job, row, e);
+      return !HAVEN_LEGACY_JOB_FIELDS.every(f=>f==="id" || JSON.stringify(after[f])===JSON.stringify(job[f]));
+    });
+    if(keep.length!==legacy.length) havenWriteLegacyJobs(keep);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[jobsState, jobsVerifiedFor]);
   // The auth session has finished loading once the backend connect resolved
   // (session read and applied, listener attached). Before that, an empty
   // account id means "not known yet", not "signed out".

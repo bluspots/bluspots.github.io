@@ -400,7 +400,7 @@ function usePersistedState(key, initialValue, { version = 1, migrate = null, val
   }, [state]);
   return [state, setState];
 }
-const PERSISTED_KEYS = ["haven_theme", "haven_notifications", "haven_notif_prefs", "haven_jobs", "haven_addresses", "haven_cards", "haven_profile", "haven_draft", "haven_job_prefs", "haven_jobs_owner"];
+const PERSISTED_KEYS = ["haven_theme", "haven_notifications", "haven_notif_prefs", "haven_jobs", "haven_addresses", "haven_cards", "haven_profile", "haven_draft", "haven_job_prefs", "haven_jobs_owner", "haven_jobs_unowned_legacy"];
 const INTENT_LIBRARY = [
   // Plumbing
   {
@@ -2240,6 +2240,101 @@ function havenReadStoredJobsAnyOwner() {
     return [];
   }
 }
+const HAVEN_JOBS_LEGACY_KEY = "haven_jobs_unowned_legacy";
+const HAVEN_LEGACY_JOB_FIELDS = ["id", "addressText", "addressLabel", "msgs", "photos", "desc", "rated", "stars", "reviewTxt", "hireAgain", "tpId", "reqWindow", "cancelStatus", "cancellationRequestedAt"];
+function havenLegacyEntryFromJob(j) {
+  if (!j || typeof j !== "object" || !havenBackendKey(j.backendJobId)) return null;
+  const e = { backendJobId: String(j.backendJobId).trim() };
+  HAVEN_LEGACY_JOB_FIELDS.forEach((f) => {
+    if (j[f] !== void 0) e[f] = j[f];
+  });
+  return e;
+}
+function havenReadLegacyJobs() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(HAVEN_JOBS_LEGACY_KEY) || "null");
+    const data = parsed && typeof parsed === "object" && !Array.isArray(parsed) && "data" in parsed ? parsed.data : parsed;
+    return Array.isArray(data) ? data.filter((e) => e && typeof e === "object" && havenBackendKey(e.backendJobId)) : [];
+  } catch {
+    return [];
+  }
+}
+function havenWriteLegacyJobs(list) {
+  try {
+    if (!list.length) {
+      localStorage.removeItem(HAVEN_JOBS_LEGACY_KEY);
+      return true;
+    }
+    localStorage.setItem(HAVEN_JOBS_LEGACY_KEY, JSON.stringify({ __v: 1, data: list }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+function havenSetAsideUnownedJobs(rawJobs) {
+  if (!Array.isArray(rawJobs) || !rawJobs.length) return;
+  const existing = havenReadLegacyJobs();
+  const have = new Set(existing.map((e) => havenBackendKey(e.backendJobId)));
+  const fresh = [];
+  rawJobs.forEach((j) => {
+    const e = havenLegacyEntryFromJob(j);
+    const k = e && havenBackendKey(e.backendJobId);
+    if (!e || have.has(k)) return;
+    have.add(k);
+    fresh.push(e);
+  });
+  if (!fresh.length) return;
+  let raw = null;
+  try {
+    raw = localStorage.getItem("haven_jobs");
+    localStorage.removeItem("haven_jobs");
+  } catch {
+  }
+  const strip = (drop) => fresh.map((e) => {
+    const c = { ...e };
+    drop.forEach((f) => {
+      delete c[f];
+    });
+    return c;
+  });
+  const tiers = [[], ["photos"], ["photos", "msgs"], ["photos", "msgs", "desc", "reviewTxt"]];
+  for (const drop of tiers) {
+    if (havenWriteLegacyJobs(existing.concat(strip(drop)))) return;
+  }
+  try {
+    if (raw != null) localStorage.setItem("haven_jobs", raw);
+  } catch {
+  }
+}
+const havenLegacyIsEmpty = (v) => v == null || v === "" || v === false || v === 0 || Array.isArray(v) && v.length === 0;
+function havenApplyLegacyDetails(job, row, entry) {
+  if (!job || !entry) return job;
+  const j = { ...job };
+  const snap = row && typeof row.address_snapshot === "string" ? row.address_snapshot.trim() : "";
+  const city = row && typeof row.city_label === "string" ? row.city_label.trim() : "";
+  if (!snap && typeof entry.addressText === "string" && entry.addressText.trim() && entry.addressText !== "—" && (j.addressText == null || j.addressText === "—" || j.addressText === "" || city && j.addressText === city)) {
+    j.addressText = entry.addressText;
+    if (havenLegacyIsEmpty(j.addressLabel) && typeof entry.addressLabel === "string") j.addressLabel = entry.addressLabel;
+  }
+  if (havenLegacyIsEmpty(j.msgs) && Array.isArray(entry.msgs) && entry.msgs.length) j.msgs = entry.msgs;
+  if (havenLegacyIsEmpty(j.photos) && Array.isArray(entry.photos) && entry.photos.length) j.photos = entry.photos.filter((p) => typeof p === "string");
+  if (havenLegacyIsEmpty(j.desc) && typeof entry.desc === "string" && entry.desc) j.desc = entry.desc;
+  if (!j.rated && !j.stars && entry.rated) {
+    j.rated = true;
+    if (typeof entry.stars === "number") j.stars = entry.stars;
+    if (typeof entry.reviewTxt === "string") j.reviewTxt = entry.reviewTxt;
+    if (entry.hireAgain !== void 0) j.hireAgain = entry.hireAgain;
+  }
+  if (j.tpId == null && entry.tpId != null) {
+    j.tpId = entry.tpId;
+    if (j.reqWindow == null && entry.reqWindow != null) j.reqWindow = entry.reqWindow;
+  }
+  if (j.cancelStatus == null && entry.cancelStatus && !(TERMINAL_STATUSES.has(j.status) || j.status === "cancelled")) {
+    j.cancelStatus = entry.cancelStatus;
+    if (j.cancellationRequestedAt == null && entry.cancellationRequestedAt != null) j.cancellationRequestedAt = entry.cancellationRequestedAt;
+  }
+  return j;
+}
 function havenJobsAccountId() {
   try {
     return typeof havenJobCustomerId === "function" && havenJobCustomerId() || "";
@@ -2313,10 +2408,15 @@ function havenMergeBackendRow(local, row, keepLocalStatus) {
   if (j.completedAt == null && j.status === "complete") j.completedAt = havenBackendTime(row.completed_at);
   return j;
 }
-function havenReconcileJobsWithBackend(list, rows, startStatus, labels) {
+function havenReconcileJobsWithBackend(list, rows, startStatus, labels, legacy) {
   const current = Array.isArray(list) ? list : [];
   const started = startStatus instanceof Map ? startStatus : /* @__PURE__ */ new Map();
   const names = labels || {};
+  const legacyByKey = /* @__PURE__ */ new Map();
+  (Array.isArray(legacy) ? legacy : []).forEach((e) => {
+    const k = e && havenBackendKey(e.backendJobId);
+    if (k && !legacyByKey.has(k)) legacyByKey.set(k, e);
+  });
   const byKey = /* @__PURE__ */ new Map();
   current.forEach((j) => {
     if (j && j.backendJobId) byKey.set(havenBackendKey(j.backendJobId), j);
@@ -2330,14 +2430,19 @@ function havenReconcileJobsWithBackend(list, rows, startStatus, labels) {
     if (rowKeys.has(key)) return;
     rowKeys.add(key);
     const local = byKey.get(key);
+    const entry = legacyByKey.get(key) || null;
     let job;
+    const idFree = (id) => !usedIds.has(id) && !current.some((j) => j && j.id === id && havenBackendKey(j.backendJobId) !== key);
     if (local) {
       const keepLocalStatus = !started.has(key) || started.get(key) !== local.status;
       job = havenMergeBackendRow(local, row, keepLocalStatus);
     } else {
       job = havenJobFromBackendRow(row);
-      while (usedIds.has(job.id) || current.some((j) => j && j.id === job.id && havenBackendKey(j.backendJobId) !== key)) job.id += 1;
+      const legacyId = entry ? entry.id : null;
+      if (typeof legacyId === "number" && Number.isFinite(legacyId) && idFree(legacyId)) job.id = legacyId;
+      else while (!idFree(job.id)) job.id += 1;
     }
+    if (entry) job = havenApplyLegacyDetails(job, row, entry);
     usedIds.add(job.id);
     out.push(attachBackendPro(job, row, names[row.id] || names[String(row.id)] || ""));
   });
@@ -2630,7 +2735,10 @@ function App() {
     version: 1,
     validate: (v) => {
       if (!Array.isArray(v)) return null;
-      if (!havenJobsCacheIsCurrentAccount()) return [];
+      if (!havenJobsCacheIsCurrentAccount()) {
+        if (getSupabaseConfig() && !havenReadJobsOwner()) havenSetAsideUnownedJobs(v);
+        return [];
+      }
       const seenIds = /* @__PURE__ */ new Set();
       return v.filter((j) => j && typeof j === "object" && typeof j.id !== "undefined").filter((j) => {
         if (seenIds.has(j.id)) return false;
@@ -3218,7 +3326,7 @@ function App() {
         // Map location confirmed by the customer (Mapbox, permanent lookup). Kept only if well-formed.
         geo: a.geo && typeof a.geo === "object" && Number.isFinite(a.geo.lat) && Number.isFinite(a.geo.lng) ? { lat: a.geo.lat, lng: a.geo.lng, accuracy: typeof a.geo.accuracy === "string" ? a.geo.accuracy : "unknown", mapboxId: a.geo.mapboxId || null, source: "mapbox", confirmedAt: a.geo.confirmedAt || null } : null
       }));
-      const storedJobs = jobsState.length ? jobsState : havenReadStoredJobsAnyOwner();
+      const storedJobs = jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs());
       const kept = cleaned.filter((a) => !isUntouchedSampleAddress(a, storedJobs));
       if (kept.length !== cleaned.length) {
         cleaned.length = 0;
@@ -3476,6 +3584,7 @@ function App() {
   const [bookingsLoad, setBookingsLoad] = useState("idle");
   const hydrateSeqRef = useRef(0);
   const hydrateInFlightRef = useRef(false);
+  const legacyReadRef = useRef(null);
   const hydrateMyJobs = async () => {
     if (!getSupabaseConfig()) return;
     const uid = havenJobsAccountId();
@@ -3529,11 +3638,34 @@ function App() {
       if (TERMINAL_STATUSES.has(j.status) || j.status === "cancelled") return;
       completedNow.push({ id: j.id, proName: j.pro && j.pro.n || "Your pro" });
     });
-    setJobs((list) => havenReconcileJobsWithBackend(list, result.rows, startStatus, labels));
+    const legacyJobs = havenReadLegacyJobs();
+    legacyReadRef.current = { uid, rows: rowByKey };
+    setJobs((list) => havenReconcileJobsWithBackend(list, result.rows, startStatus, labels, legacyJobs));
     setJobsVerifiedFor(uid);
     setBookingsLoad("ok");
     completedNow.forEach(({ id, proName }) => handleJobTransition(id, "complete", proName));
   };
+  useEffect(() => {
+    if (!getSupabaseConfig()) return;
+    const uid = havenJobsAccountId();
+    const last = legacyReadRef.current;
+    if (!uid || !last || !havenSameCustomerId(last.uid, uid) || !havenSameCustomerId(jobsVerifiedFor, uid)) return;
+    if (!havenJobsCacheIsCurrentAccount()) return;
+    const legacy = havenReadLegacyJobs();
+    if (!legacy.length) return;
+    const saved = /* @__PURE__ */ new Map();
+    havenReadStoredJobsAnyOwner().forEach((j) => {
+      if (j && j.backendJobId) saved.set(havenBackendKey(j.backendJobId), j);
+    });
+    const keep = legacy.filter((e) => {
+      const k = havenBackendKey(e.backendJobId);
+      const row = last.rows.get(k), job = saved.get(k);
+      if (!row || !job) return true;
+      const after = havenApplyLegacyDetails(job, row, e);
+      return !HAVEN_LEGACY_JOB_FIELDS.every((f) => f === "id" || JSON.stringify(after[f]) === JSON.stringify(job[f]));
+    });
+    if (keep.length !== legacy.length) havenWriteLegacyJobs(keep);
+  }, [jobsState, jobsVerifiedFor]);
   const havenSessionLoaded = backendStatus === "ready";
   useEffect(() => {
     if (!getSupabaseConfig()) return;
