@@ -3290,6 +3290,35 @@ async function runReceiptTotalsChecks(){
       const body = rsql.slice('begin;'.length, -'commit;'.length).trim();
       assert(body.length > 1000 && s26.includes(body) && body.startsWith('create or replace function public.jobs_lock_materials_approved()') && body.endsWith('revoke all on function public.jobs_lock_materials_approved() from public, anon, authenticated;'), '0028 rollback restores the 0026 function exactly (verbatim 0026 text)');
     });
+
+    step('P1. 0029 inspection_completed ownership + posted-job fee lock (static)', () => {
+      const p = require('path');
+      const sql = fs.readFileSync(p.join(__dirname, 'supabase/migrations/0029_inspection_fee_lock.sql'), 'utf8');
+      const s28 = fs.readFileSync(p.join(__dirname, 'supabase/migrations/0028_materials_followups.sql'), 'utf8');
+      const live = sql.split('\n').filter(l => !/^\s*--/.test(l)).join('\n');
+      const norm = live.replace(/\s+/g, ' ');
+      const head = sql.split('-- ── 0.')[0];
+      assert(/ONE single run/.test(head) && /0025 body, then 0027, then 0026, then 0028, then 0029 \(this\n-- file\)/.test(head), '0029 header: one single run, paste order 0025 body, 0027, 0026, 0028, 0029');
+      assert((live.match(/^(begin|commit);$/gm) || []).join(',') === 'begin;,commit;' && live.indexOf('\nbegin;') < live.indexOf('0029 needs 0028') && live.indexOf('\ncommit;') > live.indexOf('create trigger jobs_lock_pricing_and_inspection'), '0029 body is one transaction, prerequisite check inside it');
+      assert(/prosrc like '%Only the Pro can request materials on this job%'/.test(live) && /prosrc like '%legacy_fill_ok%'/.test(live) && /prosrc like '%ABANDON \(0028%'/.test(live) && /tgname = 'jobs_lock_materials_approved'/.test(live) && /raise exception '0029 needs 0028_materials_followups\.sql first/.test(live), '0029 stops unless 0028 (function, trigger, 0026 columns) is installed');
+      assert(!/jobs_lock_materials_approved\(\)/.test(live) && !/\b(create|alter|drop) policy\b|alter table|\bgrant (select|insert|update|delete|all|execute)\b/i.test(live) && !/^\s*(update|insert|delete)\b/im.test(live), '0029 leaves the 0028 function alone; no table, policy, grant or data change');
+      assert(/create trigger jobs_lock_pricing_and_inspection before update on public\.jobs for each row execute function public\.jobs_lock_pricing_and_inspection\(\);/.test(norm) && 'jobs_lock_materials_approved' < 'jobs_lock_pricing_and_inspection', '0029 trigger is BEFORE UPDATE and sorts after jobs_lock_materials_approved (fires after 0028)');
+      assert(/privileged boolean := current_user not in \('anon', 'authenticated'\); .* if privileged then return new; end if;/.test(norm) && /revoke all on function public\.jobs_lock_pricing_and_inspection\(\) from public, anon, authenticated;/.test(live), '0029 privileged callers keep current behaviour (same check as 0024-0028); EXECUTE revoked');
+      assert(/ is_customer := auth\.uid\(\) is not null and auth\.uid\(\) = old\.customer_id; undecided := old\.materials_request_seq > old\.materials_decided_seq;/.test(norm), '0029 customer and undecided are read from OLD');
+      assert(/ if new\.status = 'inspection_completed' and old\.status is distinct from 'inspection_completed' then if not is_customer then raise exception '[^']+' using errcode = '42501'/.test(norm), '0029 (d)/(c): only real moves are checked, and only the customer may move into inspection_completed');
+      assert(/ if not old\.requires_diagnosis then raise exception '[^']+' using errcode = '42501'/.test(norm), '0029 (a)/(b): requires_diagnosis (OLD) required');
+      assert(/ if old\.status = 'materials_requested' then if not undecided then raise exception '[^']+' using errcode = '42501'[^;]*; end if; elsif old\.status = 'diagnosing' then if undecided then raise exception '[^']+' using errcode = '42501'[^;]*; end if; else raise exception '[^']+' using errcode = '42501'[^;]*; end if; end if;/.test(norm), '0029 (a) from materials_requested needs an undecided request, (b) from diagnosing needs none, (d) every other source 42501');
+      for (const c of ['fixed_customer_labor_price_cents', 'fixed_pro_labor_payout_cents', 'margin_rate_bps', 'emergency_fee_cents', 'inspection_fee_cents', 'requires_diagnosis']) {
+        assert(new RegExp(`new\\.${c} is distinct from old\\.${c}`).test(live), `0029 locks ${c} after posting`);
+      }
+      assert(/ if new\.convenience_fee_cents is distinct from old\.convenience_fee_cents and not \(is_customer and old\.status = 'materials_requested' and new\.status = 'materials_declined' and not old\.requires_diagnosis and new\.convenience_fee_cents = 3000\) then raise exception 'Job pricing is locked once the job is posted' using errcode = '42501'/.test(norm), '0029 convenience fee: only the contract $30 on the customer standard decline (exact)');
+      assert(!/collected|paid|payment_snapshot|tip_amount_cents/i.test(live), '0029 marks no fee collected or paid and does not touch tips/payment');
+      const blk = (sql.split('-- BEGIN-ROLLBACK\n')[1] || '').split('-- END-ROLLBACK')[0];
+      const rsql = blk.split('\n').map(l => l.startsWith('-- ') ? l.slice(3) : l).join('\n').trim();
+      assert(blk.trim().split('\n').every(l => /^--/.test(l)) && rsql === 'begin;\ndrop trigger if exists jobs_lock_pricing_and_inspection on public.jobs;\ndrop function if exists public.jobs_lock_pricing_and_inspection();\ncommit;', '0029 rollback is commented, one begin/commit, drops only the 0029 trigger and function');
+      assert(/roll 0029 back FIRST/.test(sql) && /42703/.test(sql.split('-- ── Rollback')[1]), '0029 rollback documents the order (0029 before 0028/0026)');
+      assert(/FOUNDER DECISION PENDING/.test(s28) && /supersedes 0026\/0028's "FOUNDER DECISION PENDING" block/.test(head), '0029 header records that it supersedes the 0026/0028 founder-pending allowance');
+    });
   } catch (e) {
     fail++;
     console.error('FAIL (receipt totals):', (e && e.stack) || e);
