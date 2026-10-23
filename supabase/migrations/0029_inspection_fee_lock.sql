@@ -1,0 +1,3 @@
+-- Haven shared backend — inspection_completed ownership + posted-job fee lock (Phase 1B)
+-- Number: 0029. WIP CHECKPOINT: header only, no SQL yet. NOT APPLIED.
+-- Do not paste. The full migration follows on this branch (draft PR).
