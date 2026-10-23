@@ -3249,7 +3249,7 @@ async function runReceiptTotalsChecks(){
       assert(founderUpdates.length === 2 && /where id = '<job uuid>'/.test(founderUpdates[1]) && /materials_approved_cents is null/.test(founderUpdates[1]) && !/fee|tip|reimbursed|labor/.test(founderUpdates[1]), '0026 founder fill is single-job, null-only, and touches no other financial column');
       const rb = sql.split('-- ── Rollback')[1] || '';
       const r1 = rb.split('-- R2.')[0], r2 = rb.split('-- R2.')[1] || '';
-      assert(/begin;[\s\S]*0025_materials_approved_lock\.sql[\s\S]*drop column if exists materials_decided_seq[\s\S]*commit;/.test(r1), '0026 rollback R1: one transaction, 0025 function first, then drop the 0026 columns');
+      assert(/For rollback use 0025-review\/recovery\/0026_R1_back_to_0025\.sql/.test(r1) && !/sections 1-3/.test(r1) && r1.split('\n').slice(1).every(l => l === '' || /^--/.test(l)), '0026 rollback R1: comment-only pointer to recovery/0026_R1_back_to_0025.sql (no "paste 0025 sections 1-3" recipe)');
       const o = k => r2.indexOf(k);
       assert(o('begin;') >= 0 && o('begin;') < o('drop trigger') && o('drop trigger') < o('drop function') && o('drop function') < o('materials_request_seq') && o('materials_request_seq') < o('materials_approved_cents') && o('materials_approved_cents') < o('commit;'), '0026 rollback R2: one transaction, undo 0026 trigger/function, then 0026 columns, then 0025 columns');
     });
