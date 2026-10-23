@@ -4,7 +4,10 @@
 --
 -- Paste this whole file in the Supabase SQL editor as the database owner,
 -- after 0024 (already applied live). Do not apply it from the app, from CI,
--- or from an agent. Safe to re-run.
+-- or from an agent. Re-run: safe ONLY while 0026 is not installed (same
+-- body, data kept). After 0026 / 0028 a re-run would downgrade the trigger
+-- function, so section 0 refuses with an error and changes nothing.
+-- One transaction (begin; ... commit;): paste the whole file as ONE run.
 --
 -- Why
 --   The Customer receipt (PR #45) counts materials_estimate_cents whenever
@@ -102,6 +105,26 @@
 --   lifecycle change, for the founder separately). It only refuses to record
 --   an amount for it: a Pro-alone approval adds $0 materials.
 
+begin;
+
+-- ── 0. Refuse to downgrade (added 2026-10-23, review finding 1) ───────────
+-- 0026 adds jobs.materials_request_seq / materials_decided_seq, and every
+-- later body of jobs_lock_materials_approved() reads materials_request_seq.
+-- If either is present, re-running 0025 would put back the weaker 0025
+-- function, so stop here: nothing in this file runs.
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'jobs'
+                and column_name in ('materials_request_seq', 'materials_decided_seq'))
+     or exists (select 1 from pg_proc
+                 where pronamespace = 'public'::regnamespace
+                   and proname = 'jobs_lock_materials_approved'
+                   and (prosrc like '%materials_request_seq%' or prosrc like '%haven-version:%')) then
+    raise exception '0025 refused: 0026 or later is installed; re-running 0025 would downgrade jobs_lock_materials_approved. Nothing was changed.';
+  end if;
+end$$;
+
 -- ── 1. Columns ────────────────────────────────────────────────────────────
 alter table public.jobs
   add column if not exists materials_approved_cents integer null
@@ -195,6 +218,7 @@ revoke insert (materials_approved_cents, materials_approved_at),
        update (materials_approved_cents, materials_approved_at)
   on table public.jobs from authenticated;
 
+commit;
 -- ── Founder step: optional backfill (decide first, then run by hand) ──────
 -- Existing rows get materials_approved_cents = null, which the updated
 -- Customer app shows as $0 materials. Rows already at materials_approved,
