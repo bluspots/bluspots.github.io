@@ -116,6 +116,20 @@
 --     2. complete and cancelled are terminal: any move OUT of them (to
 --        any other status) is refused ("This job is finished; its status
 --        cannot change"). Same-status updates (tip, re-sends) are not moves.
+--     3. No backward status move. Rank: posted < en_route < arrived <
+--        diagnosing < materials_requested < materials_approved <
+--        in_progress < complete = materials_declined = inspection_completed.
+--        A move to a lower rank is refused ("This status move goes backward
+--        and is not allowed"), except the assigned Pro's new materials
+--        request in_progress -> materials_requested (0009, 0026 counting
+--        rule). A move into cancelled is not backward (RLS decides who may
+--        cancel). Closes QA P1: in_progress / complete -> arrived ->
+--        diagnosing and the customer's complete -> arrived. Also refused
+--        now: the customer leaving a pending request backward (e.g.
+--        materials_requested -> arrived); 0028's ABANDON still closes a
+--        request the customer leaves by cancelling. Not changed (open
+--        question for the founder): materials_declined /
+--        inspection_completed -> complete or cancelled stay as RLS allows.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -174,6 +188,10 @@ declare
   is_customer boolean;
   undecided boolean;
   is_pro boolean;
+  ladder text[] := array['posted', 'en_route', 'arrived', 'diagnosing', 'materials_requested',
+                         'materials_approved', 'in_progress'];
+  old_rank integer;
+  new_rank integer;
 begin
   -- PRIVILEGED: owner / SQL editor / service_role keep their behaviour.
   if privileged then
@@ -245,6 +263,24 @@ begin
     raise exception 'This job is finished; its status cannot change'
       using errcode = '42501',
             hint = 'complete and cancelled are terminal statuses.';
+  end if;
+
+  -- III.3 (item 3). No backward status move. Ladder rank: posted 1 ..
+  --    in_progress 7; complete, materials_declined, inspection_completed 8.
+  --    A move into cancelled is never backward (who may cancel stays with
+  --    RLS); moves out of complete / cancelled are III.2. The one authorized
+  --    backward move: the assigned Pro's new materials request from
+  --    in_progress (0009 / 0026 counting rule: receipt -> in_progress ->
+  --    Request Materials).
+  old_rank := coalesce(array_position(ladder, old.status::text), 8);
+  new_rank := coalesce(array_position(ladder, new.status::text), 8);
+  if new.status is distinct from old.status
+     and new.status <> 'cancelled'
+     and new_rank < old_rank
+     and not (is_pro and old.status = 'in_progress' and new.status = 'materials_requested') then
+    raise exception 'This status move goes backward and is not allowed'
+      using errcode = '42501',
+            hint = 'Only the assigned Pro''s new materials request from in_progress may move back to materials_requested.';
   end if;
 
   -- II. Fee integrity: price, payout, margin and fees are fixed once posted.
