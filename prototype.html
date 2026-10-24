@@ -386,7 +386,7 @@ function usePersistedState(key, initialValue, {version=1, migrate=null, validate
 // Clears every key this app persists — used by the "Reset Prototype Data"
 // testing utility. Kept as one list, next to the hook, so a newly-persisted
 // domain is easy to remember to add here too.
-const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft","haven_job_prefs","haven_jobs_owner","haven_jobs_unowned_legacy","haven_notifications_unowned_legacy","haven_jobs_local_only","haven_account_device_data"];
+const PERSISTED_KEYS = ["haven_theme","haven_notifications","haven_notif_prefs","haven_jobs","haven_addresses","haven_cards","haven_profile","haven_draft","haven_job_prefs","haven_jobs_owner","haven_jobs_unowned_legacy","haven_notifications_unowned_legacy","haven_jobs_local_only","haven_account_device_data","haven_addresses_owner","haven_account_addresses","haven_addresses_unowned_legacy"];
 
 // Plain keyword table for now — deliberately kept as data, not logic, so a
 // future AI/NLP service is a drop-in replacement for matchSymptomToCategories
@@ -2294,38 +2294,60 @@ function havenMergeAccountEntry(old, e){
 // Moves `owner`'s stored cache and job notifications into the per-account
 // store. All or nothing: on a refused write every key is put back and
 // havenLegacyPending is set. false when it could not be written.
-function havenStashAccount(owner){
-  if(!owner) return true;
-  if(havenLegacyPending) return false;
+// What moving `owner`'s stored cache into its per-account store would give
+// (reads only): the account's bucket with the cache's device-only details and
+// job notifications merged in, and its phone-only bookings. null when
+// storage cannot be read.
+function havenAccountPlan(owner){
   let rawJobs = null, rawNotifs = null, prevStore = null, prevLocal = null;
   try{
     rawJobs = localStorage.getItem("haven_jobs");
     rawNotifs = localStorage.getItem("haven_notifications");
     prevStore = localStorage.getItem(HAVEN_ACCOUNT_STORE_KEY);
     prevLocal = localStorage.getItem(HAVEN_LOCAL_ONLY_KEY);
-  }catch{ havenLegacyMemoryOwner = owner; havenLegacyPending = true; return false; }
+  }catch{ return null; }
   const jobsIn = havenRawData(rawJobs).filter(j=>j&&typeof j==="object");
   const notifsIn = havenRawData(rawNotifs);
   const isJobNotif = (n)=> !!(n && typeof n==="object" && n.jobId!=null);
   const jobNotifs = notifsIn.filter(isJobNotif);
-  if(!jobsIn.length && !jobNotifs.length) return true;
   const acct = havenAccountFor(owner);
   const byKey = new Map(acct.jobs.map(e=>[havenBackendKey(e.backendJobId), e]));
   jobsIn.forEach(j=>{ const e = havenAccountEntryFromJob(j); if(!e) return; const k = havenBackendKey(e.backendJobId); byKey.set(k, havenMergeAccountEntry(byKey.get(k), e)); });
   const backendIdOf = new Map(), localIds = new Set();
   jobsIn.forEach(j=>{ if(havenBackendKey(j.backendJobId)) backendIdOf.set(j.id, String(j.backendJobId).trim()); else localIds.add(j.id); });
+  // QA #87 v7 (1): the account's phone-only bookings already set aside are
+  // shown from there (not from the cache), so their notifications link to
+  // them by the stored id (localSourceJobId, set when restored) or job id.
+  const bucket = ((havenReadLocalOnly().owners||{})[havenAcctKey(owner)]||[]).filter(havenIsLocalOnlyJob);
+  bucket.forEach(e=>localIds.add(e.id));
   const nById = new Map(acct.notifications.map(n=>[String(n.id), n]));
   jobNotifs.forEach(n=>{
     const t = {...n};
     const o = nById.get(String(n.id));
-    if(backendIdOf.has(n.jobId)) t.accountBackendJobId = backendIdOf.get(n.jobId);
+    if(n.localSourceJobId!=null && localIds.has(n.localSourceJobId)) t.accountLocalJobId = n.localSourceJobId;
+    else if(backendIdOf.has(n.jobId)) t.accountBackendJobId = backendIdOf.get(n.jobId);
     else if(localIds.has(n.jobId)) t.accountLocalJobId = n.jobId;
     else if(o){ if(o.accountBackendJobId) t.accountBackendJobId = o.accountBackendJobId; if(o.accountLocalJobId!=null) t.accountLocalJobId = o.accountLocalJobId; }
     nById.set(String(n.id), t);
   });
+  const haveLocal = new Set(bucket.map(e=>String(e.id)));
+  const localBucket = bucket.concat(jobsIn.filter(havenIsLocalOnlyJob).filter(j=>!haveLocal.has(String(j.id))).map(havenWithoutPayment));
+  return {rawJobs, rawNotifs, prevStore, prevLocal, jobsIn, notifsIn, isJobNotif, jobNotifs,
+    acctNext:{jobs:Array.from(byKey.values()), notifications:Array.from(nById.values())}, localBucket};
+}
+// Moves `owner`'s stored cache and job notifications into the per-account
+// store. All or nothing: on a refused write every key is put back and
+// havenLegacyPending is set. false when it could not be written.
+function havenStashAccount(owner){
+  if(!owner) return true;
+  if(havenLegacyPending) return false;
+  const plan = havenAccountPlan(owner);
+  if(!plan){ havenLegacyMemoryOwner = owner; havenLegacyPending = true; return false; }
+  const {rawJobs, rawNotifs, prevStore, prevLocal, jobsIn, notifsIn, isJobNotif, jobNotifs} = plan;
+  if(!jobsIn.length && !jobNotifs.length) return true;
   let storeNext, localNext;
   try{
-    storeNext = havenAccountStoreWith(owner, {jobs:Array.from(byKey.values()), notifications:Array.from(nById.values())});
+    storeNext = havenAccountStoreWith(owner, plan.acctNext);
     localNext = havenLocalOnlyMerged(owner, jobsIn);
   }catch{ havenLegacyMemoryOwner = owner; havenLegacyPending = true; return false; }
   const putBack = ()=>{
@@ -2341,6 +2363,25 @@ function havenStashAccount(owner){
     if(localNext!=null) localStorage.setItem(HAVEN_LOCAL_ONLY_KEY, localNext);
   }catch{ putBack(); return false; }
   return true;
+}
+// QA #87 v7 (3): while storage is full (pending), an account that comes back
+// in the same session reads its data from where it still is: its own cache,
+// left in storage untouched when the move was refused (the stored owner key
+// says whose it is). Reads only; nothing is kept in memory across accounts.
+function havenPendingCacheOwnedBy(uid){
+  if(!havenLegacyPending || !uid) return null;
+  let o = "";
+  try{ o = String(localStorage.getItem(HAVEN_JOBS_OWNER_KEY)||"").trim(); }catch{ return null; }
+  if(!o || o.toLowerCase()!==String(uid).trim().toLowerCase()) return null;
+  return havenAccountPlan(o);
+}
+function havenAccountForSession(uid){
+  const p = havenPendingCacheOwnedBy(uid);
+  return p ? p.acctNext : havenAccountFor(uid);
+}
+function havenOwnPhoneOnlyStored(uid){
+  const p = havenPendingCacheOwnedBy(uid);
+  return p ? p.localBucket : ((havenReadLocalOnly().owners||{})[havenAcctKey(uid)]||[]);
 }
 // What a phone-only booking shows to its own account: the stored entry with
 // nothing a Pro or Haven would have done (no pro, no simulated progress,
@@ -2463,16 +2504,173 @@ function havenApplyLegacyDetails(job, row, entry){
 // What stays set aside after an entry has been restored and saved: only the
 // messages that are never restored (not the customer's own), untouched.
 // null when nothing is left.
+// QA #87 v7 (5): devices that ran the preview builds 16b3257 / 91ed12d kept
+// master notifications in an OWNED store: another account's job alerts and
+// alerts for a job that no longer exists. At load, a job notification whose
+// job is not in the owner's own cache or phone-only bookings is set aside
+// with the ownerless ones (haven_notifications_unowned_legacy), tagged with
+// its job's backend id when the set-aside master job is known, so it is
+// shown only to the account whose read proves it owns that job. Never
+// deleted; only Reset clears it. If the write is refused, everything stays
+// as it was, hidden this session (havenHiddenNotifIds), nothing saved.
+let havenHiddenNotifIds = new Set();
+function havenSetAsideUnlinkedNotifs(owner){
+  let rawNotifs = null, prevLegacy = null;
+  try{ rawNotifs = localStorage.getItem("haven_notifications"); prevLegacy = localStorage.getItem(HAVEN_NOTIFS_LEGACY_KEY); }catch{ return; }
+  const notifsIn = havenRawData(rawNotifs);
+  const jobIds = new Set(havenReadStoredJobsAnyOwner().filter(j=>j&&typeof j==="object").map(j=>j.id));
+  const bucketIds = new Set(((havenReadLocalOnly().owners||{})[havenAcctKey(owner)]||[]).filter(havenIsLocalOnlyJob).map(e=>e.id));
+  const linked = (n)=> n.jobId==null || jobIds.has(n.jobId) || bucketIds.has(n.jobId) || (n.localSourceJobId!=null && bucketIds.has(n.localSourceJobId));
+  const unlinked = notifsIn.filter(n=>n&&typeof n==="object"&&typeof n.id!=="undefined"&&!linked(n));
+  if(!unlinked.length) return;
+  const hidden = new Set(unlinked.map(n=>String(n.id)));
+  hidden.forEach(id=>havenHiddenNotifIds.add(id));
+  const masterById = new Map(havenReadLegacyJobs().filter(e=>e.id!=null).map(e=>[e.id, e]));
+  const old = havenReadLegacyNotifs();
+  const have = new Set(old.map(n=>String(n.id)));
+  const fresh = unlinked.filter(n=>!have.has(String(n.id))).map(n=>{
+    const e = masterById.get(n.jobId);
+    return e && !n.legacyBackendJobId ? {...n, legacyBackendJobId:String(e.backendJobId).trim()} : n;
+  });
+  try{
+    localStorage.setItem("haven_notifications", JSON.stringify({__v:1, data:notifsIn.filter(n=>!(n&&typeof n==="object"&&hidden.has(String(n.id))))}));
+    if(fresh.length && !havenWriteLegacyList(HAVEN_NOTIFS_LEGACY_KEY, old.concat(fresh))) throw new Error("quota");
+  }catch{
+    try{ if(rawNotifs==null) localStorage.removeItem("haven_notifications"); else localStorage.setItem("haven_notifications", rawNotifs); }catch{}
+    try{ if(prevLegacy==null) localStorage.removeItem(HAVEN_NOTIFS_LEGACY_KEY); else localStorage.setItem(HAVEN_NOTIFS_LEGACY_KEY, prevLegacy); }catch{}
+    if(!havenLegacyPending){ havenLegacyMemoryOwner = owner; havenLegacyPending = true; }
+  }
+}
+// QA #87 v7 (a), founder decision: saved addresses (My Home) are per account.
+//   haven_addresses + haven_addresses_owner: the signed-in account's list;
+//   haven_account_addresses = {__v:1, data:{<account id, lower case>:[...]}}:
+//     every other account's list, kept while it is signed out;
+//   haven_addresses_unowned_legacy = {__v:1, data:[...]}: the shared copy
+//     saved by builds before this one. No owner can be proven, so it is set
+//     aside unchanged, hidden from every account and never deleted.
+// Keys are the account id only (no email, no token). Only Reset Prototype
+// Data clears them. A refused write leaves every key exactly as it was; the
+// session then keeps addresses in memory only (havenAddrPending).
+const HAVEN_ADDR_OWNER_KEY = "haven_addresses_owner";
+const HAVEN_ACCOUNT_ADDR_KEY = "haven_account_addresses";
+const HAVEN_ADDR_LEGACY_KEY = "haven_addresses_unowned_legacy";
+let havenAddrPending = false;
+let havenAddrMemoryList = [];
+function havenReadAddrOwnerStored(){ try{ return String(localStorage.getItem(HAVEN_ADDR_OWNER_KEY)||"").trim(); }catch{ return ""; } }
+function havenReadAccountAddrs(){
+  try{
+    const p = JSON.parse(localStorage.getItem(HAVEN_ACCOUNT_ADDR_KEY)||"null");
+    return p&&typeof p==="object"&&p.data&&typeof p.data==="object"&&!Array.isArray(p.data) ? p.data : {};
+  }catch{ return {}; }
+}
+const havenSameId = (a,b)=> !!a && !!b && String(a).trim().toLowerCase()===String(b).trim().toLowerCase();
+function havenAddrRestore(k, v){ try{ if(v==null) localStorage.removeItem(k); else localStorage.setItem(k, v); }catch{} }
+// The shared (ownerless) list goes aside unchanged; an address already set
+// aside is not added twice.
+function havenSetAsideSharedAddresses(){
+  let raw = null, prev = null;
+  try{ raw = localStorage.getItem("haven_addresses"); prev = localStorage.getItem(HAVEN_ADDR_LEGACY_KEY); }catch{ havenAddrPending = true; return; }
+  if(raw==null) return;
+  const list = havenRawData(raw);
+  if(!list.length) return; // nothing to keep; the key is replaced on the next sign-in
+  const old = havenRawData(prev);
+  const have = new Set(old.map(a=>JSON.stringify(a)));
+  const next = old.concat(list.filter(a=>!have.has(JSON.stringify(a))));
+  // The copy is written first; the shared key is removed only once it exists.
+  try{ localStorage.setItem(HAVEN_ADDR_LEGACY_KEY, JSON.stringify({__v:1, data:next})); }
+  catch{ havenAddrRestore(HAVEN_ADDR_LEGACY_KEY, prev); havenAddrPending = true; return; }
+  try{ localStorage.removeItem("haven_addresses"); }catch{ havenAddrPending = true; }
+}
+// The owner's list moves to its per-account bucket (its latest list).
+function havenStashAddresses(owner){
+  if(!owner || havenAddrPending) return false;
+  let raw = null, prevOwner = null, prevB = null;
+  try{ raw = localStorage.getItem("haven_addresses"); prevOwner = localStorage.getItem(HAVEN_ADDR_OWNER_KEY); prevB = localStorage.getItem(HAVEN_ACCOUNT_ADDR_KEY); }catch{ havenAddrPending = true; return false; }
+  const list = havenRawData(raw);
+  const all = {...havenReadAccountAddrs()};
+  const k = havenAcctKey(owner);
+  if(list.length) all[k] = list; else delete all[k];
+  // The bucket is written first; the visible list and its owner key are
+  // removed only once the copy exists (a refused write changes nothing).
+  try{
+    if(Object.keys(all).length) localStorage.setItem(HAVEN_ACCOUNT_ADDR_KEY, JSON.stringify({__v:1, data:all}));
+    else localStorage.removeItem(HAVEN_ACCOUNT_ADDR_KEY);
+  }catch{ havenAddrRestore(HAVEN_ACCOUNT_ADDR_KEY, prevB); havenAddrPending = true; return false; }
+  try{ localStorage.removeItem("haven_addresses"); localStorage.removeItem(HAVEN_ADDR_OWNER_KEY); }
+  catch{ havenAddrRestore("haven_addresses", raw); havenAddrRestore(HAVEN_ADDR_OWNER_KEY, prevOwner); havenAddrPending = true; return false; }
+  return true;
+}
+// The signed-in account's list comes out of its bucket and becomes the
+// visible list. Returns the list to show. Called only once the previous
+// owner's list has moved (or there was none).
+function havenClaimAddresses(uid){
+  const all = {...havenReadAccountAddrs()};
+  const k = havenAcctKey(uid);
+  let list = Array.isArray(all[k]) ? all[k] : [];
+  if(havenAddrPending || !uid){
+    // Storage full: the account's list is read where it still is (its own
+    // key, left untouched when the move was refused). Memory only.
+    if(uid && havenSameId(havenReadAddrOwnerStored(), uid)){ try{ list = havenRawData(localStorage.getItem("haven_addresses")); }catch{} }
+    havenAddrMemoryList = list;
+    return list;
+  }
+  havenAddrMemoryList = list;
+  let prevA = null, prevOwner = null, prevB = null;
+  try{ prevA = localStorage.getItem("haven_addresses"); prevOwner = localStorage.getItem(HAVEN_ADDR_OWNER_KEY); prevB = localStorage.getItem(HAVEN_ACCOUNT_ADDR_KEY); }catch{ havenAddrPending = true; return list; }
+  if(prevA!=null && !havenSameId(prevOwner, uid)){ havenAddrPending = true; return list; } // never overwrite another list
+  delete all[k];
+  // The visible list and its owner are written first; the bucket entry is
+  // dropped only after both exist. If that last write is refused the bucket
+  // keeps a stale copy (replaced at the next sign-out); nothing is lost.
+  try{
+    localStorage.setItem("haven_addresses", JSON.stringify({__v:1, data:list}));
+    localStorage.setItem(HAVEN_ADDR_OWNER_KEY, String(uid));
+  }catch{
+    havenAddrRestore("haven_addresses", prevA); havenAddrRestore(HAVEN_ADDR_OWNER_KEY, prevOwner);
+    havenAddrPending = true; return list;
+  }
+  try{
+    if(Object.keys(all).length) localStorage.setItem(HAVEN_ACCOUNT_ADDR_KEY, JSON.stringify({__v:1, data:all}));
+    else localStorage.removeItem(HAVEN_ACCOUNT_ADDR_KEY);
+  }catch{ havenAddrRestore(HAVEN_ACCOUNT_ADDR_KEY, prevB); }
+  return list;
+}
+// Which stored list the addresses loader may show (backend configured).
+function havenAddressesVisible(v){
+  if(havenAddrPending) return havenAddrMemoryList;
+  const uid = havenJobsAccountId();
+  return uid && havenSameId(havenReadAddrOwnerStored(), uid) ? v : [];
+}
+// True when the visible list may be saved: it is the signed-in account's.
+function havenAddressesMaySave(){
+  if(typeof getSupabaseConfig!=="function" || !getSupabaseConfig()) return true;
+  if(havenAddrPending) return false;
+  const uid = havenJobsAccountId();
+  return !!uid && havenSameId(havenReadAddrOwnerStored(), uid);
+}
+// Once per app mount, before the addresses loader.
+function havenBootAddresses(){
+  havenAddrPending = false;
+  havenAddrMemoryList = [];
+  if(typeof getSupabaseConfig!=="function" || !getSupabaseConfig()) return;
+  const owner = havenReadAddrOwnerStored();
+  const uid = havenJobsAccountId();
+  if(!owner) havenSetAsideSharedAddresses();
+  else if(!havenSameId(owner, uid)) havenStashAddresses(owner);
+  if(uid && !havenSameId(havenReadAddrOwnerStored(), uid)) havenClaimAddresses(uid);
+}
 // Once per app mount, before the jobs and notifications loaders: with a
 // backend configured and no owner in storage, set the ownerless store aside.
 function havenBootOwnerlessStore(){
   havenLegacyPending = false;
   havenLegacyMemoryOwner = "";
+  havenHiddenNotifIds = new Set();
   if(typeof getSupabaseConfig!=="function" || !getSupabaseConfig()) return;
   let owner = "";
   try{ owner = String(localStorage.getItem(HAVEN_JOBS_OWNER_KEY)||"").trim(); }catch{}
   if(!owner){ havenSetAsideOwnerlessStore(); return; }
   havenSetAsideLocalOnly(owner, havenReadStoredJobsAnyOwner());
+  havenSetAsideUnlinkedNotifs(owner);
   // Opened by someone else (or signed out): the owner's cache is moved to
   // its per-account store before any loader reads it.
   const uid = havenJobsAccountId();
@@ -2630,6 +2828,7 @@ function havenOwnPhoneOnlyShown(stored, cache, takenIds){
   const shown = [];
   byId.forEach((e,k)=>{
     const d = havenPhoneOnlyForDisplay(e, curLocal.find(j=>String(j.id)===k));
+    d.localSourceId = e.id; // the stored id (its notifications link by it)
     while(used.has(d.id)) d.id += 1;
     used.add(d.id);
     shown.push(d);
@@ -2956,7 +3155,7 @@ function App(){
   const [cprice,setCprice] = useState("");
   // QA #87 v4: a master (ownerless) store is set aside before the jobs and
   // notifications loaders read it (see HAVEN_JOBS_LEGACY_KEY).
-  useState(()=>{ havenBootOwnerlessStore(); return null; });
+  useState(()=>{ havenBootOwnerlessStore(); havenBootAddresses(); return null; });
   const [jobsState,setJobs] = usePersistedState("haven_jobs",[],{
     version:1,
     persist:()=>!havenLegacyPending,
@@ -3060,7 +3259,7 @@ function App(){
     // QA #87 v4: notifications in an ownerless (master) store belong to no
     // known account; they are set aside, never shown here (see
     // havenBootOwnerlessStore), and restored only with a claimed job.
-    validate:v=>!Array.isArray(v)?null:(getSupabaseConfig()&&!havenReadJobsOwner())?[]:v.filter(n=>n&&typeof n==="object"&&typeof n.id!=="undefined"&&typeof n.createdAt==="number"),
+    validate:v=>!Array.isArray(v)?null:(getSupabaseConfig()&&!havenReadJobsOwner())?[]:v.filter(n=>n&&typeof n==="object"&&typeof n.id!=="undefined"&&typeof n.createdAt==="number"&&!havenHiddenNotifIds.has(String(n.id))),
   });
   const [lastDeletedNotif,setLastDeletedNotif]=useState(null);
   const [showUndoToast,setShowUndoToast]=useState(false);
@@ -3136,6 +3335,8 @@ function App(){
     // Phase 1B B4: the emptied cache still belongs to this account; its
     // bookings load again from the backend.
     if(getSupabaseConfig()){ havenWriteJobsOwner(havenAccountId); if(havenAccountId) void hydrateMyJobs(); }
+    // QA #87 v7 (a): the emptied list belongs to the signed-in account.
+    if(getSupabaseConfig()&&havenAccountId) havenClaimAddresses(havenAccountId);
     setAddresses(DEFAULT_ADDRESSES.map(a=>({...a})));
     setCards(DEFAULT_CARDS.map(c=>({...c})));
     setProfile({name:"Jane Doe",bio:"",photo:null,accountCreatedAt:Date.now()});
@@ -3508,9 +3709,7 @@ function App(){
   // isPrimary:true; that entry IS "My Home" (no separate home/draftHome
   // state exists anymore — My Home reads/writes this same array so the two
   // screens can never drift out of sync with each other).
-  const [addresses,setAddresses]=usePersistedState("haven_addresses",DEFAULT_ADDRESSES,{
-    version:1,
-    validate:v=>{
+  const addrValidate=(v)=>{
       if(!Array.isArray(v))return null;
       const seen=new Set();
       const cleaned=v
@@ -3545,7 +3744,13 @@ function App(){
         cleaned[0].isPrimary=true;
       }
       return cleaned;
-    },
+  };
+  // QA #87 v7 (a): with a backend configured the list is the signed-in
+  // account's (see havenBootAddresses); it is saved only while it is.
+  const [addresses,setAddresses]=usePersistedState("haven_addresses",()=>(getSupabaseConfig()&&havenAddrPending)?(addrValidate(havenAddrMemoryList)||[]):DEFAULT_ADDRESSES,{
+    version:1,
+    persist:()=>havenAddressesMaySave(),
+    validate:v=>addrValidate(getSupabaseConfig()?havenAddressesVisible(v):v),
   });
   const [expandedAddr,setExpandedAddr]=useState(null);
   const [confirmDeleteAddrId,setConfirmDeleteAddrId]=useState(null);
@@ -3794,7 +3999,11 @@ function App(){
   const effectiveTaskPrice = currentTask ? (currentTask.propertyScoped ? cleaningPricing.price : currentTask.p) : null;
   const total = (currentTask&&effectiveTaskPrice!=null) ? effectiveTaskPrice+surge+(emergency?EMERGENCY_FEE:0) : 0;
 
-  const allJobs   = jobs.filter(j=>j.status!=="cancelled").slice().reverse();
+  // QA #87 v7 (b): phone-only bookings never reached Haven, so they are not
+  // counted or listed with live bookings (All / Active / Done, the Bookings
+  // tab dot); they have their own "On this phone" section.
+  const allJobs   = jobs.filter(j=>j.status!=="cancelled"&&!havenIsPhoneOnly(j)).slice().reverse();
+  const phoneOnlyJobs = jobs.filter(j=>havenIsPhoneOnly(j)).slice().reverse();
   const shownJobs = allJobs.filter(j=>{
     if(bFilter==="active") return j.status!=="complete";
     if(bFilter==="done")   return j.status==="complete";
@@ -3880,11 +4089,15 @@ function App(){
       if(TERMINAL_STATUSES.has(j.status)||j.status==="cancelled") return;
       completedNow.push({id:j.id, proName:(j.pro&&j.pro.n)||"Your pro"});
     });
-    const legacyJobs=havenAccountFor(uid).jobs.concat(havenReadLegacyJobs());
-    const ownPhoneOnly=(havenReadLocalOnly().owners||{})[havenAcctKey(uid)]||[];
+    const legacyJobs=havenAccountForSession(uid).jobs.concat(havenReadLegacyJobs());
+    const ownPhoneOnly=havenOwnPhoneOnlyStored(uid);
     legacyReadRef.current={uid, rows:rowByKey};
     setJobs(list=>havenReconcileJobsWithBackend(list, result.rows, startStatus, labels, legacyJobs));
-    setPhoneOnlyShown(havenOwnPhoneOnlyShown(ownPhoneOnly, jobsCacheRef.current, (jobsCacheRef.current||[]).filter(j=>j&&j.backendJobId).map(j=>j.id)));
+    // Ids a shown phone-only copy must not take: cached backend jobs and the
+    // jobs this read builds (their id is the posting time).
+    const takenIds=(jobsCacheRef.current||[]).filter(j=>j&&j.backendJobId).map(j=>j.id)
+      .concat(result.rows.map(r=>havenBackendTime(r.posted_at)).filter(t=>t!=null));
+    setPhoneOnlyShown(havenOwnPhoneOnlyShown(ownPhoneOnly, jobsCacheRef.current, takenIds));
     setJobsVerifiedFor(uid);
     setBookingsLoad("ok");
     completedNow.forEach(({id,proName})=>handleJobTransition(id,"complete",proName));
@@ -3910,11 +4123,11 @@ function App(){
     if(!havenJobsCacheIsCurrentAccount()) return;
     const legacy=havenReadLegacyJobs();
     const legacyNotifs=havenReadLegacyNotifs();
-    const acct=havenAccountFor(uid);
+    const acct=havenAccountForSession(uid);
     if(!legacy.length && !legacyNotifs.length && !acct.jobs.length && !acct.notifications.length) return;
     const saved=new Map(), savedLocal=new Map();
     (pendingNow ? jobsState : havenReadStoredJobsAnyOwner()).forEach(j=>{ if(j&&j.backendJobId) saved.set(havenBackendKey(j.backendJobId), j); });
-    phoneOnlyShown.forEach(j=>{ if(j&&j.id!=null) savedLocal.set(j.id, j); });
+    phoneOnlyShown.forEach(j=>{ if(j&&j.id!=null) savedLocal.set(j.localSourceId!=null ? j.localSourceId : j.id, j); });
     // This account's stored details and notifications: restored onto the jobs
     // its read returned (or its phone-only bookings), released once saved.
     if(acct.jobs.length || acct.notifications.length){
@@ -3928,7 +4141,9 @@ function App(){
         keepN.push(n);
         const {accountBackendJobId, accountLocalJobId, ...rest}=n;
         const dest=rest.destination&&typeof rest.destination==="object"&&rest.destination.jobId!=null?{...rest.destination, jobId:job.id}:rest.destination;
-        toShowA.push({...rest, jobId:job.id, ...(dest!==undefined?{destination:dest}:{})});
+        // A phone-only booking's notification keeps its stored id, so it
+        // links again at the next sign-out whatever id the display copy has.
+        toShowA.push({...rest, jobId:job.id, ...(bk?{}:{localSourceJobId:n.accountLocalJobId}), ...(dest!==undefined?{destination:dest}:{})});
       });
       acct.jobs.forEach(e=>{
         const k=havenBackendKey(e.backendJobId);
@@ -4002,6 +4217,9 @@ function App(){
       // The previous account's data moves to its per-account store (kept,
       // hidden, restored on its next sign-in); the screen and memory clear.
       if(owner) havenStashAccount(owner);
+      // QA #87 v7 (2): the previous account's last read (uid, backend rows)
+      // leaves memory too.
+      legacyReadRef.current=null;
       hydrateSeqRef.current++;
       jobsRef.current=HAVEN_NO_JOBS;
       jobsCacheRef.current=HAVEN_NO_JOBS;
@@ -4018,6 +4236,21 @@ function App(){
     }
     if(uid) hydrateMyJobs();
     else setBookingsLoad("idle");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[havenAccountId, havenSessionLoaded]);
+  // QA #87 v7 (a): saved addresses follow the account. On sign-out or a
+  // switch the previous account's list moves to its bucket and leaves the
+  // screen and memory at once; the new account's list comes back.
+  useEffect(()=>{
+    if(!getSupabaseConfig() || !havenSessionLoaded) return;
+    const uid=havenAccountId||"";
+    const owner=havenAddrPending ? "" : havenReadAddrOwnerStored();
+    if(!havenAddrPending && (uid ? havenSameId(owner, uid) : !owner)) return;
+    if(owner) havenStashAddresses(owner);
+    setExpandedAddr(null); setConfirmDeleteAddrId(null); setEditingAddressId(null);
+    setDraftAddress(emptyDraftAddress); setAddressFormError("");
+    if(uid){ const list=havenClaimAddresses(uid); setAddresses(addrValidate(list)||[]); }
+    else { havenAddrMemoryList=[]; setAddresses([]); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   },[havenAccountId, havenSessionLoaded]);
 
@@ -5324,7 +5557,7 @@ function App(){
           : bookingsRetry}
       </div>
     );
-    if(allJobs.length===0) return(
+    if(allJobs.length===0&&phoneOnlyJobs.length===0) return(
       <div style={{flex:1,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:28,textAlign:"center",background:BG}}>
         <div style={{fontSize:52,marginBottom:16}}>📋</div>
         <div style={{fontWeight:800,fontSize:20,color:TX,marginBottom:8}}>No bookings yet</div>
@@ -5362,8 +5595,7 @@ function App(){
           const isPending=j.status==="posted";
           const isDone=TERMINAL_STATUSES.has(j.status);
           const isCancelPending=j.cancelStatus==="requested"&&!isDone;
-          const statusLabel=havenIsPhoneOnly(j)?HAVEN_DEVICE_ONLY_LABEL
-            : isCancelPending?"Pending Cancellation"
+          const statusLabel=isCancelPending?"Pending Cancellation"
             : isPending?"Waiting for pro"
             : isDone?(j.status==="complete"?"Completed":(j.status==="inspection_completed"?"Inspection visit completed":"Job ended — materials declined"))
             : (SI[j.status]?.label||"Active");
@@ -5403,6 +5635,29 @@ function App(){
             </div>
           );
         })}
+        {phoneOnlyJobs.length>0&&(
+          <div style={{marginTop:22}}>
+            <div style={{fontWeight:700,fontSize:13,color:TS,marginBottom:10}}>On this phone ({phoneOnlyJobs.length})</div>
+            {phoneOnlyJobs.map(j=>{
+              const jt=j.taskId?TASKS.find(t=>t.id===j.taskId):j.custom?{e:"🔧",n:j.custom.title,p:j.custom.price}:null;
+              const basePrice=j.taskId?(j.lockedPrice??(jt?jt.p:0)):(j.custom?.price||0);
+              return(
+                <div role="button" tabIndex={0} onKeyDown={keyActivate} key={"po-"+j.id} onClick={()=>{setVjid(j.id);setShowCancelConfirm(false);setShowCancelRequest(false);goTo("posted");}} style={{background:W,borderRadius:20,padding:18,border:`1px dashed ${BD}`,marginBottom:12,cursor:"pointer"}}>
+                  <div style={{display:"flex",gap:14,alignItems:"center",marginBottom:12}}>
+                    <div style={{width:50,height:50,borderRadius:25,background:BG,display:"flex",alignItems:"center",justifyContent:"center",fontSize:26,flexShrink:0}}>{jt?.e||"🔧"}</div>
+                    <div style={{flex:1}}>
+                      <div style={{fontWeight:700,fontSize:15,color:TX}}>{jt?.n||"Custom job"}</div>
+                      <div style={{fontSize:13,color:TS,marginTop:2}}>Not scheduled · ${basePrice}</div>
+                      {j.desc&&<div style={{fontSize:12,color:TM,marginTop:3,lineHeight:1.4,fontStyle:"italic"}}>"{j.desc.slice(0,55)}{j.desc.length>55?"…":""}"</div>}
+                    </div>
+                    <span style={{color:TM,fontSize:20,flexShrink:0}}>›</span>
+                  </div>
+                  <span style={{fontSize:12,fontWeight:700,color:TS,background:BG,padding:"5px 12px",borderRadius:20}}>{HAVEN_DEVICE_ONLY_LABEL}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   };
@@ -7480,11 +7735,11 @@ function App(){
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         <div style={{background:N,padding:"14px 20px 20px",flexShrink:0,display:"flex",justifyContent:"space-between",alignItems:"center"}}>
           <button onClick={goBookings} style={{background:"rgba(255,255,255,.12)",border:"none",color:ON,padding:"8px 16px",borderRadius:12,cursor:"pointer",fontSize:13,fontWeight:600,display:"inline-flex",alignItems:"center",gap:6}}>← Bookings</button>
-          <span style={{color:"rgba(255,255,255,.6)",fontSize:13,fontWeight:600}}>{postedArrived?"Arrived":"Pending"}</span>
+          <span style={{color:"rgba(255,255,255,.6)",fontSize:13,fontWeight:600}}>{havenIsPhoneOnly(vj)?"Not sent":postedArrived?"Arrived":"Pending"}</span>
         </div>
         <div className="sc" style={{flex:1,overflowY:"auto",padding:"0 20px 24px"}}>
           <div style={{textAlign:"center",padding:"28px 0 22px"}}>
-            <div style={{width:72,height:72,borderRadius:36,background:vj.emergency?"#FFF1EE":"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 16px",animation:"pulse 1.8s ease-in-out infinite"}}>{vj.emergency?"🚨":"📋"}</div>
+            <div style={{width:72,height:72,borderRadius:36,background:vj.emergency?"#FFF1EE":"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:36,margin:"0 auto 16px",animation:havenIsPhoneOnly(vj)?"none":"pulse 1.8s ease-in-out infinite"}}>{havenIsPhoneOnly(vj)?"📱":vj.emergency?"🚨":"📋"}</div>
             {vj.emergency&&<span style={{display:"inline-flex",alignItems:"center",gap:5,background:"#FFF1EE",color:"#C2410C",fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:20,marginBottom:10}}>Emergency priority</span>}
             <div style={{fontWeight:800,fontSize:22,color:TX,marginBottom:8}}>{havenIsPhoneOnly(vj)?HAVEN_DEVICE_ONLY_LABEL:postedArrived?SI.arrived.label:(vj.emergency?"Looking for a Pro (urgent)…":"Looking for a pro…")}</div>
             <div style={{fontSize:14,color:TS,lineHeight:1.6}}>{havenIsPhoneOnly(vj)?"This booking never reached Haven or a Pro. It is kept on this phone for your account only.":postedArrived?`${vjPname} ${SI.arrived.sub}`:(vj.emergency?"Your job is marked urgent for Pros near you. Arrival times aren't guaranteed. This screen updates as soon as one accepts.":"Pros near you can see your job. This screen updates as soon as one accepts.")}</div>
@@ -7494,7 +7749,7 @@ function App(){
               <div style={{width:52,height:52,borderRadius:26,background:"#FEF3C7",display:"flex",alignItems:"center",justifyContent:"center",fontSize:28,flexShrink:0}}>{vjTask?vjTask.e:"🔧"}</div>
               <div><div style={{fontWeight:700,fontSize:16,color:TX}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontWeight:800,fontSize:20,color:AMT,marginTop:2}}>${vjTotal}</div></div>
             </div>
-            {[["When",vj.reqWindow?(jobTimeConfirmed(vj)?"Confirmed":"Requested"):(vjTp?vjTp.label:"—")],["Window",vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.sub:"—")],["Photos",vj.photos?.length>0?`${vj.photos.length} added${havenLocalLabel(vj,"photos")?` · ${HAVEN_DEVICE_ONLY_LABEL}`:""}`:"None"]].map(([l,v])=>(
+            {[...(havenIsPhoneOnly(vj)?[["When","Not scheduled"]]:[["When",vj.reqWindow?(jobTimeConfirmed(vj)?"Confirmed":"Requested"):(vjTp?vjTp.label:"—")],["Window",vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.sub:"—")]]),["Photos",vj.photos?.length>0?`${vj.photos.length} added${havenLocalLabel(vj,"photos")?` · ${HAVEN_DEVICE_ONLY_LABEL}`:""}`:"None"]].map(([l,v])=>(
               <div key={l} style={{display:"flex",justifyContent:"space-between",marginBottom:9}}><span style={{color:TS,fontSize:13}}>{l}</span><span style={{fontWeight:600,fontSize:13,color:TX}}>{v}</span></div>
             ))}
             {vj.desc&&<div style={{marginTop:10,paddingTop:10,borderTop:`1px solid ${BD}`}}><div style={{fontSize:11,fontWeight:700,color:TM,marginBottom:4}}>DESCRIPTION</div><div style={{fontSize:13,color:TS,lineHeight:1.5,fontStyle:"italic"}}>"{vj.desc}"</div>{havenLocalLabel(vj,"desc")&&<div style={{fontSize:11,color:TM,marginTop:4,fontWeight:500}}>{HAVEN_DEVICE_ONLY_LABEL}</div>}</div>}

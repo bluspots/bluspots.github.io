@@ -401,7 +401,7 @@ function usePersistedState(key, initialValue, { version = 1, migrate = null, val
   }, [state]);
   return [state, setState];
 }
-const PERSISTED_KEYS = ["haven_theme", "haven_notifications", "haven_notif_prefs", "haven_jobs", "haven_addresses", "haven_cards", "haven_profile", "haven_draft", "haven_job_prefs", "haven_jobs_owner", "haven_jobs_unowned_legacy", "haven_notifications_unowned_legacy", "haven_jobs_local_only", "haven_account_device_data"];
+const PERSISTED_KEYS = ["haven_theme", "haven_notifications", "haven_notif_prefs", "haven_jobs", "haven_addresses", "haven_cards", "haven_profile", "haven_draft", "haven_job_prefs", "haven_jobs_owner", "haven_jobs_unowned_legacy", "haven_notifications_unowned_legacy", "haven_jobs_local_only", "haven_account_device_data", "haven_addresses_owner", "haven_account_addresses", "haven_addresses_unowned_legacy"];
 const INTENT_LIBRARY = [
   // Plumbing
   {
@@ -2458,9 +2458,7 @@ function havenMergeAccountEntry(old, e) {
   }
   return m;
 }
-function havenStashAccount(owner) {
-  if (!owner) return true;
-  if (havenLegacyPending) return false;
+function havenAccountPlan(owner) {
   let rawJobs = null, rawNotifs = null, prevStore = null, prevLocal = null;
   try {
     rawJobs = localStorage.getItem("haven_jobs");
@@ -2468,15 +2466,12 @@ function havenStashAccount(owner) {
     prevStore = localStorage.getItem(HAVEN_ACCOUNT_STORE_KEY);
     prevLocal = localStorage.getItem(HAVEN_LOCAL_ONLY_KEY);
   } catch {
-    havenLegacyMemoryOwner = owner;
-    havenLegacyPending = true;
-    return false;
+    return null;
   }
   const jobsIn = havenRawData(rawJobs).filter((j) => j && typeof j === "object");
   const notifsIn = havenRawData(rawNotifs);
   const isJobNotif = (n) => !!(n && typeof n === "object" && n.jobId != null);
   const jobNotifs = notifsIn.filter(isJobNotif);
-  if (!jobsIn.length && !jobNotifs.length) return true;
   const acct = havenAccountFor(owner);
   const byKey = new Map(acct.jobs.map((e) => [havenBackendKey(e.backendJobId), e]));
   jobsIn.forEach((j) => {
@@ -2490,11 +2485,14 @@ function havenStashAccount(owner) {
     if (havenBackendKey(j.backendJobId)) backendIdOf.set(j.id, String(j.backendJobId).trim());
     else localIds.add(j.id);
   });
+  const bucket = ((havenReadLocalOnly().owners || {})[havenAcctKey(owner)] || []).filter(havenIsLocalOnlyJob);
+  bucket.forEach((e) => localIds.add(e.id));
   const nById = new Map(acct.notifications.map((n) => [String(n.id), n]));
   jobNotifs.forEach((n) => {
     const t = { ...n };
     const o = nById.get(String(n.id));
-    if (backendIdOf.has(n.jobId)) t.accountBackendJobId = backendIdOf.get(n.jobId);
+    if (n.localSourceJobId != null && localIds.has(n.localSourceJobId)) t.accountLocalJobId = n.localSourceJobId;
+    else if (backendIdOf.has(n.jobId)) t.accountBackendJobId = backendIdOf.get(n.jobId);
     else if (localIds.has(n.jobId)) t.accountLocalJobId = n.jobId;
     else if (o) {
       if (o.accountBackendJobId) t.accountBackendJobId = o.accountBackendJobId;
@@ -2502,9 +2500,35 @@ function havenStashAccount(owner) {
     }
     nById.set(String(n.id), t);
   });
+  const haveLocal = new Set(bucket.map((e) => String(e.id)));
+  const localBucket = bucket.concat(jobsIn.filter(havenIsLocalOnlyJob).filter((j) => !haveLocal.has(String(j.id))).map(havenWithoutPayment));
+  return {
+    rawJobs,
+    rawNotifs,
+    prevStore,
+    prevLocal,
+    jobsIn,
+    notifsIn,
+    isJobNotif,
+    jobNotifs,
+    acctNext: { jobs: Array.from(byKey.values()), notifications: Array.from(nById.values()) },
+    localBucket
+  };
+}
+function havenStashAccount(owner) {
+  if (!owner) return true;
+  if (havenLegacyPending) return false;
+  const plan = havenAccountPlan(owner);
+  if (!plan) {
+    havenLegacyMemoryOwner = owner;
+    havenLegacyPending = true;
+    return false;
+  }
+  const { rawJobs, rawNotifs, prevStore, prevLocal, jobsIn, notifsIn, isJobNotif, jobNotifs } = plan;
+  if (!jobsIn.length && !jobNotifs.length) return true;
   let storeNext, localNext;
   try {
-    storeNext = havenAccountStoreWith(owner, { jobs: Array.from(byKey.values()), notifications: Array.from(nById.values()) });
+    storeNext = havenAccountStoreWith(owner, plan.acctNext);
     localNext = havenLocalOnlyMerged(owner, jobsIn);
   } catch {
     havenLegacyMemoryOwner = owner;
@@ -2536,6 +2560,25 @@ function havenStashAccount(owner) {
     return false;
   }
   return true;
+}
+function havenPendingCacheOwnedBy(uid) {
+  if (!havenLegacyPending || !uid) return null;
+  let o = "";
+  try {
+    o = String(localStorage.getItem(HAVEN_JOBS_OWNER_KEY) || "").trim();
+  } catch {
+    return null;
+  }
+  if (!o || o.toLowerCase() !== String(uid).trim().toLowerCase()) return null;
+  return havenAccountPlan(o);
+}
+function havenAccountForSession(uid) {
+  const p = havenPendingCacheOwnedBy(uid);
+  return p ? p.acctNext : havenAccountFor(uid);
+}
+function havenOwnPhoneOnlyStored(uid) {
+  const p = havenPendingCacheOwnedBy(uid);
+  return p ? p.localBucket : (havenReadLocalOnly().owners || {})[havenAcctKey(uid)] || [];
 }
 function havenPhoneOnlyForDisplay(e, cur) {
   const base = makeJob(e);
@@ -2702,9 +2745,212 @@ function havenApplyLegacyDetails(job, row, entry) {
   j.restoredDeviceOnly = Array.from(marks);
   return j;
 }
+let havenHiddenNotifIds = /* @__PURE__ */ new Set();
+function havenSetAsideUnlinkedNotifs(owner) {
+  let rawNotifs = null, prevLegacy = null;
+  try {
+    rawNotifs = localStorage.getItem("haven_notifications");
+    prevLegacy = localStorage.getItem(HAVEN_NOTIFS_LEGACY_KEY);
+  } catch {
+    return;
+  }
+  const notifsIn = havenRawData(rawNotifs);
+  const jobIds = new Set(havenReadStoredJobsAnyOwner().filter((j) => j && typeof j === "object").map((j) => j.id));
+  const bucketIds = new Set(((havenReadLocalOnly().owners || {})[havenAcctKey(owner)] || []).filter(havenIsLocalOnlyJob).map((e) => e.id));
+  const linked = (n) => n.jobId == null || jobIds.has(n.jobId) || bucketIds.has(n.jobId) || n.localSourceJobId != null && bucketIds.has(n.localSourceJobId);
+  const unlinked = notifsIn.filter((n) => n && typeof n === "object" && typeof n.id !== "undefined" && !linked(n));
+  if (!unlinked.length) return;
+  const hidden = new Set(unlinked.map((n) => String(n.id)));
+  hidden.forEach((id) => havenHiddenNotifIds.add(id));
+  const masterById = new Map(havenReadLegacyJobs().filter((e) => e.id != null).map((e) => [e.id, e]));
+  const old = havenReadLegacyNotifs();
+  const have = new Set(old.map((n) => String(n.id)));
+  const fresh = unlinked.filter((n) => !have.has(String(n.id))).map((n) => {
+    const e = masterById.get(n.jobId);
+    return e && !n.legacyBackendJobId ? { ...n, legacyBackendJobId: String(e.backendJobId).trim() } : n;
+  });
+  try {
+    localStorage.setItem("haven_notifications", JSON.stringify({ __v: 1, data: notifsIn.filter((n) => !(n && typeof n === "object" && hidden.has(String(n.id)))) }));
+    if (fresh.length && !havenWriteLegacyList(HAVEN_NOTIFS_LEGACY_KEY, old.concat(fresh))) throw new Error("quota");
+  } catch {
+    try {
+      if (rawNotifs == null) localStorage.removeItem("haven_notifications");
+      else localStorage.setItem("haven_notifications", rawNotifs);
+    } catch {
+    }
+    try {
+      if (prevLegacy == null) localStorage.removeItem(HAVEN_NOTIFS_LEGACY_KEY);
+      else localStorage.setItem(HAVEN_NOTIFS_LEGACY_KEY, prevLegacy);
+    } catch {
+    }
+    if (!havenLegacyPending) {
+      havenLegacyMemoryOwner = owner;
+      havenLegacyPending = true;
+    }
+  }
+}
+const HAVEN_ADDR_OWNER_KEY = "haven_addresses_owner";
+const HAVEN_ACCOUNT_ADDR_KEY = "haven_account_addresses";
+const HAVEN_ADDR_LEGACY_KEY = "haven_addresses_unowned_legacy";
+let havenAddrPending = false;
+let havenAddrMemoryList = [];
+function havenReadAddrOwnerStored() {
+  try {
+    return String(localStorage.getItem(HAVEN_ADDR_OWNER_KEY) || "").trim();
+  } catch {
+    return "";
+  }
+}
+function havenReadAccountAddrs() {
+  try {
+    const p = JSON.parse(localStorage.getItem(HAVEN_ACCOUNT_ADDR_KEY) || "null");
+    return p && typeof p === "object" && p.data && typeof p.data === "object" && !Array.isArray(p.data) ? p.data : {};
+  } catch {
+    return {};
+  }
+}
+const havenSameId = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+function havenAddrRestore(k, v) {
+  try {
+    if (v == null) localStorage.removeItem(k);
+    else localStorage.setItem(k, v);
+  } catch {
+  }
+}
+function havenSetAsideSharedAddresses() {
+  let raw = null, prev = null;
+  try {
+    raw = localStorage.getItem("haven_addresses");
+    prev = localStorage.getItem(HAVEN_ADDR_LEGACY_KEY);
+  } catch {
+    havenAddrPending = true;
+    return;
+  }
+  if (raw == null) return;
+  const list = havenRawData(raw);
+  if (!list.length) return;
+  const old = havenRawData(prev);
+  const have = new Set(old.map((a) => JSON.stringify(a)));
+  const next = old.concat(list.filter((a) => !have.has(JSON.stringify(a))));
+  try {
+    localStorage.setItem(HAVEN_ADDR_LEGACY_KEY, JSON.stringify({ __v: 1, data: next }));
+  } catch {
+    havenAddrRestore(HAVEN_ADDR_LEGACY_KEY, prev);
+    havenAddrPending = true;
+    return;
+  }
+  try {
+    localStorage.removeItem("haven_addresses");
+  } catch {
+    havenAddrPending = true;
+  }
+}
+function havenStashAddresses(owner) {
+  if (!owner || havenAddrPending) return false;
+  let raw = null, prevOwner = null, prevB = null;
+  try {
+    raw = localStorage.getItem("haven_addresses");
+    prevOwner = localStorage.getItem(HAVEN_ADDR_OWNER_KEY);
+    prevB = localStorage.getItem(HAVEN_ACCOUNT_ADDR_KEY);
+  } catch {
+    havenAddrPending = true;
+    return false;
+  }
+  const list = havenRawData(raw);
+  const all = { ...havenReadAccountAddrs() };
+  const k = havenAcctKey(owner);
+  if (list.length) all[k] = list;
+  else delete all[k];
+  try {
+    if (Object.keys(all).length) localStorage.setItem(HAVEN_ACCOUNT_ADDR_KEY, JSON.stringify({ __v: 1, data: all }));
+    else localStorage.removeItem(HAVEN_ACCOUNT_ADDR_KEY);
+  } catch {
+    havenAddrRestore(HAVEN_ACCOUNT_ADDR_KEY, prevB);
+    havenAddrPending = true;
+    return false;
+  }
+  try {
+    localStorage.removeItem("haven_addresses");
+    localStorage.removeItem(HAVEN_ADDR_OWNER_KEY);
+  } catch {
+    havenAddrRestore("haven_addresses", raw);
+    havenAddrRestore(HAVEN_ADDR_OWNER_KEY, prevOwner);
+    havenAddrPending = true;
+    return false;
+  }
+  return true;
+}
+function havenClaimAddresses(uid) {
+  const all = { ...havenReadAccountAddrs() };
+  const k = havenAcctKey(uid);
+  let list = Array.isArray(all[k]) ? all[k] : [];
+  if (havenAddrPending || !uid) {
+    if (uid && havenSameId(havenReadAddrOwnerStored(), uid)) {
+      try {
+        list = havenRawData(localStorage.getItem("haven_addresses"));
+      } catch {
+      }
+    }
+    havenAddrMemoryList = list;
+    return list;
+  }
+  havenAddrMemoryList = list;
+  let prevA = null, prevOwner = null, prevB = null;
+  try {
+    prevA = localStorage.getItem("haven_addresses");
+    prevOwner = localStorage.getItem(HAVEN_ADDR_OWNER_KEY);
+    prevB = localStorage.getItem(HAVEN_ACCOUNT_ADDR_KEY);
+  } catch {
+    havenAddrPending = true;
+    return list;
+  }
+  if (prevA != null && !havenSameId(prevOwner, uid)) {
+    havenAddrPending = true;
+    return list;
+  }
+  delete all[k];
+  try {
+    localStorage.setItem("haven_addresses", JSON.stringify({ __v: 1, data: list }));
+    localStorage.setItem(HAVEN_ADDR_OWNER_KEY, String(uid));
+  } catch {
+    havenAddrRestore("haven_addresses", prevA);
+    havenAddrRestore(HAVEN_ADDR_OWNER_KEY, prevOwner);
+    havenAddrPending = true;
+    return list;
+  }
+  try {
+    if (Object.keys(all).length) localStorage.setItem(HAVEN_ACCOUNT_ADDR_KEY, JSON.stringify({ __v: 1, data: all }));
+    else localStorage.removeItem(HAVEN_ACCOUNT_ADDR_KEY);
+  } catch {
+    havenAddrRestore(HAVEN_ACCOUNT_ADDR_KEY, prevB);
+  }
+  return list;
+}
+function havenAddressesVisible(v) {
+  if (havenAddrPending) return havenAddrMemoryList;
+  const uid = havenJobsAccountId();
+  return uid && havenSameId(havenReadAddrOwnerStored(), uid) ? v : [];
+}
+function havenAddressesMaySave() {
+  if (typeof getSupabaseConfig !== "function" || !getSupabaseConfig()) return true;
+  if (havenAddrPending) return false;
+  const uid = havenJobsAccountId();
+  return !!uid && havenSameId(havenReadAddrOwnerStored(), uid);
+}
+function havenBootAddresses() {
+  havenAddrPending = false;
+  havenAddrMemoryList = [];
+  if (typeof getSupabaseConfig !== "function" || !getSupabaseConfig()) return;
+  const owner = havenReadAddrOwnerStored();
+  const uid = havenJobsAccountId();
+  if (!owner) havenSetAsideSharedAddresses();
+  else if (!havenSameId(owner, uid)) havenStashAddresses(owner);
+  if (uid && !havenSameId(havenReadAddrOwnerStored(), uid)) havenClaimAddresses(uid);
+}
 function havenBootOwnerlessStore() {
   havenLegacyPending = false;
   havenLegacyMemoryOwner = "";
+  havenHiddenNotifIds = /* @__PURE__ */ new Set();
   if (typeof getSupabaseConfig !== "function" || !getSupabaseConfig()) return;
   let owner = "";
   try {
@@ -2716,6 +2962,7 @@ function havenBootOwnerlessStore() {
     return;
   }
   havenSetAsideLocalOnly(owner, havenReadStoredJobsAnyOwner());
+  havenSetAsideUnlinkedNotifs(owner);
   const uid = havenJobsAccountId();
   if (!uid || uid.toLowerCase() !== owner.toLowerCase()) havenStashAccount(owner);
 }
@@ -2861,6 +3108,7 @@ function havenOwnPhoneOnlyShown(stored, cache, takenIds) {
   const shown = [];
   byId.forEach((e, k) => {
     const d = havenPhoneOnlyForDisplay(e, curLocal.find((j) => String(j.id) === k));
+    d.localSourceId = e.id;
     while (used.has(d.id)) d.id += 1;
     used.add(d.id);
     shown.push(d);
@@ -3144,6 +3392,7 @@ function App() {
   const [cprice, setCprice] = useState("");
   useState(() => {
     havenBootOwnerlessStore();
+    havenBootAddresses();
     return null;
   });
   const [jobsState, setJobs] = usePersistedState("haven_jobs", [], {
@@ -3232,7 +3481,7 @@ function App() {
     // QA #87 v4: notifications in an ownerless (master) store belong to no
     // known account; they are set aside, never shown here (see
     // havenBootOwnerlessStore), and restored only with a claimed job.
-    validate: (v) => !Array.isArray(v) ? null : getSupabaseConfig() && !havenReadJobsOwner() ? [] : v.filter((n) => n && typeof n === "object" && typeof n.id !== "undefined" && typeof n.createdAt === "number")
+    validate: (v) => !Array.isArray(v) ? null : getSupabaseConfig() && !havenReadJobsOwner() ? [] : v.filter((n) => n && typeof n === "object" && typeof n.id !== "undefined" && typeof n.createdAt === "number" && !havenHiddenNotifIds.has(String(n.id)))
   });
   const [lastDeletedNotif, setLastDeletedNotif] = useState(null);
   const [showUndoToast, setShowUndoToast] = useState(false);
@@ -3302,6 +3551,7 @@ function App() {
       havenWriteJobsOwner(havenAccountId);
       if (havenAccountId) void hydrateMyJobs();
     }
+    if (getSupabaseConfig() && havenAccountId) havenClaimAddresses(havenAccountId);
     setAddresses(DEFAULT_ADDRESSES.map((a) => ({ ...a })));
     setCards(DEFAULT_CARDS.map((c) => ({ ...c })));
     setProfile({ name: "Jane Doe", bio: "", photo: null, accountCreatedAt: Date.now() });
@@ -3718,54 +3968,56 @@ function App() {
     }
   });
   const [expandedCard, setExpandedCard] = useState(null);
-  const [addresses, setAddresses] = usePersistedState("haven_addresses", DEFAULT_ADDRESSES, {
-    version: 1,
-    validate: (v) => {
-      if (!Array.isArray(v)) return null;
-      const seen = /* @__PURE__ */ new Set();
-      const cleaned = v.filter((a) => a && typeof a === "object" && typeof a.id !== "undefined").filter((a) => {
-        if (seen.has(a.id)) return false;
-        seen.add(a.id);
-        return true;
-      }).map((a) => ({
-        id: a.id,
-        label: typeof a.label === "string" && a.label ? a.label : "Address",
-        isPrimary: !!a.isPrimary,
-        street: a.street || "",
-        unit: a.unit || "",
-        city: a.city || "",
-        state: a.state || "",
-        zip: a.zip || "",
-        accessNotes: a.accessNotes || "",
-        propertyType: a.propertyType || "",
-        yearBuilt: a.yearBuilt || "",
-        sqft: a.sqft || "",
-        beds: a.beds || "",
-        baths: a.baths || "",
-        // Map location confirmed by the customer (Mapbox, permanent lookup). Kept only if well-formed.
-        geo: a.geo && typeof a.geo === "object" && Number.isFinite(a.geo.lat) && Number.isFinite(a.geo.lng) ? { lat: a.geo.lat, lng: a.geo.lng, accuracy: typeof a.geo.accuracy === "string" ? a.geo.accuracy : "unknown", mapboxId: a.geo.mapboxId || null, source: "mapbox", confirmedAt: a.geo.confirmedAt || null } : null
-      }));
-      const storedJobs = jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs(), havenReadLocalOnlyAll(), havenReadAccountJobsAll());
-      const kept = cleaned.filter((a) => !isUntouchedSampleAddress(a, storedJobs));
-      if (kept.length !== cleaned.length) {
-        cleaned.length = 0;
-        cleaned.push(...kept);
-      }
-      if (cleaned.length === 0) return cleaned;
-      const primaries = cleaned.filter((a) => a.isPrimary);
-      if (primaries.length > 1) {
-        let kept2 = false;
-        cleaned.forEach((a) => {
-          if (a.isPrimary) {
-            if (kept2) a.isPrimary = false;
-            else kept2 = true;
-          }
-        });
-      } else if (primaries.length === 0) {
-        cleaned[0].isPrimary = true;
-      }
-      return cleaned;
+  const addrValidate = (v) => {
+    if (!Array.isArray(v)) return null;
+    const seen = /* @__PURE__ */ new Set();
+    const cleaned = v.filter((a) => a && typeof a === "object" && typeof a.id !== "undefined").filter((a) => {
+      if (seen.has(a.id)) return false;
+      seen.add(a.id);
+      return true;
+    }).map((a) => ({
+      id: a.id,
+      label: typeof a.label === "string" && a.label ? a.label : "Address",
+      isPrimary: !!a.isPrimary,
+      street: a.street || "",
+      unit: a.unit || "",
+      city: a.city || "",
+      state: a.state || "",
+      zip: a.zip || "",
+      accessNotes: a.accessNotes || "",
+      propertyType: a.propertyType || "",
+      yearBuilt: a.yearBuilt || "",
+      sqft: a.sqft || "",
+      beds: a.beds || "",
+      baths: a.baths || "",
+      // Map location confirmed by the customer (Mapbox, permanent lookup). Kept only if well-formed.
+      geo: a.geo && typeof a.geo === "object" && Number.isFinite(a.geo.lat) && Number.isFinite(a.geo.lng) ? { lat: a.geo.lat, lng: a.geo.lng, accuracy: typeof a.geo.accuracy === "string" ? a.geo.accuracy : "unknown", mapboxId: a.geo.mapboxId || null, source: "mapbox", confirmedAt: a.geo.confirmedAt || null } : null
+    }));
+    const storedJobs = jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs(), havenReadLocalOnlyAll(), havenReadAccountJobsAll());
+    const kept = cleaned.filter((a) => !isUntouchedSampleAddress(a, storedJobs));
+    if (kept.length !== cleaned.length) {
+      cleaned.length = 0;
+      cleaned.push(...kept);
     }
+    if (cleaned.length === 0) return cleaned;
+    const primaries = cleaned.filter((a) => a.isPrimary);
+    if (primaries.length > 1) {
+      let kept2 = false;
+      cleaned.forEach((a) => {
+        if (a.isPrimary) {
+          if (kept2) a.isPrimary = false;
+          else kept2 = true;
+        }
+      });
+    } else if (primaries.length === 0) {
+      cleaned[0].isPrimary = true;
+    }
+    return cleaned;
+  };
+  const [addresses, setAddresses] = usePersistedState("haven_addresses", () => getSupabaseConfig() && havenAddrPending ? addrValidate(havenAddrMemoryList) || [] : DEFAULT_ADDRESSES, {
+    version: 1,
+    persist: () => havenAddressesMaySave(),
+    validate: (v) => addrValidate(getSupabaseConfig() ? havenAddressesVisible(v) : v)
   });
   const [expandedAddr, setExpandedAddr] = useState(null);
   const [confirmDeleteAddrId, setConfirmDeleteAddrId] = useState(null);
@@ -3977,7 +4229,8 @@ function App() {
   const cleaningPricing = currentTask?.propertyScoped ? calculateCleaningPrice(currentTask, selectedAddress) : null;
   const effectiveTaskPrice = currentTask ? currentTask.propertyScoped ? cleaningPricing.price : currentTask.p : null;
   const total = currentTask && effectiveTaskPrice != null ? effectiveTaskPrice + surge + (emergency ? EMERGENCY_FEE : 0) : 0;
-  const allJobs = jobs.filter((j) => j.status !== "cancelled").slice().reverse();
+  const allJobs = jobs.filter((j) => j.status !== "cancelled" && !havenIsPhoneOnly(j)).slice().reverse();
+  const phoneOnlyJobs = jobs.filter((j) => havenIsPhoneOnly(j)).slice().reverse();
   const shownJobs = allJobs.filter((j) => {
     if (bFilter === "active") return j.status !== "complete";
     if (bFilter === "done") return j.status === "complete";
@@ -4058,11 +4311,12 @@ function App() {
       if (TERMINAL_STATUSES.has(j.status) || j.status === "cancelled") return;
       completedNow.push({ id: j.id, proName: j.pro && j.pro.n || "Your pro" });
     });
-    const legacyJobs = havenAccountFor(uid).jobs.concat(havenReadLegacyJobs());
-    const ownPhoneOnly = (havenReadLocalOnly().owners || {})[havenAcctKey(uid)] || [];
+    const legacyJobs = havenAccountForSession(uid).jobs.concat(havenReadLegacyJobs());
+    const ownPhoneOnly = havenOwnPhoneOnlyStored(uid);
     legacyReadRef.current = { uid, rows: rowByKey };
     setJobs((list) => havenReconcileJobsWithBackend(list, result.rows, startStatus, labels, legacyJobs));
-    setPhoneOnlyShown(havenOwnPhoneOnlyShown(ownPhoneOnly, jobsCacheRef.current, (jobsCacheRef.current || []).filter((j) => j && j.backendJobId).map((j) => j.id)));
+    const takenIds = (jobsCacheRef.current || []).filter((j) => j && j.backendJobId).map((j) => j.id).concat(result.rows.map((r) => havenBackendTime(r.posted_at)).filter((t) => t != null));
+    setPhoneOnlyShown(havenOwnPhoneOnlyShown(ownPhoneOnly, jobsCacheRef.current, takenIds));
     setJobsVerifiedFor(uid);
     setBookingsLoad("ok");
     completedNow.forEach(({ id, proName }) => handleJobTransition(id, "complete", proName));
@@ -4076,14 +4330,14 @@ function App() {
     if (!havenJobsCacheIsCurrentAccount()) return;
     const legacy = havenReadLegacyJobs();
     const legacyNotifs = havenReadLegacyNotifs();
-    const acct = havenAccountFor(uid);
+    const acct = havenAccountForSession(uid);
     if (!legacy.length && !legacyNotifs.length && !acct.jobs.length && !acct.notifications.length) return;
     const saved = /* @__PURE__ */ new Map(), savedLocal = /* @__PURE__ */ new Map();
     (pendingNow ? jobsState : havenReadStoredJobsAnyOwner()).forEach((j) => {
       if (j && j.backendJobId) saved.set(havenBackendKey(j.backendJobId), j);
     });
     phoneOnlyShown.forEach((j) => {
-      if (j && j.id != null) savedLocal.set(j.id, j);
+      if (j && j.id != null) savedLocal.set(j.localSourceId != null ? j.localSourceId : j.id, j);
     });
     if (acct.jobs.length || acct.notifications.length) {
       const savedNotifIdsA = pendingNow ? /* @__PURE__ */ new Set() : new Set(havenRawData((() => {
@@ -4105,7 +4359,7 @@ function App() {
         keepN.push(n);
         const { accountBackendJobId, accountLocalJobId, ...rest } = n;
         const dest = rest.destination && typeof rest.destination === "object" && rest.destination.jobId != null ? { ...rest.destination, jobId: job.id } : rest.destination;
-        toShowA.push({ ...rest, jobId: job.id, ...dest !== void 0 ? { destination: dest } : {} });
+        toShowA.push({ ...rest, jobId: job.id, ...bk ? {} : { localSourceJobId: n.accountLocalJobId }, ...dest !== void 0 ? { destination: dest } : {} });
       });
       acct.jobs.forEach((e) => {
         const k = havenBackendKey(e.backendJobId);
@@ -4186,6 +4440,7 @@ function App() {
     const sameOwner = uid ? !!owner && owner.toLowerCase() === uid.toLowerCase() : !owner;
     if (!sameOwner) {
       if (owner) havenStashAccount(owner);
+      legacyReadRef.current = null;
       hydrateSeqRef.current++;
       jobsRef.current = HAVEN_NO_JOBS;
       jobsCacheRef.current = HAVEN_NO_JOBS;
@@ -4202,6 +4457,25 @@ function App() {
     }
     if (uid) hydrateMyJobs();
     else setBookingsLoad("idle");
+  }, [havenAccountId, havenSessionLoaded]);
+  useEffect(() => {
+    if (!getSupabaseConfig() || !havenSessionLoaded) return;
+    const uid = havenAccountId || "";
+    const owner = havenAddrPending ? "" : havenReadAddrOwnerStored();
+    if (!havenAddrPending && (uid ? havenSameId(owner, uid) : !owner)) return;
+    if (owner) havenStashAddresses(owner);
+    setExpandedAddr(null);
+    setConfirmDeleteAddrId(null);
+    setEditingAddressId(null);
+    setDraftAddress(emptyDraftAddress);
+    setAddressFormError("");
+    if (uid) {
+      const list = havenClaimAddresses(uid);
+      setAddresses(addrValidate(list) || []);
+    } else {
+      havenAddrMemoryList = [];
+      setAddresses([]);
+    }
   }, [havenAccountId, havenSessionLoaded]);
   const isTerminalStatus = (s) => TERMINAL_STATUSES.has(s) || s === "cancelled";
   useEffect(() => {
@@ -5364,7 +5638,7 @@ function App() {
   const bookingsScreen = () => {
     const bookingsRetry = bookingsLoad === "error" && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginBottom: 12 } }, "Couldn't load your bookings. ", /* @__PURE__ */ React.createElement("button", { onClick: () => hydrateMyJobs(), style: { background: "none", border: "none", padding: 0, color: N, fontWeight: 700, fontSize: 13, cursor: "pointer", textDecoration: "underline" } }, "Retry"));
     if (allJobs.length === 0 && (bookingsLoad === "loading" || bookingsLoad === "error" || !jobsVerified)) return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", background: BG } }, bookingsLoad !== "error" ? /* @__PURE__ */ React.createElement("div", { style: { color: TS, fontSize: 14 } }, "Loading your bookings…") : bookingsRetry);
-    if (allJobs.length === 0) return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 52, marginBottom: 16 } }, "📋"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 20, color: TX, marginBottom: 8 } }, "No bookings yet"), /* @__PURE__ */ React.createElement("div", { style: { color: TS, fontSize: 14, lineHeight: 1.6, marginBottom: 24 } }, "Post a job and a pro will accept it. You'll track everything here."), /* @__PURE__ */ React.createElement("button", { onClick: () => goTab("home"), style: { background: N, color: ON, border: "none", padding: "14px 30px", borderRadius: 16, fontWeight: 700, fontSize: 15, cursor: "pointer" } }, "Browse services"));
+    if (allJobs.length === 0 && phoneOnlyJobs.length === 0) return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 28, textAlign: "center", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 52, marginBottom: 16 } }, "📋"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 20, color: TX, marginBottom: 8 } }, "No bookings yet"), /* @__PURE__ */ React.createElement("div", { style: { color: TS, fontSize: 14, lineHeight: 1.6, marginBottom: 24 } }, "Post a job and a pro will accept it. You'll track everything here."), /* @__PURE__ */ React.createElement("button", { onClick: () => goTab("home"), style: { background: N, color: ON, border: "none", padding: "14px 30px", borderRadius: 16, fontWeight: 700, fontSize: 15, cursor: "pointer" } }, "Browse services"));
     return /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", background: BG, padding: "20px 20px 100px" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 22, color: TX, marginBottom: 16 } }, "Bookings"), bookingsRetry, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8, marginBottom: 18 } }, [["all", `All (${allJobs.length})`], ["active", `Active (${activeCount})`], ["done", `Done (${doneCount})`]].map(([id, lb]) => {
       const a = bFilter === id;
       return /* @__PURE__ */ React.createElement("button", { key: id, "aria-pressed": a, onClick: () => setBFilter(id), style: { flex: 1, padding: "9px 0", borderRadius: 12, border: "none", fontWeight: a ? 700 : 500, background: a ? CHIP_ON : W, color: a ? ON : TS, fontSize: 13, cursor: "pointer", boxShadow: a ? CHIP_ON_RING || `0 2px 8px rgba(28,43,58,.18)` : `0 1px 3px rgba(0,0,0,.06)` } }, lb);
@@ -5377,7 +5651,7 @@ function App() {
       const isPending = j.status === "posted";
       const isDone = TERMINAL_STATUSES.has(j.status);
       const isCancelPending = j.cancelStatus === "requested" && !isDone;
-      const statusLabel = havenIsPhoneOnly(j) ? HAVEN_DEVICE_ONLY_LABEL : isCancelPending ? "Pending Cancellation" : isPending ? "Waiting for pro" : isDone ? j.status === "complete" ? "Completed" : j.status === "inspection_completed" ? "Inspection visit completed" : "Job ended — materials declined" : SI[j.status]?.label || "Active";
+      const statusLabel = isCancelPending ? "Pending Cancellation" : isPending ? "Waiting for pro" : isDone ? j.status === "complete" ? "Completed" : j.status === "inspection_completed" ? "Inspection visit completed" : "Job ended — materials declined" : SI[j.status]?.label || "Active";
       const statusColor = isCancelPending ? "#DC2626" : j.status === "materials_requested" ? "#92400E" : isPending ? AM : isDone ? SC : N;
       const statusBg = isCancelPending ? "#FEF2F2" : j.status === "materials_requested" ? "#FEF3C7" : isPending ? "#FEF3C7" : isDone ? SL : "#EEF2FF";
       return /* @__PURE__ */ React.createElement("div", { role: "button", tabIndex: 0, onKeyDown: keyActivate, key: j.id, onClick: () => {
@@ -5386,7 +5660,16 @@ function App() {
         setShowCancelRequest(false);
         goTo(isPending ? "posted" : "tracking");
       }, style: { background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)", marginBottom: 12, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 50, height: 50, borderRadius: 25, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 } }, jt?.e || "🔧"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: TX } }, jt?.n || "Custom job"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginTop: 2 } }, j.reqWindow ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, color: jobTimeConfirmed(j) ? SC : AMT } }, jobTimeConfirmed(j) ? "Confirmed" : "Requested"), " ", windowLabel(j.reqWindow)) : jtp ? jtp.label : "—", " · $", jTotal), j.desc && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TM, marginTop: 3, lineHeight: 1.4, fontStyle: "italic" } }, '"', j.desc.slice(0, 55), j.desc.length > 55 ? "…" : "", '"')), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 20, flexShrink: 0 } }, "›")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: statusColor, background: statusBg, padding: "5px 12px", borderRadius: 20 } }, statusLabel), j.emergency && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#C2410C", background: "#FFF1EE", padding: "4px 10px", borderRadius: 20 } }, "🚨 Emergency")), j.status === "materials_requested" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 800, color: ON, background: "#DC2626", padding: "2px 8px", borderRadius: 10 } }, "Action needed"), !isPending && j.pro && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: TS } }, "Pro: ", j.pro.n), isDone && !j.rated && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: AMT, fontWeight: 700 } }, "⭐ Rate now"), isDone && j.rated && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: SC, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 } }, starDisplay(j.stars, 11), " Reviewed", havenLocalLabel(j, "rating") ? ` · ${HAVEN_DEVICE_ONLY_LABEL}` : "")));
-    }));
+    }), phoneOnlyJobs.length > 0 && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 22 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 13, color: TS, marginBottom: 10 } }, "On this phone (", phoneOnlyJobs.length, ")"), phoneOnlyJobs.map((j) => {
+      const jt = j.taskId ? TASKS.find((t) => t.id === j.taskId) : j.custom ? { e: "🔧", n: j.custom.title, p: j.custom.price } : null;
+      const basePrice = j.taskId ? j.lockedPrice ?? (jt ? jt.p : 0) : j.custom?.price || 0;
+      return /* @__PURE__ */ React.createElement("div", { role: "button", tabIndex: 0, onKeyDown: keyActivate, key: "po-" + j.id, onClick: () => {
+        setVjid(j.id);
+        setShowCancelConfirm(false);
+        setShowCancelRequest(false);
+        goTo("posted");
+      }, style: { background: W, borderRadius: 20, padding: 18, border: `1px dashed ${BD}`, marginBottom: 12, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 50, height: 50, borderRadius: 25, background: BG, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 } }, jt?.e || "🔧"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: TX } }, jt?.n || "Custom job"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginTop: 2 } }, "Not scheduled · $", basePrice), j.desc && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TM, marginTop: 3, lineHeight: 1.4, fontStyle: "italic" } }, '"', j.desc.slice(0, 55), j.desc.length > 55 ? "…" : "", '"')), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 20, flexShrink: 0 } }, "›")), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: TS, background: BG, padding: "5px 12px", borderRadius: 20 } }, HAVEN_DEVICE_ONLY_LABEL));
+    })));
   };
   const profileScreen = () => /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: "20px 20px 100px", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 22, color: TX, marginBottom: 20 } }, "Profile"), /* @__PURE__ */ React.createElement("button", { onClick: openEditProfile, style: { width: "100%", textAlign: "left", font: "inherit", background: N, border: "none", borderRadius: 20, padding: 20, marginBottom: 16, display: "flex", gap: 14, alignItems: "center", cursor: "pointer" } }, /* @__PURE__ */ React.createElement(Avatar, { photo: profile.photo, size: 52, iconSize: 30, iconColor: W }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 16, color: ON } }, profileShownName || "Add your name"), /* @__PURE__ */ React.createElement("div", { style: { color: "rgba(255,255,255,.55)", fontSize: 13, marginTop: 2 } }, profile.bio || `Member since ${new Date(profile.accountCreatedAt).getFullYear()}`), havenAuth && havenAuth.email ? /* @__PURE__ */ React.createElement("div", { style: { color: "rgba(255,255,255,.72)", fontSize: 12, marginTop: 4 } }, havenAuth.email, " · ", havenAuth.role || "customer") : null), /* @__PURE__ */ React.createElement("span", { style: { color: "rgba(255,255,255,.6)", fontSize: 12, fontWeight: 600 } }, "Edit ›")), /* @__PURE__ */ React.createElement("button", { onClick: openMyHome, style: { width: "100%", textAlign: "left", font: "inherit", background: "linear-gradient(135deg,#FEF3C7,#FDE68A)", border: "none", borderRadius: 20, padding: 18, marginBottom: 16, display: "flex", gap: 14, alignItems: "center", cursor: "pointer", boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 48, height: 48, borderRadius: 24, background: "rgba(255,255,255,.55)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 } }, "🏡"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: "#92400E" } }, "My Home"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#92400E", opacity: 0.8, marginTop: 2 } }, "Service history, maintenance & more")), /* @__PURE__ */ React.createElement("span", { style: { color: "#92400E", fontSize: 18 } }, "›")), /* @__PURE__ */ React.createElement("button", { onClick: () => goTo("notifCenter"), "aria-label": unreadCount > 0 ? `Notifications, ${unreadCount > 9 ? "9+" : unreadCount} unread` : "Notifications", style: { width: "100%", textAlign: "left", font: "inherit", background: `linear-gradient(135deg,${SELBG},${SELBORDER}33)`, border: `1px solid ${SELBORDER}`, borderRadius: 20, padding: 18, marginBottom: 16, display: "flex", gap: 14, alignItems: "center", cursor: "pointer", boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 48, height: 48, borderRadius: 24, background: "rgba(255,255,255,.55)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 } }, "🔔"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 15, color: NT } }, "Notifications"), unreadCount > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 800, color: ON, background: "#DC2626", padding: "1px 7px", borderRadius: 10, minWidth: 18, textAlign: "center" } }, unreadCount > 9 ? "9+" : unreadCount)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: NT, opacity: 0.75, marginTop: 2 } }, "Job updates, messages & account alerts")), /* @__PURE__ */ React.createElement("span", { style: { color: NT, fontSize: 18 } }, "›")), /* @__PURE__ */ React.createElement("div", { style: { background: W, borderRadius: 20, overflow: "hidden", boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, [
     ["Payment Methods", () => goTo("payment"), false, null],
@@ -6494,7 +6777,7 @@ function App() {
     if (!vj) return unavailableScreen("Booking", goBookings);
     const postedWaiting = vj.status === "posted";
     const postedArrived = vj.status === "arrived";
-    return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { background: N, padding: "14px 20px 20px", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("button", { onClick: goBookings, style: { background: "rgba(255,255,255,.12)", border: "none", color: ON, padding: "8px 16px", borderRadius: 12, cursor: "pointer", fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 } }, "← Bookings"), /* @__PURE__ */ React.createElement("span", { style: { color: "rgba(255,255,255,.6)", fontSize: 13, fontWeight: 600 } }, postedArrived ? "Arrived" : "Pending")), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: "0 20px 24px" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "28px 0 22px" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 72, height: 72, borderRadius: 36, background: vj.emergency ? "#FFF1EE" : "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, margin: "0 auto 16px", animation: "pulse 1.8s ease-in-out infinite" } }, vj.emergency ? "🚨" : "📋"), vj.emergency && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, background: "#FFF1EE", color: "#C2410C", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 20, marginBottom: 10 } }, "Emergency priority"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 22, color: TX, marginBottom: 8 } }, havenIsPhoneOnly(vj) ? HAVEN_DEVICE_ONLY_LABEL : postedArrived ? SI.arrived.label : vj.emergency ? "Looking for a Pro (urgent)…" : "Looking for a pro…"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: TS, lineHeight: 1.6 } }, havenIsPhoneOnly(vj) ? "This booking never reached Haven or a Pro. It is kept on this phone for your account only." : postedArrived ? `${vjPname} ${SI.arrived.sub}` : vj.emergency ? "Your job is marked urgent for Pros near you. Arrival times aren't guaranteed. This screen updates as soon as one accepts." : "Pros near you can see your job. This screen updates as soon as one accepts.")), /* @__PURE__ */ React.createElement("div", { style: { background: W, borderRadius: 20, padding: 18, marginBottom: 14, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "center", paddingBottom: 14, marginBottom: 14, borderBottom: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { width: 52, height: 52, borderRadius: 26, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, flexShrink: 0 } }, vjTask ? vjTask.e : "🔧"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 16, color: TX } }, vjTask ? vjTask.n : "Custom job"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 20, color: AMT, marginTop: 2 } }, "$", vjTotal))), [["When", vj.reqWindow ? jobTimeConfirmed(vj) ? "Confirmed" : "Requested" : vjTp ? vjTp.label : "—"], ["Window", vj.reqWindow ? windowLabel(vj.reqWindow) : vjTp ? vjTp.sub : "—"], ["Photos", vj.photos?.length > 0 ? `${vj.photos.length} added${havenLocalLabel(vj, "photos") ? ` · ${HAVEN_DEVICE_ONLY_LABEL}` : ""}` : "None"]].map(([l, v]) => /* @__PURE__ */ React.createElement("div", { key: l, style: { display: "flex", justifyContent: "space-between", marginBottom: 9 } }, /* @__PURE__ */ React.createElement("span", { style: { color: TS, fontSize: 13 } }, l), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: TX } }, v))), vj.desc && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, marginBottom: 4 } }, "DESCRIPTION"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5, fontStyle: "italic" } }, '"', vj.desc, '"'), havenLocalLabel(vj, "desc") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL))), postedWaiting && !havenIsPhoneOnly(vj) && (!showCancelConfirm ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelConfirm(true), style: { background: "none", border: `1.5px solid #FCA5A5`, color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: "10px 20px", borderRadius: 12 } }, "Cancel Job")) : /* @__PURE__ */ React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 16, padding: 16, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#DC2626", marginBottom: 4 } }, "Cancel this job?"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 12 } }, "No pro has accepted yet, so this cancels immediately with no fee."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelConfirm(false), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: TS, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Keep job"), /* @__PURE__ */ React.createElement("button", { onClick: cancelJobDirect, style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: "#DC2626", color: ON, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Yes, cancel"))))));
+    return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { background: N, padding: "14px 20px 20px", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("button", { onClick: goBookings, style: { background: "rgba(255,255,255,.12)", border: "none", color: ON, padding: "8px 16px", borderRadius: 12, cursor: "pointer", fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 } }, "← Bookings"), /* @__PURE__ */ React.createElement("span", { style: { color: "rgba(255,255,255,.6)", fontSize: 13, fontWeight: 600 } }, havenIsPhoneOnly(vj) ? "Not sent" : postedArrived ? "Arrived" : "Pending")), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: "0 20px 24px" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "28px 0 22px" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 72, height: 72, borderRadius: 36, background: vj.emergency ? "#FFF1EE" : "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, margin: "0 auto 16px", animation: havenIsPhoneOnly(vj) ? "none" : "pulse 1.8s ease-in-out infinite" } }, havenIsPhoneOnly(vj) ? "📱" : vj.emergency ? "🚨" : "📋"), vj.emergency && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, background: "#FFF1EE", color: "#C2410C", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 20, marginBottom: 10 } }, "Emergency priority"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 22, color: TX, marginBottom: 8 } }, havenIsPhoneOnly(vj) ? HAVEN_DEVICE_ONLY_LABEL : postedArrived ? SI.arrived.label : vj.emergency ? "Looking for a Pro (urgent)…" : "Looking for a pro…"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: TS, lineHeight: 1.6 } }, havenIsPhoneOnly(vj) ? "This booking never reached Haven or a Pro. It is kept on this phone for your account only." : postedArrived ? `${vjPname} ${SI.arrived.sub}` : vj.emergency ? "Your job is marked urgent for Pros near you. Arrival times aren't guaranteed. This screen updates as soon as one accepts." : "Pros near you can see your job. This screen updates as soon as one accepts.")), /* @__PURE__ */ React.createElement("div", { style: { background: W, borderRadius: 20, padding: 18, marginBottom: 14, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "center", paddingBottom: 14, marginBottom: 14, borderBottom: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { width: 52, height: 52, borderRadius: 26, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, flexShrink: 0 } }, vjTask ? vjTask.e : "🔧"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 16, color: TX } }, vjTask ? vjTask.n : "Custom job"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 20, color: AMT, marginTop: 2 } }, "$", vjTotal))), [...havenIsPhoneOnly(vj) ? [["When", "Not scheduled"]] : [["When", vj.reqWindow ? jobTimeConfirmed(vj) ? "Confirmed" : "Requested" : vjTp ? vjTp.label : "—"], ["Window", vj.reqWindow ? windowLabel(vj.reqWindow) : vjTp ? vjTp.sub : "—"]], ["Photos", vj.photos?.length > 0 ? `${vj.photos.length} added${havenLocalLabel(vj, "photos") ? ` · ${HAVEN_DEVICE_ONLY_LABEL}` : ""}` : "None"]].map(([l, v]) => /* @__PURE__ */ React.createElement("div", { key: l, style: { display: "flex", justifyContent: "space-between", marginBottom: 9 } }, /* @__PURE__ */ React.createElement("span", { style: { color: TS, fontSize: 13 } }, l), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: TX } }, v))), vj.desc && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, marginBottom: 4 } }, "DESCRIPTION"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5, fontStyle: "italic" } }, '"', vj.desc, '"'), havenLocalLabel(vj, "desc") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL))), postedWaiting && !havenIsPhoneOnly(vj) && (!showCancelConfirm ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelConfirm(true), style: { background: "none", border: `1.5px solid #FCA5A5`, color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: "10px 20px", borderRadius: 12 } }, "Cancel Job")) : /* @__PURE__ */ React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 16, padding: 16, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#DC2626", marginBottom: 4 } }, "Cancel this job?"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 12 } }, "No pro has accepted yet, so this cancels immediately with no fee."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelConfirm(false), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: TS, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Keep job"), /* @__PURE__ */ React.createElement("button", { onClick: cancelJobDirect, style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: "#DC2626", color: ON, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Yes, cancel"))))));
   };
   const trackMap = () => {
     const home = vj && typeof vj.addressText === "string" ? addresses.find((a) => a.geo && formatAddress(a) === vj.addressText) : null;

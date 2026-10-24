@@ -691,9 +691,12 @@ const TEST_SAVED_ADDRESSES=[
   {id:1700000000101,label:"Home",isPrimary:true,street:"123 Market Street",unit:"Apt 4B",city:"San Francisco",state:"CA",zip:"94103",accessNotes:"",propertyType:"Apartment",yearBuilt:"1998",sqft:"1,150",beds:"2",baths:"1"},
   {id:1700000000102,label:"Work",isPrimary:false,street:"500 Folsom Street",unit:"",city:"San Francisco",state:"CA",zip:"94105",accessNotes:"",propertyType:"",yearBuilt:"",sqft:"",beds:"",baths:""},
 ];
-function seedTestAddresses(){ storedData['haven_addresses']=JSON.stringify({__v:1,data:TEST_SAVED_ADDRESSES.map(a=>({...a}))}); }
+// QA #87 v7 (a): saved addresses are per account; a seeded list belongs to
+// the signed-in test customer (haven_addresses_owner).
+function seedTestAddresses(){ storedData['haven_addresses']=JSON.stringify({__v:1,data:TEST_SAVED_ADDRESSES.map(a=>({...a}))}); storedData['haven_addresses_owner']=storedData['haven_auth_user_id']||'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'; }
 function seedSignedInCustomer(){
   if(!('haven_addresses' in storedData)) storedData['haven_addresses']=JSON.stringify({__v:1,data:TEST_SAVED_ADDRESSES.map(a=>({...a}))});
+  if(!('haven_addresses_owner' in storedData)) storedData['haven_addresses_owner']='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   storedData['haven_auth_access_token'] = 'signed-in-access-token';
   storedData['haven_auth_user_id'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
   storedData['haven_auth_email'] = 'qa-customer@example.com';
@@ -2211,6 +2214,9 @@ async function runApproveAndDeclineChecks(){
     // Phase 1B B4: this cache belongs to the signed-in test customer.
     storedData['haven_jobs_owner'] = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
+    // Each mount is a device holding only this job (QA #87 v7: an earlier
+    // mount's phone-only job would otherwise be kept and listed too).
+    delete storedData['haven_jobs_local_only'];
     const container = document.createElement('div');
     document.body.appendChild(container);
     await mountApp(container);
@@ -3414,7 +3420,7 @@ async function runCrossDeviceBookingsChecks(){
     const merged = storedJobs().find(j => j.backendJobId === jobComplete);
     assert(!!merged && merged.status === 'complete', 'X2: backend complete overrides the stale local en_route');
     assert(!!merged && merged.id === 5001 && merged.desc === 'Under the kitchen sink', 'X2: the local entry keeps its id and local-only details');
-    assert(existsRegex('All (4)') && existsRegex('Completed'), 'X2: Bookings shows the backend status (3 backend jobs + this account\'s phone-only booking)');
+    assert(existsRegex('All (3)') && existsRegex('On this phone (1)') && existsRegex('Completed'), 'X2: Bookings shows the backend status (3 backend jobs; this account\'s phone-only booking in its own "On this phone" section, not counted)');
     // Founder decision (QA #87 v6): an account's own phone-only booking is
     // shown to it, labelled, and never deleted.
     assert(existsRegex('Demo seed booking') && existsRegex('Saved on this phone only · not synced') && storedJobs().some(j => j.id === 5002), 'X2: a local-only entry (no backend id) is shown to its own account labelled "Saved on this phone only · not synced" and kept');
@@ -3534,7 +3540,7 @@ async function runCrossDeviceBookingsChecks(){
       failJobs = false;
       click('Retry');
       await settle();
-      assert(existsRegex('All (4)') && existsRegex('Completed'), 'X4e: Retry re-reads and lists the backend jobs with the backend status (plus the account\'s phone-only booking)');
+      assert(existsRegex('All (3)') && existsRegex('On this phone (1)') && existsRegex('Completed'), 'X4e: Retry re-reads and lists the backend jobs with the backend status (the account\'s phone-only booking in "On this phone", not counted)');
       assert(existsRegex('FORGED local fake job') && existsRegex('Saved on this phone only · not synced'), 'X4e: after Retry the account\'s own local-only job is listed, labelled "Saved on this phone only · not synced"');
       assert(storedJobs().some(j => j.id === 8001), 'X4e: after a landed read the local-only entry is kept (never deleted)');
     }
