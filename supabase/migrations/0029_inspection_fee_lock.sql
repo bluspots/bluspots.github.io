@@ -115,9 +115,16 @@
 --        still gets rule D's message first. A same-status re-send is not a
 --        move. SHIP-BEFORE dependency (owner Claude, FE-04): the Pro app
 --        must offer Start Diagnosing only from arrived on diagnosis jobs.
---     2. complete and cancelled are terminal: any move OUT of them (to
---        any other status) is refused ("This job is finished; its status
---        cannot change"). Same-status updates (tip, re-sends) are not moves.
+--     2. complete, cancelled, inspection_completed and materials_declined
+--        are terminal: any move OUT of them (to complete, cancelled, any
+--        earlier status, or the other decline outcome) is refused ("This job
+--        is finished; its status cannot change"). Same-status updates (tip,
+--        the Pro app's identical terminal re-send) are not moves. The two
+--        decline outcomes were added after the Job Contract check (founder
+--        decision 2026-10-23 20:58 ET, item 4, cleared by CoS 21:11 ET):
+--        0012's any-assigned-status policy still lets a client move them to
+--        complete, and 0010 already refuses their cancel; 0029 now refuses
+--        both server-side for every client.
 --     3. No backward status move. Rank: posted < en_route < arrived <
 --        diagnosing < materials_requested < materials_approved <
 --        in_progress < complete = materials_declined = inspection_completed.
@@ -129,9 +136,8 @@
 --        diagnosing and the customer's complete -> arrived. Also refused
 --        now: the customer leaving a pending request backward (e.g.
 --        materials_requested -> arrived); 0028's ABANDON still closes a
---        request the customer leaves by cancelling. Not changed (open
---        question for the founder): materials_declined /
---        inspection_completed -> complete or cancelled stay as RLS allows.
+--        request the customer leaves by cancelling. materials_declined /
+--        inspection_completed -> complete or cancelled: refused by III.2.
 --     4. The $30 standard-decline convenience fee is REQUIRED (Quagon F1
 --        answered: always charged). On a move into materials_declined the
 --        server sets convenience_fee_cents = 3000 whether or not the client
@@ -286,18 +292,19 @@ begin
             hint = 'arrived -> diagnosing is the assigned Pro''s step, only when requires_diagnosis is true.';
   end if;
 
-  -- III.2 (item 2). complete and cancelled are terminal: no move out of them.
-  if old.status in ('complete', 'cancelled')
+  -- III.2 (item 2; decline outcomes added 2026-10-23). complete, cancelled,
+  --    inspection_completed and materials_declined are terminal: no move out.
+  if old.status in ('complete', 'cancelled', 'inspection_completed', 'materials_declined')
      and new.status is distinct from old.status then
     raise exception 'This job is finished; its status cannot change'
       using errcode = '42501',
-            hint = 'complete and cancelled are terminal statuses.';
+            hint = 'complete, cancelled, inspection_completed and materials_declined are terminal statuses.';
   end if;
 
   -- III.3 (item 3). No backward status move. Ladder rank: posted 1 ..
   --    in_progress 7; complete, materials_declined, inspection_completed 8.
   --    A move into cancelled is never backward (who may cancel stays with
-  --    RLS); moves out of complete / cancelled are III.2. The one authorized
+  --    RLS); moves out of the four terminal statuses are III.2. The one authorized
   --    backward move: the assigned Pro's new materials request from
   --    in_progress (0009 / 0026 counting rule: receipt -> in_progress ->
   --    Request Materials).
