@@ -69,6 +69,8 @@ Backend enforcement must reject out‑of‑turn and role‑unauthorized transiti
 
 *(founder decision 2026-10-23)* No backward status moves: a move to an earlier status on the ladder posted → en_route → arrived → diagnosing → materials_requested → materials_approved → in_progress → (complete | materials_declined | inspection_completed) is rejected server-side (0029 III.3). The one authorized backward move is the assigned Pro's new materials request `in_progress → materials_requested` (after a receipt). A move into `cancelled` is not backward; who may cancel is unchanged.
 
+*(founder decision 2026-10-23)* Completion is refused while a materials request is pending (undecided): the Customer must approve or decline it first; enforced server-side (0029 IV.4).
+
 *(founder decision 2026-10-23)* Every other move into `inspection_completed` is rejected for every client, the Pro included (never from `arrived`; never the Pro). A re-send of the status the job already has is not a move.
 
 ---

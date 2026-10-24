@@ -193,6 +193,13 @@
 --        0029 now refuses the rest even without RLS). The Customer app
 --        writes only cancelled, materials_approved, materials_declined and
 --        inspection_completed.
+--     4. Completion is refused while a materials request is pending
+--        (materials_request_seq > materials_decided_seq, read from OLD):
+--        "A materials request is still pending; decide it first". With rule
+--        1 this matters on in_progress rows that still carry an undecided
+--        request (e.g. a request left by a privileged move). Non-privileged
+--        callers. ON HOLD, not built: a customer lowering a reimbursement
+--        below the approved amount.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -392,6 +399,16 @@ begin
     raise exception 'A job can only be completed from in_progress'
       using errcode = '42501',
             hint = 'Start the work (in_progress) before marking the job complete.';
+  end if;
+
+  -- IV.4 (founder 2026-10-23 21:14 ET, rule 4). No completion while a
+  --    materials request is pending.
+  if new.status = 'complete'
+     and old.status is distinct from 'complete'
+     and undecided then
+    raise exception 'A materials request is still pending; decide it first'
+      using errcode = '42501',
+            hint = 'The customer must approve or decline the pending materials request before the job can be completed.';
   end if;
 
   -- IV.3 (founder 2026-10-23 21:14 ET, rule 3). The customer sets no work status.
