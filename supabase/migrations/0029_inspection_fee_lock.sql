@@ -165,6 +165,13 @@
 --        payment field; written at posting by the Customer app), is locked
 --        after posting ("The payment note is locked once the job is
 --        posted"); an identical re-send is not a change.
+--   IV. Founder decisions 2026-10-23 21:14 ET (CoS relay), rules 1-4.
+--     Each refusal is SQLSTATE 42501 and leaves the row unchanged.
+--     1. complete is reachable only from in_progress ("A job can only be
+--        completed from in_progress"): no skipping from en_route, arrived,
+--        diagnosing, materials_requested or materials_approved. The Pro
+--        app already PATCHes complete only with status=eq.in_progress.
+--        Non-privileged callers (privileged callers: see below).
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -341,6 +348,15 @@ begin
               hint = 'Send convenience_fee_cents 3000 or leave it out: the server sets it.';
     end if;
     new.convenience_fee_cents := 3000;
+  end if;
+
+  -- IV.1 (founder 2026-10-23 21:14 ET, rule 1). complete only from in_progress.
+  if new.status = 'complete'
+     and old.status is distinct from 'complete'
+     and old.status <> 'in_progress' then
+    raise exception 'A job can only be completed from in_progress'
+      using errcode = '42501',
+            hint = 'Start the work (in_progress) before marking the job complete.';
   end if;
 
   -- II. Fee integrity: price, payout, margin and fees are fixed once posted.
