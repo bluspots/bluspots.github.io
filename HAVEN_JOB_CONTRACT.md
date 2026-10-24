@@ -19,19 +19,22 @@ Statuses (lowercase snake_case):
 posted → en_route → arrived → diagnosing? → (materials_requested → materials_approved →) in_progress → complete
                                                                                      ↘ inspection_completed (diagnosis decline)
                                                                                      ↘ materials_declined   (standard decline)
+                                 diagnosing → inspection_completed (Customer ends after diagnosis)   [founder decision 2026-10-23]
 any pre‑complete → cancelled
 ```
+
+inspection_completed is reached ONLY by the Customer, from `diagnosing` or from `materials_requested` (diagnosis decline); never from `arrived`, never by the Pro; every other move into it is rejected. *(founder decision 2026-10-23)*
 
 Definitions:
 - posted: Job created; waiting for a pro to accept.
 - en_route: Pro accepted; traveling to the property.
 - arrived: Pro is at the property.
-- diagnosing: For categories where requires_diagnosis=true; pro is assessing scope.
+- diagnosing: For categories where requires_diagnosis=true; pro is assessing scope. Only the Pro moves a job into diagnosing (arrived → diagnosing); the Customer cannot. *(founder decision 2026-10-23)*
 - materials_requested: Pro requested customer approval to buy materials; waiting on customer.
 - materials_approved: Customer approved; pro is authorized to purchase (no reimbursement yet).
 - in_progress: Pro is actively doing the work.
 - complete: Job finished with full repair.
-- inspection_completed: Diagnosis performed; customer declined materials on a diagnosis category; job ends at the inspection fee.
+- inspection_completed: Diagnosis performed on a requires_diagnosis job; the Customer ended the job at the $45 inspection fee, either from diagnosing (no undecided materials request) or by declining materials (from materials_requested). Only the Customer, never from arrived, never the Pro. *(founder decision 2026-10-23)*
 - materials_declined: Standard category materials decline; job could not proceed; ends with a $30 convenience fee.
 - cancelled: Cancelled from any pre‑complete status (role rules below).
 
@@ -48,17 +51,27 @@ Naming principles:
 | (none) → posted | Customer | Job creation |
 | posted → en_route | Pro | Accepts job |
 | en_route → arrived | Pro | Arrival confirmation |
-| arrived → diagnosing | Pro | Diagnosis categories only |
+| arrived → diagnosing | Pro | Diagnosis categories only. The Customer can never move a job into diagnosing. *(founder decision 2026-10-23)* Only the job's **assigned** Pro, only from `arrived`, only when `requires_diagnosis` is true; every other move into diagnosing is rejected server-side (0029 III.1). *(founder decision 2026-10-23)* |
 | diagnosing → in_progress | Pro | Scope matched what was listed |
 | diagnosing → materials_requested | Pro | Scope exceeded what was listed |
 | materials_requested → materials_approved | Customer | Approves request; authorizes purchase only |
 | materials_approved → in_progress | Pro | Submits receipt w/ actual materials cost + photo |
-| materials_requested → inspection_completed | Customer | Declines on diagnosis categories |
-| in_progress → complete | Pro | Mark job complete |
+| materials_requested → inspection_completed | Customer | Declines on diagnosis categories (requires_diagnosis, undecided request). *(founder decision 2026-10-23)* |
+| diagnosing → inspection_completed | Customer | Ends at the $45 inspection fee after diagnosis: requires_diagnosis and no undecided materials request. *(founder decision 2026-10-23)* |
+| in_progress → complete | Pro | Mark job complete. `complete` is reachable only from `in_progress`: no skipping from en_route, arrived, diagnosing or the materials statuses; enforced server-side for every client (0029 IV.1). *(founder decision 2026-10-23)* |
+| posted → en_route (claim) / any assignment | Pro | No account may claim or be assigned a job it posted (`pro_id` = `customer_id` is refused), whatever its current profile role; enforced server-side on every insert and every change of `pro_id`/`customer_id`, for every caller (0029 IV.2). *(founder decision 2026-10-23)* |
 | any pre‑complete → cancelled | Either | Different sub‑rules by phase; Customer after accept is “request cancel” |
-| Rating / tip | Customer | Post‑complete only |
+| complete / cancelled / inspection_completed / materials_declined → anything | Nobody (client) | `complete`, `cancelled`, `inspection_completed` and `materials_declined` are terminal: no move out of them (no reopen, no move to complete, no cancel), enforced server-side for the Customer, the Pro and direct API calls (0029 III.2). Same-status re-sends are not moves. *(founder decision 2026-10-23)* |
+| any → en_route / arrived / diagnosing / materials_requested / in_progress / complete | Never the Customer | The Customer never sets work statuses. The Customer's only status moves are approving or declining materials, the inspection endings above, and cancelling while the job is posted with no Pro; enforced server-side (0029 IV.3). *(founder decision 2026-10-23)* |
+| Rating / tip | Customer | Post‑complete only. Only the job's Customer may set the tip; the Pro and anyone else are rejected server-side (0029 III.5). *(founder decision 2026-10-23)* |
 
 Backend enforcement must reject out‑of‑turn and role‑unauthorized transitions.
+
+*(founder decision 2026-10-23)* No backward status moves: a move to an earlier status on the ladder posted → en_route → arrived → diagnosing → materials_requested → materials_approved → in_progress → (complete | materials_declined | inspection_completed) is rejected server-side (0029 III.3). The one authorized backward move is the assigned Pro's new materials request `in_progress → materials_requested` (after a receipt). A move into `cancelled` is not backward; who may cancel is unchanged.
+
+*(founder decision 2026-10-23)* Completion is refused while a materials request is pending (undecided): the Customer must approve or decline it first; enforced server-side (0029 IV.4).
+
+*(founder decision 2026-10-23)* Every other move into `inspection_completed` is rejected for every client, the Pro included (never from `arrived`; never the Pro). A re-send of the status the job already has is not a move.
 
 ---
 
@@ -67,8 +80,12 @@ Backend enforcement must reject out‑of‑turn and role‑unauthorized transiti
 - 20/80 labor split: The customer’s listed labor price is authoritative. Haven retains 20% inside that price; the pro’s fixed labor payout is 80%. The payout shown before accept is exactly what the pro receives.
 - Haven takes 0% of materials, 0% of tips, 0% of Inspection Visits, and 0% of the $30 convenience fee.
 - Materials are additive to labor — never carved out of the service/labor price.
+- Materials reimbursement (`materials_reimbursed_cents`) can never exceed the Customer-approved materials amount (`materials_approved_cents`); enforced server-side (0029 III.5). A valid receipt is also required, but there is no usable receipt record yet (`materials_receipts` is unused and client-locked), so that part is pending a decision and not enforced by the database. *(founder decision 2026-10-23)*
 - Diagnosis decline: `inspection_completed` with a hard‑locked $45 inspection fee (pro receives it).
+- Legacy diagnosis jobs posted with a $0 inspection fee keep it: there is no backfill, and the database does not rewrite existing rows. *(founder decision 2026-10-23)*
 - Standard (non‑diagnosis) decline: `materials_declined` with a $30 convenience fee (pro receives it).
+- The payment note (`payment_snapshot`, `{brand,last4}`) is locked once the job is posted; enforced server-side (0029 III.6). *(founder decision 2026-10-23)*
+- Financial amounts are locked once a job is posted (labor price, pro payout, margin, emergency fee, inspection fee, convenience fee). The only change allowed after posting is the $30 convenience fee on a standard materials decline. Nothing marks a fee collected or paid before payments exist. *(founder decision 2026-10-23)* That $30 fee is **required**, not optional: the server sets it on every standard decline (0029 III.4) and refuses any other value. Diagnosis jobs never end as `materials_declined`; they end at `inspection_completed`. The Customer app must show the fee before the customer decides (FE-02). *(founder decision 2026-10-23)*
 
 ---
 
@@ -203,8 +220,8 @@ this stays honest about what's real today).
 | `propertyId` / `propertyLabel` | string | ⚠️ `addressLabel` (e.g. `"Home"`), no stable `propertyId` | ❌ n/a | Customer App's address objects have real IDs (`addresses[].id`); jobs currently snapshot only the formatted text (`addressText`) and label, not the ID. **Gap:** if a property is later renamed, historical jobs can't be traced back to which saved property they were. Not urgent, but worth fixing before this becomes a real backend concern. |
 | `addressSnapshot` | string | ✅ `addressText` | ✅ `city` (much coarser — city/state only, not a full address) | **Real privacy/precision mismatch.** The Pro App currently only has city-level location (appropriate for the *feed*, before acceptance — a pro shouldn't see a full address for a job they haven't accepted). Once a job is accepted, the Pro App needs the *full* address, which it doesn't have a field for at all yet. This should be modeled as two different pieces of data: a coarse `cityLabel` (feed-safe) and a full `addressSnapshot` (only populated/visible after acceptance). |
 | `coordinates` | {lat, lng} | ❌ not present | ❌ not present (uses `city` string matching + `distanceMi`) | Both sides currently simulate distance/geography rather than using real coordinates. Fine for prototype; flagged as a real backend requirement. |
-| `fixedCustomerLaborPrice` | number | ✅ resolved via `vjTask.p` / `custom.price` | ⚠️ `payout` (this is the *pro's* payout, not the customer's price — see next row) | Current working margin is 20% of the customer labor/service price. Adjustable later. Not immutable. Not TBD. The customer sees one fixed labor/service price. Haven keeps 20% inside the listed labor price; the customer price does not increase. The founder set that margin at 20% of the listed labor price. The Pro's fixed labor payout is 80% of the listed labor price. The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later. It is not TBD. |
-| `fixedProLaborPayout` | number | ❌ not modeled (Customer App has no concept of what the pro earns) | ✅ `payout` | The Pro's fixed labor payout is 80% of `fixedCustomerLaborPrice` (the listed labor price). The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later. It is not TBD. |
+| `fixedCustomerLaborPrice` | number | ✅ resolved via `vjTask.p` / `custom.price` | ⚠️ `payout` (this is the *pro's* payout, not the customer's price — see next row) | Current working margin is 20% of the customer labor/service price. Adjustable later, for future jobs only. Not immutable. Not TBD. The customer sees one fixed labor/service price. Haven keeps 20% inside the listed labor price; the customer price does not increase. The founder set that margin at 20% of the listed labor price. The Pro's fixed labor payout is 80% of the listed labor price. The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later, for future jobs only: a change never applies to a job already posted, whose price, margin and payout are locked at posting (0029 II). It is not TBD. *(founder decision 2026-10-23)* |
+| `fixedProLaborPayout` | number | ❌ not modeled (Customer App has no concept of what the pro earns) | ✅ `payout` | The Pro's fixed labor payout is 80% of `fixedCustomerLaborPrice` (the listed labor price). The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later, for future jobs only: a change never applies to a job already posted, whose price, margin and payout are locked at posting (0029 II). It is not TBD. *(founder decision 2026-10-23)* |
 | `platformFee` | number | ❌ not present | ❌ not present | Not yet modeled on either side. Haven keeps 20% inside the listed labor price (current working margin); the customer price does not increase. |
 | `emergencyFee` / `emergency` | number / bool | ✅ `emergencyFee`, `emergency` | ✅ `emergency` (bool only, no fee field) | Pro App shows emergency as a badge/priority flag on the feed; it doesn't yet carry the fee amount as its own field. Should if/when Pro App shows payout breakdown. |
 | `inspectionFee` | number | ❌ not present (Customer App has no Inspection Visit concept yet) | ✅ `inspectionFee` | **This is the clearest sign the two apps have already diverged on a real feature.** The Pro App's job feed already displays a two-tier price card (guaranteed inspection fee vs. contingent full payout) for diagnosis categories, per architecture doc §6 — this is real, shipped Pro App UI. The Customer App has *no* corresponding UI or data field for this at all. This needs Customer App work before a real diagnosis-required job could ever be posted and completed end-to-end. |
@@ -229,7 +246,7 @@ The following product decisions are locked and adopted in both code and docs.
 - Haven takes 0% of materials, 0% of tips, and 0% of Inspection Visits.
 - 100% of approved materials and 100% of tips go to the Pro.
 - The Customer App treats materials as additive; labor remains the full service/labor price.
-- The customer sees one fixed labor/service price. Haven keeps 20% inside the listed labor price; the customer price does not increase. The founder set that margin at 20% of the listed labor price. The Pro's fixed labor payout is 80% of the listed labor price. The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later. It is not TBD.
+- The customer sees one fixed labor/service price. Haven keeps 20% inside the listed labor price; the customer price does not increase. The founder set that margin at 20% of the listed labor price. The Pro's fixed labor payout is 80% of the listed labor price. The Pro sees that payout before accepting, and the amount shown is exactly what the Pro receives. The rate can be changed later, for future jobs only: a change never applies to a job already posted, whose price, margin and payout are locked at posting (0029 II). It is not TBD. *(founder decision 2026-10-23)*
 
 ### 3c. Standard materials‑decline outcome wording (locked)
 
@@ -271,11 +288,12 @@ out of sync with each other the way job status already has.
 | `(none) → posted` | Customer App | Job creation |
 | `posted → en_route` | Pro App (Accept) | Currently simulated via Customer App's own "Demo Pro Controls" — this is explicitly a stand-in for a real Pro App action, not a real cross-app sync today |
 | `en_route → arrived` | Pro App | Same simulation caveat |
-| `arrived → diagnosing` | Pro App | Diagnosis-required categories only (§2); not coded either side yet |
+| `arrived → diagnosing` | Pro App | Diagnosis-required categories only (§2); not coded either side yet. Customer App never moves a job into diagnosing. *(founder decision 2026-10-23)* |
 | `diagnosing → in_progress` | Pro App | Scope matched what was listed |
 | `diagnosing → materials_requested` | Pro App | Scope exceeded what was listed |
 | `materials_requested → in_progress` | **Customer App** (approve) | Customer-triggered, not Pro-triggered — the Pro App is blocked waiting on this |
 | `materials_requested → inspection_completed` | **Customer App** (decline) | Same — customer-triggered terminal state |
+| `diagnosing → inspection_completed` | **Customer App** (end at inspection fee) | Customer only; requires_diagnosis, no undecided materials request. Never from `arrived`, never the Pro App. *(founder decision 2026-10-23)* |
 | `in_progress → complete` | Pro App | |
 | `(any pre-complete) → cancelled` | Either, with different sub-rules: Customer may cancel before acceptance freely, and *request* cancellation after acceptance (`cancelStatus:"requested"` — already built); Pro App cancellation/abandonment handling is an open edge case per architecture doc §23, not yet designed in detail | |
 | Rating / tip | Customer App only, post-`complete` | Already fully built on Customer side |
