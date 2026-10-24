@@ -401,7 +401,7 @@ function usePersistedState(key, initialValue, { version = 1, migrate = null, val
   }, [state]);
   return [state, setState];
 }
-const PERSISTED_KEYS = ["haven_theme", "haven_notifications", "haven_notif_prefs", "haven_jobs", "haven_addresses", "haven_cards", "haven_profile", "haven_draft", "haven_job_prefs", "haven_jobs_owner", "haven_jobs_unowned_legacy", "haven_notifications_unowned_legacy", "haven_jobs_local_only"];
+const PERSISTED_KEYS = ["haven_theme", "haven_notifications", "haven_notif_prefs", "haven_jobs", "haven_addresses", "haven_cards", "haven_profile", "haven_draft", "haven_job_prefs", "haven_jobs_owner", "haven_jobs_unowned_legacy", "haven_notifications_unowned_legacy", "haven_jobs_local_only", "haven_account_device_data"];
 const INTENT_LIBRARY = [
   // Plumbing
   {
@@ -1964,7 +1964,7 @@ function makeJob({
   backendJobId = null,
   // canonical UUID from Supabase dual-write; preserved across reloads
   restoredDeviceOnly = []
-  // QA #87 v4: "rating" | "photos" | "desc" restored from a master cache; shown as "Saved on this phone only"
+  // QA #87 v4: "rating" | "photos" | "desc" restored from a stored copy; labelled "Saved on this phone only · not synced"
 } = {}) {
   return {
     id: Date.now(),
@@ -2253,8 +2253,8 @@ function havenReadStoredJobsAnyOwner() {
 }
 const HAVEN_JOBS_LEGACY_KEY = "haven_jobs_unowned_legacy";
 const HAVEN_NOTIFS_LEGACY_KEY = "haven_notifications_unowned_legacy";
-const HAVEN_DEVICE_ONLY_LABEL = "Saved on this phone only";
-const HAVEN_NOT_SYNCED_LABEL = "Saved on this phone only · not synced";
+const HAVEN_DEVICE_ONLY_LABEL = "Saved on this phone only · not synced";
+const HAVEN_NOT_SYNCED_LABEL = HAVEN_DEVICE_ONLY_LABEL;
 const HAVEN_LEGACY_JOB_FIELDS = ["id", "addressText", "addressLabel", "msgs", "photos", "desc", "rated", "stars", "reviewTxt", "hireAgain", "tpId", "reqWindow", "cancelStatus", "cancellationRequestedAt"];
 let havenLegacyPending = false;
 let havenLegacyMemoryOwner = "";
@@ -2307,6 +2307,14 @@ const havenRawData = (raw) => {
   }
 };
 const HAVEN_LOCAL_ONLY_KEY = "haven_jobs_local_only";
+const HAVEN_NO_STORE_FIELD = /payment|card|token|secret|password|auth|^tip/i;
+function havenWithoutPayment(j) {
+  const out = {};
+  Object.keys(j).forEach((k) => {
+    if (!HAVEN_NO_STORE_FIELD.test(k)) out[k] = j[k];
+  });
+  return out;
+}
 const havenIsLocalOnlyJob = (j) => !!(j && typeof j === "object" && typeof j.id !== "undefined" && !havenBackendKey(j.backendJobId));
 function havenReadLocalOnly() {
   try {
@@ -2330,7 +2338,7 @@ function havenLocalOnlyMerged(owner, list) {
     if (have.has(t)) return false;
     have.add(t);
     return true;
-  });
+  }).map((j) => k ? havenWithoutPayment(j) : j);
   if (!add.length) return null;
   const next = bucket.concat(add);
   const data = k ? { owners: { ...store.owners, [k]: next }, ownerless: store.ownerless } : { owners: store.owners, ownerless: next };
@@ -2359,6 +2367,213 @@ function havenSetAsideLocalOnly(owner, list) {
 function havenReadLocalOnlyAll() {
   const st = havenReadLocalOnly();
   return Object.values(st.owners).filter(Array.isArray).reduce((a, l) => a.concat(l), []).concat(st.ownerless).filter((j) => j && typeof j === "object");
+}
+const HAVEN_ACCOUNT_STORE_KEY = "haven_account_device_data";
+const havenAcctKey = (uid) => uid ? String(uid).trim().toLowerCase() : "";
+function havenReadAccountStore() {
+  try {
+    const p = JSON.parse(localStorage.getItem(HAVEN_ACCOUNT_STORE_KEY) || "null");
+    return p && typeof p === "object" && p.data && typeof p.data === "object" && !Array.isArray(p.data) ? p.data : {};
+  } catch {
+    return {};
+  }
+}
+function havenAccountFor(uid) {
+  const a = havenReadAccountStore()[havenAcctKey(uid)] || {};
+  return {
+    jobs: Array.isArray(a.jobs) ? a.jobs.filter((e) => e && typeof e === "object" && havenBackendKey(e.backendJobId)) : [],
+    notifications: Array.isArray(a.notifications) ? a.notifications.filter((n) => n && typeof n === "object" && typeof n.id !== "undefined") : []
+  };
+}
+function havenAccountStoreWith(uid, acct) {
+  const all = { ...havenReadAccountStore() };
+  const k = havenAcctKey(uid);
+  if (!acct.jobs.length && !acct.notifications.length) delete all[k];
+  else all[k] = { jobs: acct.jobs, notifications: acct.notifications };
+  return Object.keys(all).length ? JSON.stringify({ __v: 1, data: all }) : null;
+}
+function havenWriteAccountFor(uid, acct) {
+  try {
+    const v = havenAccountStoreWith(uid, acct);
+    if (v == null) localStorage.removeItem(HAVEN_ACCOUNT_STORE_KEY);
+    else localStorage.setItem(HAVEN_ACCOUNT_STORE_KEY, v);
+    return true;
+  } catch {
+    return false;
+  }
+}
+function havenReadAccountJobsAll() {
+  const all = havenReadAccountStore();
+  return Object.values(all).reduce((a, v) => a.concat(v && Array.isArray(v.jobs) ? v.jobs : []), []).filter((e) => e && typeof e === "object");
+}
+const havenIsStreetAddress = (t) => typeof t === "string" && t.trim() !== "" && t !== "—" && t.split(",").length >= 3;
+function havenAccountEntryFromJob(j) {
+  if (!j || typeof j !== "object" || !havenBackendKey(j.backendJobId)) return null;
+  const e = { backendJobId: String(j.backendJobId).trim() };
+  if (j.id !== void 0) e.id = j.id;
+  let n = 0;
+  if (havenIsStreetAddress(j.addressText)) {
+    e.addressText = j.addressText;
+    if (typeof j.addressLabel === "string" && j.addressLabel) e.addressLabel = j.addressLabel;
+    n++;
+  }
+  const own = Array.isArray(j.msgs) ? j.msgs.filter(havenIsCustomerMsg) : [];
+  if (own.length) {
+    e.msgs = own;
+    n++;
+  }
+  if (Array.isArray(j.photos) && j.photos.some((p) => typeof p === "string")) {
+    e.photos = j.photos.filter((p) => typeof p === "string");
+    n++;
+  }
+  if (typeof j.desc === "string" && j.desc) {
+    e.desc = j.desc;
+    n++;
+  }
+  if (j.rated) {
+    e.rated = true;
+    if (typeof j.stars === "number") e.stars = j.stars;
+    if (typeof j.reviewTxt === "string") e.reviewTxt = j.reviewTxt;
+    if (j.hireAgain != null) e.hireAgain = j.hireAgain;
+    n++;
+  }
+  if (j.tpId != null) {
+    e.tpId = j.tpId;
+    if (j.reqWindow != null) e.reqWindow = j.reqWindow;
+    n++;
+  }
+  if (j.cancelStatus) {
+    e.cancelStatus = j.cancelStatus;
+    if (j.cancellationRequestedAt != null) e.cancellationRequestedAt = j.cancellationRequestedAt;
+    n++;
+  }
+  return n ? e : null;
+}
+function havenMergeAccountEntry(old, e) {
+  if (!old) return e;
+  const m = { ...old, ...e };
+  if (Array.isArray(old.msgs) && old.msgs.length) {
+    const seen = new Set((e.msgs || []).map((x) => String(x && x.id)));
+    m.msgs = old.msgs.filter((x) => !seen.has(String(x && x.id))).concat(e.msgs || []);
+  }
+  return m;
+}
+function havenStashAccount(owner) {
+  if (!owner) return true;
+  if (havenLegacyPending) return false;
+  let rawJobs = null, rawNotifs = null, prevStore = null, prevLocal = null;
+  try {
+    rawJobs = localStorage.getItem("haven_jobs");
+    rawNotifs = localStorage.getItem("haven_notifications");
+    prevStore = localStorage.getItem(HAVEN_ACCOUNT_STORE_KEY);
+    prevLocal = localStorage.getItem(HAVEN_LOCAL_ONLY_KEY);
+  } catch {
+    havenLegacyMemoryOwner = owner;
+    havenLegacyPending = true;
+    return false;
+  }
+  const jobsIn = havenRawData(rawJobs).filter((j) => j && typeof j === "object");
+  const notifsIn = havenRawData(rawNotifs);
+  const isJobNotif = (n) => !!(n && typeof n === "object" && n.jobId != null);
+  const jobNotifs = notifsIn.filter(isJobNotif);
+  if (!jobsIn.length && !jobNotifs.length) return true;
+  const acct = havenAccountFor(owner);
+  const byKey = new Map(acct.jobs.map((e) => [havenBackendKey(e.backendJobId), e]));
+  jobsIn.forEach((j) => {
+    const e = havenAccountEntryFromJob(j);
+    if (!e) return;
+    const k = havenBackendKey(e.backendJobId);
+    byKey.set(k, havenMergeAccountEntry(byKey.get(k), e));
+  });
+  const backendIdOf = /* @__PURE__ */ new Map(), localIds = /* @__PURE__ */ new Set();
+  jobsIn.forEach((j) => {
+    if (havenBackendKey(j.backendJobId)) backendIdOf.set(j.id, String(j.backendJobId).trim());
+    else localIds.add(j.id);
+  });
+  const nById = new Map(acct.notifications.map((n) => [String(n.id), n]));
+  jobNotifs.forEach((n) => {
+    const t = { ...n };
+    const o = nById.get(String(n.id));
+    if (backendIdOf.has(n.jobId)) t.accountBackendJobId = backendIdOf.get(n.jobId);
+    else if (localIds.has(n.jobId)) t.accountLocalJobId = n.jobId;
+    else if (o) {
+      if (o.accountBackendJobId) t.accountBackendJobId = o.accountBackendJobId;
+      if (o.accountLocalJobId != null) t.accountLocalJobId = o.accountLocalJobId;
+    }
+    nById.set(String(n.id), t);
+  });
+  let storeNext, localNext;
+  try {
+    storeNext = havenAccountStoreWith(owner, { jobs: Array.from(byKey.values()), notifications: Array.from(nById.values()) });
+    localNext = havenLocalOnlyMerged(owner, jobsIn);
+  } catch {
+    havenLegacyMemoryOwner = owner;
+    havenLegacyPending = true;
+    return false;
+  }
+  const putBack = () => {
+    const restore = (k, v) => {
+      try {
+        if (v == null) localStorage.removeItem(k);
+        else localStorage.setItem(k, v);
+      } catch {
+      }
+    };
+    restore(HAVEN_ACCOUNT_STORE_KEY, prevStore);
+    restore(HAVEN_LOCAL_ONLY_KEY, prevLocal);
+    restore("haven_jobs", rawJobs);
+    restore("haven_notifications", rawNotifs);
+    havenLegacyMemoryOwner = owner;
+    havenLegacyPending = true;
+  };
+  try {
+    if (rawJobs != null) localStorage.removeItem("haven_jobs");
+    if (jobNotifs.length) localStorage.setItem("haven_notifications", JSON.stringify({ __v: 1, data: notifsIn.filter((n) => !isJobNotif(n)) }));
+    if (storeNext != null) localStorage.setItem(HAVEN_ACCOUNT_STORE_KEY, storeNext);
+    if (localNext != null) localStorage.setItem(HAVEN_LOCAL_ONLY_KEY, localNext);
+  } catch {
+    putBack();
+    return false;
+  }
+  return true;
+}
+function havenPhoneOnlyForDisplay(e, cur) {
+  const base = makeJob(e);
+  base.id = e.id;
+  const msgs = [], seen = /* @__PURE__ */ new Set();
+  [e, cur].forEach((src) => (src && Array.isArray(src.msgs) ? src.msgs : []).filter(havenIsCustomerMsg).forEach((m) => {
+    const k = String(m.id);
+    if (!seen.has(k)) {
+      seen.add(k);
+      msgs.push(m);
+    }
+  }));
+  return {
+    ...base,
+    status: "posted",
+    pro: null,
+    justAccepted: false,
+    msgs,
+    acceptedAt: null,
+    completedAt: null,
+    workPerformed: [],
+    materials: [],
+    proNotes: "",
+    materialsRequest: null,
+    cancelStatus: null,
+    cancellationRequestedAt: null,
+    rated: false,
+    stars: 0,
+    reviewTxt: "",
+    hireAgain: null,
+    tipAmount: 0,
+    tipStatus: "notAdded",
+    tippedAt: null,
+    paymentBrand: "Card",
+    paymentLast4: "----",
+    backendJobId: null,
+    restoredDeviceOnly: []
+  };
 }
 function havenSetAsideOwnerlessStore() {
   let rawJobs = null, rawNotifs = null, prevJobs = null, prevNotifs = null, prevLocal = null;
@@ -2446,6 +2661,9 @@ function havenSetAsideOwnerlessStore() {
 }
 const havenLegacyIsEmpty = (v) => v == null || v === "" || v === false || v === 0 || Array.isArray(v) && v.length === 0;
 const havenRestored = (j, field) => !!(j && Array.isArray(j.restoredDeviceOnly) && j.restoredDeviceOnly.includes(field));
+const havenBackendOn = () => typeof getSupabaseConfig === "function" && !!getSupabaseConfig();
+const havenLocalLabel = (j, field) => havenRestored(j, field) || havenBackendOn();
+const havenIsPhoneOnly = (j) => !!(j && havenBackendOn() && !havenBackendKey(j.backendJobId));
 function havenApplyLegacyDetails(job, row, entry) {
   if (!job || !entry) return job;
   const j = { ...job };
@@ -2493,8 +2711,13 @@ function havenBootOwnerlessStore() {
     owner = String(localStorage.getItem(HAVEN_JOBS_OWNER_KEY) || "").trim();
   } catch {
   }
-  if (!owner) havenSetAsideOwnerlessStore();
-  else havenSetAsideLocalOnly(owner, havenReadStoredJobsAnyOwner());
+  if (!owner) {
+    havenSetAsideOwnerlessStore();
+    return;
+  }
+  havenSetAsideLocalOnly(owner, havenReadStoredJobsAnyOwner());
+  const uid = havenJobsAccountId();
+  if (!uid || uid.toLowerCase() !== owner.toLowerCase()) havenStashAccount(owner);
 }
 function havenLegacyResidual(entry) {
   const kept = Array.isArray(entry.msgs) ? entry.msgs.filter((m) => !havenIsCustomerMsg(m)) : [];
@@ -2580,7 +2803,9 @@ function havenReconcileJobsWithBackend(list, rows, startStatus, labels, legacy) 
   const legacyByKey = /* @__PURE__ */ new Map();
   (Array.isArray(legacy) ? legacy : []).forEach((e) => {
     const k = e && havenBackendKey(e.backendJobId);
-    if (k && !legacyByKey.has(k)) legacyByKey.set(k, e);
+    if (!k) return;
+    if (!legacyByKey.has(k)) legacyByKey.set(k, []);
+    legacyByKey.get(k).push(e);
   });
   const byKey = /* @__PURE__ */ new Map();
   current.forEach((j) => {
@@ -2595,7 +2820,7 @@ function havenReconcileJobsWithBackend(list, rows, startStatus, labels, legacy) 
     if (rowKeys.has(key)) return;
     rowKeys.add(key);
     const local = byKey.get(key);
-    const entry = legacyByKey.get(key) || null;
+    const entries = legacyByKey.get(key) || [];
     let job;
     const idFree = (id) => !usedIds.has(id) && !current.some((j) => j && j.id === id && havenBackendKey(j.backendJobId) !== key);
     if (local) {
@@ -2603,11 +2828,13 @@ function havenReconcileJobsWithBackend(list, rows, startStatus, labels, legacy) 
       job = havenMergeBackendRow(local, row, keepLocalStatus);
     } else {
       job = havenJobFromBackendRow(row);
-      const legacyId = entry ? entry.id : null;
+      const legacyId = (entries.find((e) => typeof e.id === "number" && Number.isFinite(e.id)) || {}).id;
       if (typeof legacyId === "number" && Number.isFinite(legacyId) && idFree(legacyId)) job.id = legacyId;
       else while (!idFree(job.id)) job.id += 1;
     }
-    if (entry) job = havenApplyLegacyDetails(job, row, entry);
+    entries.forEach((e) => {
+      job = havenApplyLegacyDetails(job, row, e);
+    });
     usedIds.add(job.id);
     out.push(attachBackendPro(job, row, names[row.id] || names[String(row.id)] || ""));
   });
@@ -2619,7 +2846,26 @@ function havenReconcileJobsWithBackend(list, rows, startStatus, labels, legacy) 
     usedIds.add(j.id);
     out.push(j);
   });
-  return out;
+  return current.filter(havenIsLocalOnlyJob).concat(out);
+}
+function havenOwnPhoneOnlyShown(stored, cache, takenIds) {
+  const byId = /* @__PURE__ */ new Map();
+  (Array.isArray(stored) ? stored : []).forEach((e) => {
+    if (havenIsLocalOnlyJob(e) && !byId.has(String(e.id))) byId.set(String(e.id), e);
+  });
+  const curLocal = (Array.isArray(cache) ? cache : []).filter(havenIsLocalOnlyJob);
+  curLocal.forEach((j) => {
+    if (!byId.has(String(j.id))) byId.set(String(j.id), j);
+  });
+  const used = new Set(takenIds || []);
+  const shown = [];
+  byId.forEach((e, k) => {
+    const d = havenPhoneOnlyForDisplay(e, curLocal.find((j) => String(j.id) === k));
+    while (used.has(d.id)) d.id += 1;
+    used.add(d.id);
+    shown.push(d);
+  });
+  return shown;
 }
 const trustColor = (score) => score >= 97 ? SC : score >= 90 ? AM : "#EF4444";
 const TIME_PREFS = [
@@ -2922,12 +3168,13 @@ function App() {
   const [jobsVerifiedFor, setJobsVerifiedFor] = useState("");
   const jobsVerified = !getSupabaseConfig() || !!jobsVerifiedFor && havenSameCustomerId(jobsVerifiedFor, havenJobsAccountId() || "");
   const [jobsCreatedHere, setJobsCreatedHere] = useState(() => /* @__PURE__ */ new Set());
+  const [phoneOnlyShown, setPhoneOnlyShown] = useState(HAVEN_NO_JOBS);
   const jobs = React.useMemo(() => {
     if (!havenJobsCacheIsCurrentAccount()) return HAVEN_NO_JOBS;
-    if (jobsVerified) return jobsState;
+    if (jobsVerified) return phoneOnlyShown.length ? jobsState.filter((j) => j && j.backendJobId).concat(phoneOnlyShown) : jobsState;
     if (jobsCreatedHere.size === 0) return HAVEN_NO_JOBS;
     return jobsState.filter((j) => j && j.backendJobId && jobsCreatedHere.has(havenBackendKey(j.backendJobId)));
-  }, [jobsState, jobsVerified, jobsCreatedHere, jobsVerifiedFor]);
+  }, [jobsState, jobsVerified, jobsCreatedHere, jobsVerifiedFor, phoneOnlyShown]);
   const jobsRef = useRef(jobs);
   useEffect(() => {
     jobsRef.current = jobs;
@@ -3050,6 +3297,7 @@ function App() {
     });
     setJobs([]);
     setVjid(null);
+    setPhoneOnlyShown(HAVEN_NO_JOBS);
     if (getSupabaseConfig()) {
       havenWriteJobsOwner(havenAccountId);
       if (havenAccountId) void hydrateMyJobs();
@@ -3497,7 +3745,7 @@ function App() {
         // Map location confirmed by the customer (Mapbox, permanent lookup). Kept only if well-formed.
         geo: a.geo && typeof a.geo === "object" && Number.isFinite(a.geo.lat) && Number.isFinite(a.geo.lng) ? { lat: a.geo.lat, lng: a.geo.lng, accuracy: typeof a.geo.accuracy === "string" ? a.geo.accuracy : "unknown", mapboxId: a.geo.mapboxId || null, source: "mapbox", confirmedAt: a.geo.confirmedAt || null } : null
       }));
-      const storedJobs = jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs(), havenReadLocalOnlyAll());
+      const storedJobs = jobsState.concat(havenReadStoredJobsAnyOwner(), havenReadLegacyJobs(), havenReadLocalOnlyAll(), havenReadAccountJobsAll());
       const kept = cleaned.filter((a) => !isUntouchedSampleAddress(a, storedJobs));
       if (kept.length !== cleaned.length) {
         cleaned.length = 0;
@@ -3675,7 +3923,8 @@ function App() {
   const vjTotal = vjTask ? (vj?.lockedPrice ?? vjTask.p) + (vj?.surge || 0) + (vj?.emergencyFee || 0) : 0;
   const progressStatus = vj ? vj.status === "diagnosing" || vj.status === "materials_requested" ? "arrived" : vj.status === "materials_approved" ? "in_progress" : vj.status : null;
   const vjSIdx = vj ? SF.indexOf(progressStatus) : -1;
-  const vjMsgs = vj?.msgs || [];
+  const vjMsgsRaw = vj?.msgs;
+  const vjMsgs = React.useMemo(() => (vjMsgsRaw || []).filter((m) => CUSTOMER_MESSAGING_CONNECTED || havenIsCustomerMsg(m)), [vjMsgsRaw]);
   const proProfilePro = PROS.find((p) => p.i === proProfileId) || (vjPro && vjPro.real && vjPro.i === proProfileId ? vjPro : PROS[0]);
   const formatAddress = (a) => a ? `${a.street}${a.unit ? ", " + a.unit : ""}, ${a.city}, ${a.state} ${a.zip}` : "";
   const getExpectedDuration = (t) => {
@@ -3809,26 +4058,74 @@ function App() {
       if (TERMINAL_STATUSES.has(j.status) || j.status === "cancelled") return;
       completedNow.push({ id: j.id, proName: j.pro && j.pro.n || "Your pro" });
     });
-    const legacyJobs = havenReadLegacyJobs();
+    const legacyJobs = havenAccountFor(uid).jobs.concat(havenReadLegacyJobs());
+    const ownPhoneOnly = (havenReadLocalOnly().owners || {})[havenAcctKey(uid)] || [];
     legacyReadRef.current = { uid, rows: rowByKey };
     setJobs((list) => havenReconcileJobsWithBackend(list, result.rows, startStatus, labels, legacyJobs));
+    setPhoneOnlyShown(havenOwnPhoneOnlyShown(ownPhoneOnly, jobsCacheRef.current, (jobsCacheRef.current || []).filter((j) => j && j.backendJobId).map((j) => j.id)));
     setJobsVerifiedFor(uid);
     setBookingsLoad("ok");
     completedNow.forEach(({ id, proName }) => handleJobTransition(id, "complete", proName));
   };
   useEffect(() => {
-    if (!getSupabaseConfig() || havenLegacyPending) return;
+    if (!getSupabaseConfig()) return;
+    const pendingNow = havenLegacyPending;
     const uid = havenJobsAccountId();
     const last = legacyReadRef.current;
     if (!uid || !last || !havenSameCustomerId(last.uid, uid) || !havenSameCustomerId(jobsVerifiedFor, uid)) return;
     if (!havenJobsCacheIsCurrentAccount()) return;
     const legacy = havenReadLegacyJobs();
     const legacyNotifs = havenReadLegacyNotifs();
-    if (!legacy.length && !legacyNotifs.length) return;
-    const saved = /* @__PURE__ */ new Map();
-    havenReadStoredJobsAnyOwner().forEach((j) => {
+    const acct = havenAccountFor(uid);
+    if (!legacy.length && !legacyNotifs.length && !acct.jobs.length && !acct.notifications.length) return;
+    const saved = /* @__PURE__ */ new Map(), savedLocal = /* @__PURE__ */ new Map();
+    (pendingNow ? jobsState : havenReadStoredJobsAnyOwner()).forEach((j) => {
       if (j && j.backendJobId) saved.set(havenBackendKey(j.backendJobId), j);
     });
+    phoneOnlyShown.forEach((j) => {
+      if (j && j.id != null) savedLocal.set(j.id, j);
+    });
+    if (acct.jobs.length || acct.notifications.length) {
+      const savedNotifIdsA = pendingNow ? /* @__PURE__ */ new Set() : new Set(havenRawData((() => {
+        try {
+          return localStorage.getItem("haven_notifications");
+        } catch {
+          return null;
+        }
+      })()).map((n) => n && String(n.id)));
+      const toShowA = [], keepN = [], keepJ = [];
+      acct.notifications.forEach((n) => {
+        const bk = havenBackendKey(n.accountBackendJobId);
+        const job = bk ? last.rows.has(bk) ? saved.get(bk) : null : n.accountLocalJobId != null ? savedLocal.get(n.accountLocalJobId) : null;
+        if (!job) {
+          keepN.push(n);
+          return;
+        }
+        if (savedNotifIdsA.has(String(n.id))) return;
+        keepN.push(n);
+        const { accountBackendJobId, accountLocalJobId, ...rest } = n;
+        const dest = rest.destination && typeof rest.destination === "object" && rest.destination.jobId != null ? { ...rest.destination, jobId: job.id } : rest.destination;
+        toShowA.push({ ...rest, jobId: job.id, ...dest !== void 0 ? { destination: dest } : {} });
+      });
+      acct.jobs.forEach((e) => {
+        const k = havenBackendKey(e.backendJobId);
+        const row = last.rows.get(k), job = saved.get(k);
+        if (!row || !job) {
+          keepJ.push(e);
+          return;
+        }
+        const after = havenApplyLegacyDetails(job, row, e);
+        const done = HAVEN_LEGACY_JOB_FIELDS.every((f) => f === "id" || JSON.stringify(after[f]) === JSON.stringify(job[f]));
+        if (!done) keepJ.push(e);
+      });
+      if (toShowA.length) setNotifications((prev) => {
+        const have = new Set(prev.map((p) => String(p.id)));
+        const add = toShowA.filter((n) => !have.has(String(n.id)));
+        return add.length ? prev.concat(add).sort((x, y) => (y.createdAt || 0) - (x.createdAt || 0)) : prev;
+      });
+      if (!pendingNow && (keepN.length !== acct.notifications.length || keepJ.length !== acct.jobs.length)) havenWriteAccountFor(uid, { jobs: keepJ, notifications: keepN });
+    }
+    if (pendingNow || !legacy.length && !legacyNotifs.length) return;
     if (legacyNotifs.length) {
       const savedNotifIds = new Set(havenRawData((() => {
         try {
@@ -3879,7 +4176,7 @@ function App() {
       });
       if (JSON.stringify(next) !== JSON.stringify(legacy)) havenWriteLegacyJobs(next);
     }
-  }, [jobsState, jobsVerifiedFor, notifications]);
+  }, [jobsState, jobsVerifiedFor, notifications, phoneOnlyShown]);
   const havenSessionLoaded = backendStatus === "ready";
   useEffect(() => {
     if (!getSupabaseConfig()) return;
@@ -3888,6 +4185,7 @@ function App() {
     const owner = havenReadJobsOwner();
     const sameOwner = uid ? !!owner && owner.toLowerCase() === uid.toLowerCase() : !owner;
     if (!sameOwner) {
+      if (owner) havenStashAccount(owner);
       hydrateSeqRef.current++;
       jobsRef.current = HAVEN_NO_JOBS;
       jobsCacheRef.current = HAVEN_NO_JOBS;
@@ -3895,6 +4193,7 @@ function App() {
       setJobsVerifiedFor("");
       setJobsCreatedHere(/* @__PURE__ */ new Set());
       setJobs([]);
+      setPhoneOnlyShown(HAVEN_NO_JOBS);
       setVjid(null);
       setBackendReceipts({});
       proLabelTriedRef.current = {};
@@ -5078,7 +5377,7 @@ function App() {
       const isPending = j.status === "posted";
       const isDone = TERMINAL_STATUSES.has(j.status);
       const isCancelPending = j.cancelStatus === "requested" && !isDone;
-      const statusLabel = isCancelPending ? "Pending Cancellation" : isPending ? "Waiting for pro" : isDone ? j.status === "complete" ? "Completed" : j.status === "inspection_completed" ? "Inspection visit completed" : "Job ended — materials declined" : SI[j.status]?.label || "Active";
+      const statusLabel = havenIsPhoneOnly(j) ? HAVEN_DEVICE_ONLY_LABEL : isCancelPending ? "Pending Cancellation" : isPending ? "Waiting for pro" : isDone ? j.status === "complete" ? "Completed" : j.status === "inspection_completed" ? "Inspection visit completed" : "Job ended — materials declined" : SI[j.status]?.label || "Active";
       const statusColor = isCancelPending ? "#DC2626" : j.status === "materials_requested" ? "#92400E" : isPending ? AM : isDone ? SC : N;
       const statusBg = isCancelPending ? "#FEF2F2" : j.status === "materials_requested" ? "#FEF3C7" : isPending ? "#FEF3C7" : isDone ? SL : "#EEF2FF";
       return /* @__PURE__ */ React.createElement("div", { role: "button", tabIndex: 0, onKeyDown: keyActivate, key: j.id, onClick: () => {
@@ -5086,7 +5385,7 @@ function App() {
         setShowCancelConfirm(false);
         setShowCancelRequest(false);
         goTo(isPending ? "posted" : "tracking");
-      }, style: { background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)", marginBottom: 12, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 50, height: 50, borderRadius: 25, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 } }, jt?.e || "🔧"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: TX } }, jt?.n || "Custom job"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginTop: 2 } }, j.reqWindow ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, color: jobTimeConfirmed(j) ? SC : AMT } }, jobTimeConfirmed(j) ? "Confirmed" : "Requested"), " ", windowLabel(j.reqWindow)) : jtp ? jtp.label : "—", " · $", jTotal), j.desc && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TM, marginTop: 3, lineHeight: 1.4, fontStyle: "italic" } }, '"', j.desc.slice(0, 55), j.desc.length > 55 ? "…" : "", '"')), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 20, flexShrink: 0 } }, "›")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: statusColor, background: statusBg, padding: "5px 12px", borderRadius: 20 } }, statusLabel), j.emergency && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#C2410C", background: "#FFF1EE", padding: "4px 10px", borderRadius: 20 } }, "🚨 Emergency")), j.status === "materials_requested" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 800, color: ON, background: "#DC2626", padding: "2px 8px", borderRadius: 10 } }, "Action needed"), !isPending && j.pro && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: TS } }, "Pro: ", j.pro.n), isDone && !j.rated && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: AMT, fontWeight: 700 } }, "⭐ Rate now"), isDone && j.rated && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: SC, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 } }, starDisplay(j.stars, 11), " Reviewed", havenRestored(j, "rating") ? ` · ${HAVEN_DEVICE_ONLY_LABEL}` : "")));
+      }, style: { background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)", marginBottom: 12, cursor: "pointer" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 50, height: 50, borderRadius: 25, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 26, flexShrink: 0 } }, jt?.e || "🔧"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: TX } }, jt?.n || "Custom job"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginTop: 2 } }, j.reqWindow ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, color: jobTimeConfirmed(j) ? SC : AMT } }, jobTimeConfirmed(j) ? "Confirmed" : "Requested"), " ", windowLabel(j.reqWindow)) : jtp ? jtp.label : "—", " · $", jTotal), j.desc && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TM, marginTop: 3, lineHeight: 1.4, fontStyle: "italic" } }, '"', j.desc.slice(0, 55), j.desc.length > 55 ? "…" : "", '"')), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 20, flexShrink: 0 } }, "›")), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 6 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 6 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, fontWeight: 700, color: statusColor, background: statusBg, padding: "5px 12px", borderRadius: 20 } }, statusLabel), j.emergency && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#C2410C", background: "#FFF1EE", padding: "4px 10px", borderRadius: 20 } }, "🚨 Emergency")), j.status === "materials_requested" && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 800, color: ON, background: "#DC2626", padding: "2px 8px", borderRadius: 10 } }, "Action needed"), !isPending && j.pro && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: TS } }, "Pro: ", j.pro.n), isDone && !j.rated && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: AMT, fontWeight: 700 } }, "⭐ Rate now"), isDone && j.rated && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: SC, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 4 } }, starDisplay(j.stars, 11), " Reviewed", havenLocalLabel(j, "rating") ? ` · ${HAVEN_DEVICE_ONLY_LABEL}` : "")));
     }));
   };
   const profileScreen = () => /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: "20px 20px 100px", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 22, color: TX, marginBottom: 20 } }, "Profile"), /* @__PURE__ */ React.createElement("button", { onClick: openEditProfile, style: { width: "100%", textAlign: "left", font: "inherit", background: N, border: "none", borderRadius: 20, padding: 20, marginBottom: 16, display: "flex", gap: 14, alignItems: "center", cursor: "pointer" } }, /* @__PURE__ */ React.createElement(Avatar, { photo: profile.photo, size: 52, iconSize: 30, iconColor: W }), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 16, color: ON } }, profileShownName || "Add your name"), /* @__PURE__ */ React.createElement("div", { style: { color: "rgba(255,255,255,.55)", fontSize: 13, marginTop: 2 } }, profile.bio || `Member since ${new Date(profile.accountCreatedAt).getFullYear()}`), havenAuth && havenAuth.email ? /* @__PURE__ */ React.createElement("div", { style: { color: "rgba(255,255,255,.72)", fontSize: 12, marginTop: 4 } }, havenAuth.email, " · ", havenAuth.role || "customer") : null), /* @__PURE__ */ React.createElement("span", { style: { color: "rgba(255,255,255,.6)", fontSize: 12, fontWeight: 600 } }, "Edit ›")), /* @__PURE__ */ React.createElement("button", { onClick: openMyHome, style: { width: "100%", textAlign: "left", font: "inherit", background: "linear-gradient(135deg,#FEF3C7,#FDE68A)", border: "none", borderRadius: 20, padding: 18, marginBottom: 16, display: "flex", gap: 14, alignItems: "center", cursor: "pointer", boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 48, height: 48, borderRadius: 24, background: "rgba(255,255,255,.55)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 } }, "🏡"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: "#92400E" } }, "My Home"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#92400E", opacity: 0.8, marginTop: 2 } }, "Service history, maintenance & more")), /* @__PURE__ */ React.createElement("span", { style: { color: "#92400E", fontSize: 18 } }, "›")), /* @__PURE__ */ React.createElement("button", { onClick: () => goTo("notifCenter"), "aria-label": unreadCount > 0 ? `Notifications, ${unreadCount > 9 ? "9+" : unreadCount} unread` : "Notifications", style: { width: "100%", textAlign: "left", font: "inherit", background: `linear-gradient(135deg,${SELBG},${SELBORDER}33)`, border: `1px solid ${SELBORDER}`, borderRadius: 20, padding: 18, marginBottom: 16, display: "flex", gap: 14, alignItems: "center", cursor: "pointer", boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 48, height: 48, borderRadius: 24, background: "rgba(255,255,255,.55)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 24, flexShrink: 0 } }, "🔔"), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 8 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 15, color: NT } }, "Notifications"), unreadCount > 0 && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 800, color: ON, background: "#DC2626", padding: "1px 7px", borderRadius: 10, minWidth: 18, textAlign: "center" } }, unreadCount > 9 ? "9+" : unreadCount)), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: NT, opacity: 0.75, marginTop: 2 } }, "Job updates, messages & account alerts")), /* @__PURE__ */ React.createElement("span", { style: { color: NT, fontSize: 18 } }, "›")), /* @__PURE__ */ React.createElement("div", { style: { background: W, borderRadius: 20, overflow: "hidden", boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, [
@@ -5893,7 +6192,7 @@ function App() {
     return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG2 } }, /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { flexShrink: 0 } }, subHeader("Receipt", () => backFrom("receipt", { scr: "myhome", tab: "home" }))), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: 20 } }, /* @__PURE__ */ React.createElement("div", { className: "receipt-print-area", style: { background: W2, borderRadius: 20, padding: 28, boxShadow: "0 4px 20px rgba(28,43,58,.1)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 22, paddingBottom: 20, borderBottom: `2px solid ${TX2}` } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 20, fontWeight: 800, color: N, letterSpacing: 1.5 } }, "HAVEN"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: TM2, marginTop: 2, letterSpacing: 0.5 } }, "Home Services, Done Right")), /* @__PURE__ */ React.createElement("div", { style: { textAlign: "right" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 800, color: TX2, letterSpacing: 2 } }, "RECEIPT"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TS2, marginTop: 3 } }, "#", receiptId), payment.paid ? /* @__PURE__ */ React.createElement("div", { style: { display: "inline-block", marginTop: 5, padding: "2px 10px", borderRadius: 8, background: SL2, color: SC, fontSize: 10, fontWeight: 800, letterSpacing: 0.5 } }, "PAID") : /* @__PURE__ */ React.createElement("div", { style: { display: "inline-block", marginTop: 5, padding: "2px 10px", borderRadius: 8, background: BG2, color: TS2, fontSize: 10, fontWeight: 800, letterSpacing: 0.5 } }, "NOT CHARGED YET"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TS2, marginTop: 5 } }, dateStr, " · ", timeStr))), /* @__PURE__ */ React.createElement("div", { style: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16, marginBottom: 20 } }, billedTo.hasAny ? /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: TM2, letterSpacing: 0.6, marginBottom: 4 } }, "BILLED TO"), billedTo.name && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: TX2 } }, billedTo.name), billedTo.address && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS2, marginTop: 2, lineHeight: 1.4 } }, billedTo.address), billedTo.addressLabel && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM2, marginTop: 1 } }, billedTo.addressLabel), billedTo.maskedEmail && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS2, marginTop: 2 } }, billedTo.maskedEmail)) : (
       // Empty BILLED TO: keep the grid cell so SERVICE PROVIDER stays in the right column.
       /* @__PURE__ */ React.createElement("div", { "aria-hidden": "true" })
-    ), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: TM2, letterSpacing: 0.6, marginBottom: 4 } }, "SERVICE PROVIDER"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: TX2 } }, vjPro.n), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS2, marginTop: 2 } }, "via Haven"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 20, background: BG2, borderRadius: 14, padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 40, height: 40, borderRadius: 20, background: W2, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, vjTask ? vjTask.e : "🔧")), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: TX2 } }, serviceName), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TS2, marginTop: 1 } }, "Completed ", dateStr, " at ", timeStr))), vj.desc && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: TM2, letterSpacing: 0.6, marginBottom: 10 } }, "DESCRIPTION"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS2, lineHeight: 1.6 } }, vj.desc), havenRestored(vj, "desc") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM2, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: TM2, letterSpacing: 0.6, marginBottom: 10 } }, "PAYMENT BREAKDOWN"), lineItems.map(([l, v]) => /* @__PURE__ */ React.createElement("div", { key: l, style: { display: "flex", justifyContent: "space-between", marginBottom: 9 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: TS2 } }, l), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: TX2, fontWeight: 600 } }, v))), receipt ? /* @__PURE__ */ React.createElement("div", { style: { borderTop: `2px solid ${TX2}`, marginTop: 6, paddingTop: 12, display: "flex", justifyContent: "space-between", alignItems: "baseline" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, color: TX2, fontWeight: 800 } }, payment.paid ? "Total paid" : "Total"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20, color: TX2, fontWeight: 900 } }, receiptMoney(receipt.totalCents))) : /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS2 } }, "Total not available yet")), payment.showCard && /* @__PURE__ */ React.createElement("div", { style: { background: BG2, borderRadius: 14, padding: 14, marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: TM2, letterSpacing: 0.6, marginBottom: 3 } }, "PAYMENT METHOD"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TX2, fontWeight: 700 } }, payment.brand, " •••• ", payment.last4)), /* @__PURE__ */ React.createElement("div", { style: { padding: "3px 10px", borderRadius: 8, background: SL2, color: SC, fontSize: 11, fontWeight: 800 } }, "Paid")), /* @__PURE__ */ React.createElement("div", { style: { background: SL2, borderRadius: 14, padding: 14, display: "flex", gap: 10, alignItems: "center", marginBottom: 20 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 16 } }, "✅"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: SC, fontWeight: 600, lineHeight: 1.4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } }, vj.rated ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Rated ", starDisplay(vj.stars, 13), " — covered by Haven's satisfaction guarantee.") : "This job is covered by Haven's trust & safety guarantee.")), /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${BD2}`, paddingTop: 14, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM2, lineHeight: 1.6 } }, "Questions about this receipt? Contact Haven Support at support@haven.app"), payment.paid && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: TM2, marginTop: 6 } }, "This receipt confirms a completed payment. No balance is owed."))), /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { display: "flex", justifyContent: "flex-end", marginTop: 16, paddingBottom: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: shareReceipt, "aria-label": "Share Receipt", style: { display: "flex", alignItems: "center", gap: 8, padding: "12px 20px", borderRadius: 14, border: "none", background: N, color: "#FFFFFF", fontWeight: 700, fontSize: 14, cursor: "pointer", boxShadow: "0 4px 14px rgba(28,43,58,.2)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 16 } }, "⬆️"), " Share Receipt")), showShareFallback && /* @__PURE__ */ React.createElement("div", { className: "no-print", onClick: () => setShowShareFallback(false), style: { position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "flex-end", zIndex: 20 } }, /* @__PURE__ */ React.createElement("div", { onClick: (e) => e.stopPropagation(), style: { background: "#FFFFFF", borderRadius: "20px 20px 0 0", padding: 20, width: "100%", paddingBottom: "max(20px, env(safe-area-inset-bottom))" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 15, color: "#1C2B3A", marginBottom: 14, textAlign: "center" } }, "Share Receipt"), /* @__PURE__ */ React.createElement("button", { onClick: printReceipt, style: { width: "100%", padding: 14, borderRadius: 12, border: "1.5px solid #E5DED4", background: "#FFFFFF", color: "#1C2B3A", fontWeight: 600, fontSize: 14, cursor: "pointer", marginBottom: 8, textAlign: "left", display: "flex", alignItems: "center", gap: 10 } }, "🖨️ Print Receipt"), /* @__PURE__ */ React.createElement("button", { onClick: downloadReceipt, style: { width: "100%", padding: 14, borderRadius: 12, border: "1.5px solid #E5DED4", background: "#FFFFFF", color: "#1C2B3A", fontWeight: 600, fontSize: 14, cursor: "pointer", marginBottom: 8, textAlign: "left", display: "flex", alignItems: "center", gap: 10 } }, "⬇️ Save or Download Receipt"), /* @__PURE__ */ React.createElement("button", { onClick: copyReceiptDetails, style: { width: "100%", padding: 14, borderRadius: 12, border: "1.5px solid #E5DED4", background: "#FFFFFF", color: "#1C2B3A", fontWeight: 600, fontSize: 14, cursor: "pointer", marginBottom: 10, textAlign: "left", display: "flex", alignItems: "center", gap: 10 } }, "📋 Copy Receipt Details"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowShareFallback(false), style: { width: "100%", padding: 14, borderRadius: 12, border: "none", background: "#F5F2ED", color: "#5A6B78", fontWeight: 600, fontSize: 14, cursor: "pointer" } }, "Cancel"))), showCopiedToast && /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { position: "fixed", left: 16, right: 16, bottom: 96, background: N, borderRadius: 14, padding: "12px 16px", textAlign: "center", boxShadow: "0 8px 24px rgba(0,0,0,.25)", zIndex: 21 } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#FFFFFF", fontSize: 13, fontWeight: 600 } }, "Receipt details copied"))));
+    ), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: TM2, letterSpacing: 0.6, marginBottom: 4 } }, "SERVICE PROVIDER"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: TX2 } }, vjPro.n), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS2, marginTop: 2 } }, "via Haven"))), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", alignItems: "center", gap: 12, marginBottom: 20, background: BG2, borderRadius: 14, padding: 14 } }, /* @__PURE__ */ React.createElement("div", { style: { width: 40, height: 40, borderRadius: 20, background: W2, display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20 } }, vjTask ? vjTask.e : "🔧")), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: TX2 } }, serviceName), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TS2, marginTop: 1 } }, "Completed ", dateStr, " at ", timeStr))), vj.desc && /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: TM2, letterSpacing: 0.6, marginBottom: 10 } }, "DESCRIPTION"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS2, lineHeight: 1.6 } }, vj.desc), havenLocalLabel(vj, "desc") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM2, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL)), /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 20 } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: TM2, letterSpacing: 0.6, marginBottom: 10 } }, "PAYMENT BREAKDOWN"), lineItems.map(([l, v]) => /* @__PURE__ */ React.createElement("div", { key: l, style: { display: "flex", justifyContent: "space-between", marginBottom: 9 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: TS2 } }, l), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 13, color: TX2, fontWeight: 600 } }, v))), receipt ? /* @__PURE__ */ React.createElement("div", { style: { borderTop: `2px solid ${TX2}`, marginTop: 6, paddingTop: 12, display: "flex", justifyContent: "space-between", alignItems: "baseline" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 14, color: TX2, fontWeight: 800 } }, payment.paid ? "Total paid" : "Total"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 20, color: TX2, fontWeight: 900 } }, receiptMoney(receipt.totalCents))) : /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS2 } }, "Total not available yet")), payment.showCard && /* @__PURE__ */ React.createElement("div", { style: { background: BG2, borderRadius: 14, padding: 14, marginBottom: 20, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, fontWeight: 700, color: TM2, letterSpacing: 0.6, marginBottom: 3 } }, "PAYMENT METHOD"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TX2, fontWeight: 700 } }, payment.brand, " •••• ", payment.last4)), /* @__PURE__ */ React.createElement("div", { style: { padding: "3px 10px", borderRadius: 8, background: SL2, color: SC, fontSize: 11, fontWeight: 800 } }, "Paid")), /* @__PURE__ */ React.createElement("div", { style: { background: SL2, borderRadius: 14, padding: 14, display: "flex", gap: 10, alignItems: "center", marginBottom: 20 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 16 } }, "✅"), /* @__PURE__ */ React.createElement("span", { style: { fontSize: 12, color: SC, fontWeight: 600, lineHeight: 1.4, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" } }, vj.rated ? /* @__PURE__ */ React.createElement(React.Fragment, null, "Rated ", starDisplay(vj.stars, 13), " — covered by Haven's satisfaction guarantee.") : "This job is covered by Haven's trust & safety guarantee.")), /* @__PURE__ */ React.createElement("div", { style: { borderTop: `1px solid ${BD2}`, paddingTop: 14, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM2, lineHeight: 1.6 } }, "Questions about this receipt? Contact Haven Support at support@haven.app"), payment.paid && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 10, color: TM2, marginTop: 6 } }, "This receipt confirms a completed payment. No balance is owed."))), /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { display: "flex", justifyContent: "flex-end", marginTop: 16, paddingBottom: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: shareReceipt, "aria-label": "Share Receipt", style: { display: "flex", alignItems: "center", gap: 8, padding: "12px 20px", borderRadius: 14, border: "none", background: N, color: "#FFFFFF", fontWeight: 700, fontSize: 14, cursor: "pointer", boxShadow: "0 4px 14px rgba(28,43,58,.2)" } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 16 } }, "⬆️"), " Share Receipt")), showShareFallback && /* @__PURE__ */ React.createElement("div", { className: "no-print", onClick: () => setShowShareFallback(false), style: { position: "fixed", inset: 0, background: "rgba(0,0,0,.4)", display: "flex", alignItems: "flex-end", zIndex: 20 } }, /* @__PURE__ */ React.createElement("div", { onClick: (e) => e.stopPropagation(), style: { background: "#FFFFFF", borderRadius: "20px 20px 0 0", padding: 20, width: "100%", paddingBottom: "max(20px, env(safe-area-inset-bottom))" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 15, color: "#1C2B3A", marginBottom: 14, textAlign: "center" } }, "Share Receipt"), /* @__PURE__ */ React.createElement("button", { onClick: printReceipt, style: { width: "100%", padding: 14, borderRadius: 12, border: "1.5px solid #E5DED4", background: "#FFFFFF", color: "#1C2B3A", fontWeight: 600, fontSize: 14, cursor: "pointer", marginBottom: 8, textAlign: "left", display: "flex", alignItems: "center", gap: 10 } }, "🖨️ Print Receipt"), /* @__PURE__ */ React.createElement("button", { onClick: downloadReceipt, style: { width: "100%", padding: 14, borderRadius: 12, border: "1.5px solid #E5DED4", background: "#FFFFFF", color: "#1C2B3A", fontWeight: 600, fontSize: 14, cursor: "pointer", marginBottom: 8, textAlign: "left", display: "flex", alignItems: "center", gap: 10 } }, "⬇️ Save or Download Receipt"), /* @__PURE__ */ React.createElement("button", { onClick: copyReceiptDetails, style: { width: "100%", padding: 14, borderRadius: 12, border: "1.5px solid #E5DED4", background: "#FFFFFF", color: "#1C2B3A", fontWeight: 600, fontSize: 14, cursor: "pointer", marginBottom: 10, textAlign: "left", display: "flex", alignItems: "center", gap: 10 } }, "📋 Copy Receipt Details"), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowShareFallback(false), style: { width: "100%", padding: 14, borderRadius: 12, border: "none", background: "#F5F2ED", color: "#5A6B78", fontWeight: 600, fontSize: 14, cursor: "pointer" } }, "Cancel"))), showCopiedToast && /* @__PURE__ */ React.createElement("div", { className: "no-print", style: { position: "fixed", left: 16, right: 16, bottom: 96, background: N, borderRadius: 14, padding: "12px 16px", textAlign: "center", boxShadow: "0 8px 24px rgba(0,0,0,.25)", zIndex: 21 } }, /* @__PURE__ */ React.createElement("span", { style: { color: "#FFFFFF", fontSize: 13, fontWeight: 600 } }, "Receipt details copied"))));
   };
   const addressInput = (field, placeholder, extra = {}) => /* @__PURE__ */ React.createElement(
     "input",
@@ -6195,7 +6494,7 @@ function App() {
     if (!vj) return unavailableScreen("Booking", goBookings);
     const postedWaiting = vj.status === "posted";
     const postedArrived = vj.status === "arrived";
-    return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { background: N, padding: "14px 20px 20px", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("button", { onClick: goBookings, style: { background: "rgba(255,255,255,.12)", border: "none", color: ON, padding: "8px 16px", borderRadius: 12, cursor: "pointer", fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 } }, "← Bookings"), /* @__PURE__ */ React.createElement("span", { style: { color: "rgba(255,255,255,.6)", fontSize: 13, fontWeight: 600 } }, postedArrived ? "Arrived" : "Pending")), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: "0 20px 24px" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "28px 0 22px" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 72, height: 72, borderRadius: 36, background: vj.emergency ? "#FFF1EE" : "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, margin: "0 auto 16px", animation: "pulse 1.8s ease-in-out infinite" } }, vj.emergency ? "🚨" : "📋"), vj.emergency && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, background: "#FFF1EE", color: "#C2410C", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 20, marginBottom: 10 } }, "Emergency priority"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 22, color: TX, marginBottom: 8 } }, postedArrived ? SI.arrived.label : vj.emergency ? "Looking for a Pro (urgent)…" : "Looking for a pro…"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: TS, lineHeight: 1.6 } }, postedArrived ? `${vjPname} ${SI.arrived.sub}` : vj.emergency ? "Your job is marked urgent for Pros near you. Arrival times aren't guaranteed. This screen updates as soon as one accepts." : "Pros near you can see your job. This screen updates as soon as one accepts.")), /* @__PURE__ */ React.createElement("div", { style: { background: W, borderRadius: 20, padding: 18, marginBottom: 14, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "center", paddingBottom: 14, marginBottom: 14, borderBottom: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { width: 52, height: 52, borderRadius: 26, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, flexShrink: 0 } }, vjTask ? vjTask.e : "🔧"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 16, color: TX } }, vjTask ? vjTask.n : "Custom job"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 20, color: AMT, marginTop: 2 } }, "$", vjTotal))), [["When", vj.reqWindow ? jobTimeConfirmed(vj) ? "Confirmed" : "Requested" : vjTp ? vjTp.label : "—"], ["Window", vj.reqWindow ? windowLabel(vj.reqWindow) : vjTp ? vjTp.sub : "—"], ["Photos", vj.photos?.length > 0 ? `${vj.photos.length} added${havenRestored(vj, "photos") ? ` · ${HAVEN_DEVICE_ONLY_LABEL}` : ""}` : "None"]].map(([l, v]) => /* @__PURE__ */ React.createElement("div", { key: l, style: { display: "flex", justifyContent: "space-between", marginBottom: 9 } }, /* @__PURE__ */ React.createElement("span", { style: { color: TS, fontSize: 13 } }, l), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: TX } }, v))), vj.desc && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, marginBottom: 4 } }, "DESCRIPTION"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5, fontStyle: "italic" } }, '"', vj.desc, '"'), havenRestored(vj, "desc") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL))), postedWaiting && (!showCancelConfirm ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelConfirm(true), style: { background: "none", border: `1.5px solid #FCA5A5`, color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: "10px 20px", borderRadius: 12 } }, "Cancel Job")) : /* @__PURE__ */ React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 16, padding: 16, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#DC2626", marginBottom: 4 } }, "Cancel this job?"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 12 } }, "No pro has accepted yet, so this cancels immediately with no fee."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelConfirm(false), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: TS, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Keep job"), /* @__PURE__ */ React.createElement("button", { onClick: cancelJobDirect, style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: "#DC2626", color: ON, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Yes, cancel"))))));
+    return /* @__PURE__ */ React.createElement("div", { style: { flex: 1, display: "flex", flexDirection: "column", overflow: "hidden", background: BG } }, /* @__PURE__ */ React.createElement("div", { style: { background: N, padding: "14px 20px 20px", flexShrink: 0, display: "flex", justifyContent: "space-between", alignItems: "center" } }, /* @__PURE__ */ React.createElement("button", { onClick: goBookings, style: { background: "rgba(255,255,255,.12)", border: "none", color: ON, padding: "8px 16px", borderRadius: 12, cursor: "pointer", fontSize: 13, fontWeight: 600, display: "inline-flex", alignItems: "center", gap: 6 } }, "← Bookings"), /* @__PURE__ */ React.createElement("span", { style: { color: "rgba(255,255,255,.6)", fontSize: 13, fontWeight: 600 } }, postedArrived ? "Arrived" : "Pending")), /* @__PURE__ */ React.createElement("div", { className: "sc", style: { flex: 1, overflowY: "auto", padding: "0 20px 24px" } }, /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center", padding: "28px 0 22px" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 72, height: 72, borderRadius: 36, background: vj.emergency ? "#FFF1EE" : "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 36, margin: "0 auto 16px", animation: "pulse 1.8s ease-in-out infinite" } }, vj.emergency ? "🚨" : "📋"), vj.emergency && /* @__PURE__ */ React.createElement("span", { style: { display: "inline-flex", alignItems: "center", gap: 5, background: "#FFF1EE", color: "#C2410C", fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 20, marginBottom: 10 } }, "Emergency priority"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 22, color: TX, marginBottom: 8 } }, havenIsPhoneOnly(vj) ? HAVEN_DEVICE_ONLY_LABEL : postedArrived ? SI.arrived.label : vj.emergency ? "Looking for a Pro (urgent)…" : "Looking for a pro…"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, color: TS, lineHeight: 1.6 } }, havenIsPhoneOnly(vj) ? "This booking never reached Haven or a Pro. It is kept on this phone for your account only." : postedArrived ? `${vjPname} ${SI.arrived.sub}` : vj.emergency ? "Your job is marked urgent for Pros near you. Arrival times aren't guaranteed. This screen updates as soon as one accepts." : "Pros near you can see your job. This screen updates as soon as one accepts.")), /* @__PURE__ */ React.createElement("div", { style: { background: W, borderRadius: 20, padding: 18, marginBottom: 14, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 14, alignItems: "center", paddingBottom: 14, marginBottom: 14, borderBottom: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { width: 52, height: 52, borderRadius: 26, background: "#FEF3C7", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, flexShrink: 0 } }, vjTask ? vjTask.e : "🔧"), /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 16, color: TX } }, vjTask ? vjTask.n : "Custom job"), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 800, fontSize: 20, color: AMT, marginTop: 2 } }, "$", vjTotal))), [["When", vj.reqWindow ? jobTimeConfirmed(vj) ? "Confirmed" : "Requested" : vjTp ? vjTp.label : "—"], ["Window", vj.reqWindow ? windowLabel(vj.reqWindow) : vjTp ? vjTp.sub : "—"], ["Photos", vj.photos?.length > 0 ? `${vj.photos.length} added${havenLocalLabel(vj, "photos") ? ` · ${HAVEN_DEVICE_ONLY_LABEL}` : ""}` : "None"]].map(([l, v]) => /* @__PURE__ */ React.createElement("div", { key: l, style: { display: "flex", justifyContent: "space-between", marginBottom: 9 } }, /* @__PURE__ */ React.createElement("span", { style: { color: TS, fontSize: 13 } }, l), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: TX } }, v))), vj.desc && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, marginBottom: 4 } }, "DESCRIPTION"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5, fontStyle: "italic" } }, '"', vj.desc, '"'), havenLocalLabel(vj, "desc") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL))), postedWaiting && !havenIsPhoneOnly(vj) && (!showCancelConfirm ? /* @__PURE__ */ React.createElement("div", { style: { textAlign: "center" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelConfirm(true), style: { background: "none", border: `1.5px solid #FCA5A5`, color: "#DC2626", fontSize: 13, fontWeight: 700, cursor: "pointer", padding: "10px 20px", borderRadius: 12 } }, "Cancel Job")) : /* @__PURE__ */ React.createElement("div", { style: { background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 16, padding: 16, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#DC2626", marginBottom: 4 } }, "Cancel this job?"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", marginBottom: 12 } }, "No pro has accepted yet, so this cancels immediately with no fee."), /* @__PURE__ */ React.createElement("div", { style: { display: "flex", gap: 8 } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelConfirm(false), style: { flex: 1, padding: "9px 0", borderRadius: 10, border: `1.5px solid ${BD}`, background: W, color: TS, fontWeight: 600, fontSize: 12, cursor: "pointer" } }, "Keep job"), /* @__PURE__ */ React.createElement("button", { onClick: cancelJobDirect, style: { flex: 1, padding: "9px 0", borderRadius: 10, border: "none", background: "#DC2626", color: ON, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "Yes, cancel"))))));
   };
   const trackMap = () => {
     const home = vj && typeof vj.addressText === "string" ? addresses.find((a) => a.geo && formatAddress(a) === vj.addressText) : null;
@@ -6247,10 +6546,10 @@ function App() {
     }, style: { display: "flex", gap: 14, alignItems: "center", marginBottom: 14, cursor: vjPro.real ? "default" : "pointer" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 50, height: 50, borderRadius: 25, background: vjPro.col, display: "flex", alignItems: "center", justifyContent: "center", color: ON, fontWeight: 800, fontSize: 16, flexShrink: 0 } }, vjPro.i), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: TX } }, vjPro.n), /* @__PURE__ */ React.createElement("div", { style: { color: AMT, fontSize: 12, fontWeight: 600, marginBottom: 6 } }, vjPro.s), typeof vjPro.trustScore === "number" && trustLine(vjPro), typeof vjPro.r === "number" && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4 } }, "⭐ ", vjPro.r, " · ", vjPro.j, " jobs")), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 18, alignSelf: "flex-start" } }, "›")), /* @__PURE__ */ React.createElement("button", { onClick: () => goTo("messages"), style: { width: "100%", padding: "11px 0", borderRadius: 14, border: `1.5px solid ${vj.status === "complete" ? BD : NT}`, background: vj.status === "complete" ? BG : isDark ? "rgba(241,239,233,.06)" : "rgba(28,43,58,.06)", color: vj.status === "complete" ? TM : NT, fontWeight: 700, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7 } }, "💬 ", vj.status === "complete" ? "Chat (closed)" : "Message")), /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 12px", background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.8, textTransform: "uppercase" } }, "Booking Summary"), vj.emergency && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#C2410C", background: "#FFF1EE", padding: "4px 10px", borderRadius: 20 } }, "🚨 Emergency priority")), [
       ["Service", vjTask ? vjTask.n : "Custom job"],
       ["Time", vj.reqWindow ? `${jobTimeConfirmed(vj) ? "Confirmed" : "Requested"}: ${windowLabel(vj.reqWindow)}` : vjTp ? vjTp.label : "—"],
-      ["Photos", vj.photos?.length > 0 ? `${vj.photos.length} shared${havenRestored(vj, "photos") ? ` · ${HAVEN_DEVICE_ONLY_LABEL}` : ""}` : "None"],
+      ["Photos", vj.photos?.length > 0 ? `${vj.photos.length} shared${havenLocalLabel(vj, "photos") ? ` · ${HAVEN_DEVICE_ONLY_LABEL}` : ""}` : "None"],
       ...vjReceipt && vjReceipt.priorityFeeCents > 0 ? [["Emergency fee", `+${receiptMoney(vjReceipt.priorityFeeCents)}`]] : [],
       ...vjReceipt ? [["Total", receiptMoney(vjReceipt.totalCents)]] : []
-    ].map(([l, v]) => /* @__PURE__ */ React.createElement("div", { key: l, style: { display: "flex", justifyContent: "space-between", marginBottom: 9 } }, /* @__PURE__ */ React.createElement("span", { style: { color: TS, fontSize: 13 } }, l), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: l === "Total" ? AMT : TX } }, v))), !vjReceipt && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginBottom: 9 } }, "Total not available yet"), vj.desc && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, marginBottom: 4 } }, "DESCRIPTION"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5 } }, vj.desc), havenRestored(vj, "desc") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL))), (() => {
+    ].map(([l, v]) => /* @__PURE__ */ React.createElement("div", { key: l, style: { display: "flex", justifyContent: "space-between", marginBottom: 9 } }, /* @__PURE__ */ React.createElement("span", { style: { color: TS, fontSize: 13 } }, l), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 600, fontSize: 13, color: l === "Total" ? AMT : TX } }, v))), !vjReceipt && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, marginBottom: 9 } }, "Total not available yet"), vj.desc && /* @__PURE__ */ React.createElement("div", { style: { marginTop: 10, paddingTop: 10, borderTop: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, marginBottom: 4 } }, "DESCRIPTION"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS, lineHeight: 1.5 } }, vj.desc), havenLocalLabel(vj, "desc") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL))), (() => {
       const isTerminal = ["complete", "inspection_completed", "materials_declined"].includes(vj.status);
       if (!isTerminal) {
         return /* @__PURE__ */ React.createElement(React.Fragment, null, vj.cancelStatus === "requested" ? /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 24px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 16, padding: 16, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#DC2626", marginBottom: 4 } }, "Pending Cancellation"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", lineHeight: 1.5 } }, "Haven Support will review timing and any work already performed, then follow up with you.")) : !showCancelRequest ? /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 24px", textAlign: "center" } }, /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelRequest(true), style: { background: "none", border: "none", color: TM, fontSize: 12, cursor: "pointer", textDecoration: "underline", padding: "8px 0" } }, "Need to cancel this job?")) : /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 24px", background: W, borderRadius: 18, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: TX, marginBottom: 6 } }, "Cancel this job?"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, lineHeight: 1.5, marginBottom: 14 } }, "A pro has already accepted. Haven Support may need to review timing, work already performed, or applicable fees before this can be cancelled."), /* @__PURE__ */ React.createElement("button", { onClick: () => setShowCancelRequest(false), style: { width: "100%", padding: 12, borderRadius: 12, border: "none", background: AM, color: ON, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 8 } }, "Continue with job"), /* @__PURE__ */ React.createElement("button", { onClick: requestCancellation, style: { width: "100%", padding: 12, borderRadius: 12, border: `1.5px solid ${BD}`, background: BG, color: TX, fontWeight: 700, fontSize: 13, cursor: "pointer", marginBottom: 8 } }, "Request cancellation"), /* @__PURE__ */ React.createElement("button", { onClick: () => {
@@ -6259,7 +6558,7 @@ function App() {
         }, style: { width: "100%", padding: 12, borderRadius: 12, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 13, cursor: "pointer" } }, "Contact Haven Support")));
       }
       if (vj.status === "complete") {
-        return /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 24px" } }, !vj.rated ? /* @__PURE__ */ React.createElement("button", { onClick: openRating, style: { width: "100%", padding: 17, borderRadius: 18, border: "none", background: AM, color: ON, fontWeight: 800, fontSize: 16, cursor: "pointer", boxShadow: `0 6px 20px rgba(245,158,11,.35)`, marginBottom: 10 } }, "⭐ Rate ", vjPname) : /* @__PURE__ */ React.createElement("div", { style: { background: SL, borderRadius: 18, padding: 16, textAlign: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, starDisplay(vj.stars, 22)), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: SC } }, "Review submitted — thanks!"), havenRestored(vj, "rating") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL)), !HAVEN_TIPPING_AVAILABLE ? /* @__PURE__ */ React.createElement("div", { role: "note", style: { fontSize: 12, color: TS, textAlign: "center", lineHeight: 1.5, margin: "2px 8px 12px" } }, "In-app tipping isn't available yet. You haven't been charged for a tip.") : vj.tipStatus === "paid" ? /* @__PURE__ */ React.createElement("button", { onClick: openTip, style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: SC, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 } }, "✓ Tip sent: $", vj.tipAmount.toFixed(2)) : /* @__PURE__ */ React.createElement("button", { onClick: openTip, style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 } }, "💛 Tip Pro"), /* @__PURE__ */ React.createElement("button", { onClick: () => openReceipt(vj.id), style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 14, cursor: "pointer" } }, "🧾 View Receipt"));
+        return /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 24px" } }, !vj.rated ? /* @__PURE__ */ React.createElement("button", { onClick: openRating, style: { width: "100%", padding: 17, borderRadius: 18, border: "none", background: AM, color: ON, fontWeight: 800, fontSize: 16, cursor: "pointer", boxShadow: `0 6px 20px rgba(245,158,11,.35)`, marginBottom: 10 } }, "⭐ Rate ", vjPname) : /* @__PURE__ */ React.createElement("div", { style: { background: SL, borderRadius: 18, padding: 16, textAlign: "center", marginBottom: 10 } }, /* @__PURE__ */ React.createElement("div", { style: { marginBottom: 4 } }, starDisplay(vj.stars, 22)), /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 14, color: SC } }, "Review submitted — thanks!"), havenLocalLabel(vj, "rating") && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4, fontWeight: 500 } }, HAVEN_DEVICE_ONLY_LABEL)), !HAVEN_TIPPING_AVAILABLE ? /* @__PURE__ */ React.createElement("div", { role: "note", style: { fontSize: 12, color: TS, textAlign: "center", lineHeight: 1.5, margin: "2px 8px 12px" } }, "In-app tipping isn't available yet. You haven't been charged for a tip.") : vj.tipStatus === "paid" ? /* @__PURE__ */ React.createElement("button", { onClick: openTip, style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: SC, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 } }, "✓ Tip sent: $", vj.tipAmount.toFixed(2)) : /* @__PURE__ */ React.createElement("button", { onClick: openTip, style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 14, cursor: "pointer", marginBottom: 10 } }, "💛 Tip Pro"), /* @__PURE__ */ React.createElement("button", { onClick: () => openReceipt(vj.id), style: { width: "100%", padding: 15, borderRadius: 18, border: `1.5px solid ${BD}`, background: "transparent", color: TX, fontWeight: 700, fontSize: 14, cursor: "pointer" } }, "🧾 View Receipt"));
       }
       return /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 24px", background: "#FEF2F2", border: "1px solid #FCA5A5", borderRadius: 16, padding: 16, textAlign: "center" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, fontWeight: 700, color: "#DC2626", marginBottom: 6 } }, vj.status === "inspection_completed" ? "Inspection visit completed" : "Job ended — materials declined"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: "#991B1B", lineHeight: 1.5, marginBottom: 8 } }, vj.status === "inspection_completed" ? "A $45 Inspection Visit applies. Haven takes $0." : "A $30 convenience fee applies. Haven takes $0."), /* @__PURE__ */ React.createElement("button", { onClick: goBookings, style: { padding: "10px 14px", borderRadius: 10, border: "none", background: N, color: ON, fontWeight: 700, fontSize: 12, cursor: "pointer" } }, "← Back to Bookings"));
     })()));

@@ -16,7 +16,7 @@ function makeJob({
   requiresDiagnosis=false, // computed once at creation for diagnosis categories; used for materials-decline outcome
   materialsRequest=null,   // {items:[{description,qty,amount}], estimatedTotal} — shown while awaiting approval
   backendJobId=null,       // canonical UUID from Supabase dual-write; preserved across reloads
-  restoredDeviceOnly=[],   // QA #87 v4: "rating" | "photos" | "desc" restored from a master cache; shown as "Saved on this phone only"
+  restoredDeviceOnly=[],   // QA #87 v4: "rating" | "photos" | "desc" restored from a stored copy; labelled "Saved on this phone only · not synced"
 }={}){
   return {
     id:Date.now(), // known limitation: two jobs in the same millisecond would collide — impossible via UI, fix when a backend exists

@@ -3327,7 +3327,7 @@ async function runCrossDeviceBookingsChecks(){
   const settle = async (ms = 80) => { await act(async () => { await delay(ms); }); };
   // Fresh browser: no Customer app storage at all, only the Auth session.
   const freshBrowser = () => {
-    ['haven_jobs', 'haven_jobs_owner', 'haven_notifications', 'haven_draft'].forEach(k => delete storedData[k]);
+    ['haven_jobs', 'haven_jobs_owner', 'haven_notifications', 'haven_draft', 'haven_jobs_local_only', 'haven_account_device_data', 'haven_jobs_unowned_legacy', 'haven_notifications_unowned_legacy'].forEach(k => delete storedData[k]);
     clearHavenAuthTestKeys();
   };
   const mount = async (who) => {
@@ -3414,8 +3414,10 @@ async function runCrossDeviceBookingsChecks(){
     const merged = storedJobs().find(j => j.backendJobId === jobComplete);
     assert(!!merged && merged.status === 'complete', 'X2: backend complete overrides the stale local en_route');
     assert(!!merged && merged.id === 5001 && merged.desc === 'Under the kitchen sink', 'X2: the local entry keeps its id and local-only details');
-    assert(existsRegex('All (3)') && existsRegex('Completed'), 'X2: Bookings shows the backend status');
-    assert(!existsRegex('Demo seed booking') && !storedJobs().some(j => j.id === 5002), 'X2: a local-only entry (no backend id) is not shown as a booking and is dropped');
+    assert(existsRegex('All (4)') && existsRegex('Completed'), 'X2: Bookings shows the backend status (3 backend jobs + this account\'s phone-only booking)');
+    // Founder decision (QA #87 v6): an account's own phone-only booking is
+    // shown to it, labelled, and never deleted.
+    assert(existsRegex('Demo seed booking') && existsRegex('Saved on this phone only · not synced') && storedJobs().some(j => j.id === 5002), 'X2: a local-only entry (no backend id) is shown to its own account labelled "Saved on this phone only · not synced" and kept');
     assert(!existsRegex('Other account job') && !storedJobs().some(j => j.id === 5003), 'X2: a cached job the account read does not return is dropped');
     let notifs = [];
     try { notifs = JSON.parse(storedData['haven_notifications'] || '{}').data || []; } catch { notifs = []; }
@@ -3532,9 +3534,9 @@ async function runCrossDeviceBookingsChecks(){
       failJobs = false;
       click('Retry');
       await settle();
-      assert(existsRegex('All (3)') && existsRegex('Completed'), 'X4e: Retry re-reads and lists the backend jobs with the backend status');
-      assert(!existsRegex('FORGED local fake job'), 'X4e: after Retry the forged local-only job is still not listed');
-      assert(!storedJobs().some(j => j.id === 8001), 'X4e: after a landed read the local-only entry is dropped from the cache');
+      assert(existsRegex('All (4)') && existsRegex('Completed'), 'X4e: Retry re-reads and lists the backend jobs with the backend status (plus the account\'s phone-only booking)');
+      assert(existsRegex('FORGED local fake job') && existsRegex('Saved on this phone only · not synced'), 'X4e: after Retry the account\'s own local-only job is listed, labelled "Saved on this phone only · not synced"');
+      assert(storedJobs().some(j => j.id === 8001), 'X4e: after a landed read the local-only entry is kept (never deleted)');
     }
 
     // ── X1c. The Bookings card shows the same backend total as the receipt ─

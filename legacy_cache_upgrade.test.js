@@ -19,9 +19,12 @@
  * (7) Backend data and later local data are never overwritten.
  * (8) Idempotence, storage quota (nothing dropped; untouched + retried when
  *     the set-aside cannot be written), id collisions.
- * (9) Phone-only bookings (no backend id), per-user and master: set aside
- *     byte-for-byte, never shown, never given to another account, kept
- *     across reloads; a refused write leaves storage untouched (retried).
+ * (9) Phone-only bookings (no backend id): an account's own are kept under it
+ *     and shown to it, labelled; master ones stay set aside, shown to nobody;
+ *     never given to another account; a refused write is retried.
+ * (10) Per-account device data, X/Y/X/Y on one device (also low storage):
+ *     each sees only its own data with the exact label, badges are right,
+ *     sign-out clears the screen, nothing is lost, no card data or secrets.
  * Messages use the app's real shapes: only the customer's own (f:"cu") come
  * back; scripted pre-A2 pro replies (f:"pro") stay set aside, never shown.
  * Ownerless notifications are set aside too and come back only with a job
@@ -156,7 +159,7 @@ let pass = 0, fail = 0;
 function assert(cond, msg) {
   if (cond) { pass++; } else { fail++; console.error('  ✗ ' + msg); }
 }
-function bodyText() { return Array.from(document.body.children).filter(el => el.tagName !== 'STYLE').map(el => el.textContent).join(' '); }
+function bodyText() { const c = document.body.cloneNode(true); c.querySelectorAll('style,script').forEach(e => e.remove()); return c.textContent; }
 async function delay(ms) { await new Promise(r => setTimeout(r, ms)); }
 async function settle(ms = 40) { await act(async () => { await delay(ms); }); }
 // Timeouts and missing controls fail a NAMED assertion (never a crash), so
@@ -519,17 +522,23 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
   const ids = jobs().map(x => x.id);
   assert(jobs().length === 2 && new Set(ids).size === 2 && ids.includes(LOCAL_ID), '(8) two master entries with the same local id: both jobs kept, ids stay unique');
 
-  // ── (9) phone-only bookings (no backend id): never deleted, never shown, never given to another account ──
-  // A per-user cache entry stays with that user (set aside under that
-  // account); an ownerless (master) one is set aside with no owner, because
-  // no backend id can prove whose it is. Only Reset Prototype Data clears them.
+  // ── (9) phone-only bookings (no backend id): never deleted, never given to another account ──
+  // A per-user cache entry stays with that user (kept under that account and
+  // shown to it, labelled); an ownerless (master) one is set aside with no
+  // owner and shown to nobody, because no backend id can prove whose it is.
+  // Only Reset Prototype Data clears them.
   const phoneOnly = (id, title) => ({ ...masterJob({ id, taskId: null, custom: { title, price: '80', cat: 'Handyman' }, backendJobId: null, status: 'posted', addressText: REAL_TEXT, addressLabel: 'Cabin', rated: false, stars: 0, reviewTxt: '', hireAgain: null, msgs: [CU_MSG] }) });
-  const PHONE_X = phoneOnly(LOCAL_ID + 50, 'Phone-only shelf fix');
+  const PHONE_X = { ...phoneOnly(LOCAL_ID + 50, 'Phone-only shelf fix'), status: 'en_route', msgs: [CU_MSG, PRO_REPLY] };
   const PHONE_M = { ...phoneOnly(LOCAL_ID + 60, 'Master phone-only gutter job'), addressText: '500 Folsom Street, San Francisco, CA 94105', addressLabel: 'Work' };
   const localOnly = () => { try { return JSON.parse(storedData['haven_jobs_local_only'] || 'null')?.data || null; } catch { return null; } };
   const bucketOf = (uid) => (localOnly()?.owners || {})[uid.toLowerCase()] || [];
   const ownerlessBucket = () => localOnly()?.ownerless || [];
   const holds = (list, job) => list.filter(e => JSON.stringify(e) === JSON.stringify(job)).length;
+  // per-account copies never hold card/payment/tip fields (QA v6 item 5)
+  const NO_STORE = /payment|card|token|secret|password|auth|^tip/i;
+  const strip = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => !NO_STORE.test(k)));
+  const PHONE_X_STORED = strip(PHONE_X);
+  const phoneShown = (t) => /Phone-only shelf fix/.test(t) && t.includes('Saved on this phone only · not synced');
   // per-user cache: X's own cache holds a backend job and a phone-only one
   const seedOwned = () => {
     Object.keys(storedData).forEach(k => delete storedData[k]);
@@ -541,30 +550,34 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
   rowsByCustomer = { [X_ID]: [realRow(JX, X_ID)], [Y_ID]: [realRow(JY, Y_ID)] };
   seedOwned();
   await boot();
-  await waitFor(() => readCount && jobBy(JX) && !jobs().some(x => x.id === PHONE_X.id), '(9) per-user: X read lands');
+  await waitFor(() => readCount && jobBy(JX), '(9) per-user: X read lands');
   await settle(150);
   assert(inStorage('Phone-only shelf fix'), '(9) per-user: the phone-only booking still exists in storage after the read lands (not deleted)');
-  assert(holds(bucketOf(X_ID), PHONE_X) === 1, '(9) per-user: X\'s phone-only booking is set aside for X, byte-for-byte, after the read lands');
-  assert(!/Phone-only shelf fix/.test(await bookingsText()), '(9) per-user: the phone-only booking is not shown in Bookings');
+  assert(holds(bucketOf(X_ID), PHONE_X_STORED) === 1, '(9) per-user: X\'s phone-only booking is kept for X, as it was minus card/payment fields');
+  let bt9 = await bookingsText();
+  assert(phoneShown(bt9), '(9) per-user: X\'s own phone-only booking is shown to X, labelled "Saved on this phone only · not synced"');
   assert(holds(ownerlessBucket(), PHONE_X) === 0 && Object.keys(localOnly()?.owners || {}).length === 1, '(9) per-user: it is kept only under X (not ownerless, no other account)');
+  await tap(screen.queryAllByText(/Phone-only shelf fix/).pop(), 'phone-only card');
+  bt9 = bodyText();
+  assert(bt9.includes('Saved on this phone only · not synced') && !/Looking for a pro|Marcus T\.|Cancel job|On the way|Got it! 👍/i.test(bt9), '(9) per-user: the phone-only detail shows the label, no pro, no simulated progress, no scripted reply, no cancel');
   let snapLocal = storedData['haven_jobs_local_only'];
   for (const n of ['reload', 'second load']) {
     const r0 = readCount;
     await boot();
     await waitFor(() => readCount > r0 && jobBy(JX), `(9) per-user: read after ${n}`);
     await settle(150);
-    assert(storedData['haven_jobs_local_only'] === snapLocal && holds(bucketOf(X_ID), PHONE_X) === 1, `(9) per-user: after a ${n} the phone-only booking is still stored byte-for-byte, once`);
-    assert(!/Phone-only shelf fix/.test(await bookingsText()), `(9) per-user: after a ${n} it is still not shown`);
+    assert(storedData['haven_jobs_local_only'] === snapLocal && holds(bucketOf(X_ID), PHONE_X_STORED) === 1, `(9) per-user: after a ${n} the phone-only booking is still stored, unchanged, once`);
+    assert(phoneShown(await bookingsText()), `(9) per-user: after a ${n} it is still shown to X with the label`);
   }
   // backend down on two loads in a row: the cache keeps the entry, the set-aside holds it once
   seedOwned(); backendDown = true;
   await boot(); await boot();
-  assert(holds(bucketOf(X_ID), PHONE_X) === 1 && bucketOf(X_ID).length === 1 && Object.keys(localOnly()?.owners || {}).length === 1, '(9) per-user: two loads with the backend down store the phone-only booking once, byte-for-byte (no second copy)');
+  assert(holds(bucketOf(X_ID), PHONE_X_STORED) === 1 && bucketOf(X_ID).length === 1 && Object.keys(localOnly()?.owners || {}).length === 1, '(9) per-user: two loads with the backend down store the phone-only booking once (no second copy)');
   assert(sameJSON(jobs().map(x => x.id), [LOCAL_ID, PHONE_X.id]), '(9) per-user: a failed read leaves both entries in X\'s stored cache');
   backendDown = false;
   await boot();
-  await waitFor(() => jobBy(JX) && !jobs().some(x => x.id === PHONE_X.id), '(9) per-user: read after the backend recovers');
-  assert(holds(bucketOf(X_ID), PHONE_X) === 1, '(9) per-user: after the backend recovers it is still stored once');
+  await waitFor(() => jobBy(JX), '(9) per-user: read after the backend recovers');
+  assert(holds(bucketOf(X_ID), PHONE_X_STORED) === 1, '(9) per-user: after the backend recovers it is still stored once');
   // Y signs in on the same device: X's phone-only booking is never Y's
   await signOutInTab();
   rowsByCustomer[Y_ID] = [realRow(JY, Y_ID)];
@@ -572,12 +585,11 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
   await waitFor(() => jobBy(JY), '(9) per-user: Y read');
   await settle(150);
   assert(!/Phone-only shelf fix/.test(await bookingsText()) && !jobs().some(x => x.id === PHONE_X.id), '(9) per-user: Y never sees X\'s phone-only booking');
-  assert(holds(bucketOf(X_ID), PHONE_X) === 1 && bucketOf(Y_ID).length === 0, '(9) per-user: after Y signs in it is still stored under X only');
-  // a phone-only booking only in memory/cache when X switches away in-tab is set aside too
+  assert(holds(bucketOf(X_ID), PHONE_X_STORED) === 1 && bucketOf(Y_ID).length === 0, '(9) per-user: after Y signs in it is still stored under X only');
   seedOwned();
   await boot();
   await signOutInTab();
-  assert(holds(bucketOf(X_ID), PHONE_X) === 1, '(9) per-user: signing out before the read lands keeps the phone-only booking for X');
+  assert(holds(bucketOf(X_ID), PHONE_X_STORED) === 1, '(9) per-user: signing out before the read lands keeps the phone-only booking for X');
   // the set-aside write is refused: X's stored cache stays byte-identical, retried next load
   seedOwned();
   const ownedBefore = storedData['haven_jobs'];
@@ -586,10 +598,10 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
   await waitFor(() => readCount && /Bookings/.test(bodyText()), '(9) per-user: app loads with the phone-only set-aside refused');
   await settle(200);
   assert(storedData['haven_jobs'] === ownedBefore && localOnly() === null, '(9) per-user: when the phone-only set-aside cannot be written, X\'s stored cache stays byte-identical');
-  assert(!/Phone-only shelf fix/.test(await bookingsText()), '(9) per-user: ... and the phone-only booking is still not shown');
+  assert(phoneShown(await bookingsText()), '(9) per-user: ... and X still sees the phone-only booking (from memory), labelled');
   refuseSet = null;
   await boot();
-  await waitFor(() => holds(bucketOf(X_ID), PHONE_X) === 1, '(9) per-user: the set-aside is retried and succeeds on the next load');
+  await waitFor(() => holds(bucketOf(X_ID), PHONE_X_STORED) === 1, '(9) per-user: the set-aside is retried and succeeds on the next load');
 
   // old master cache: an ownerless phone-only booking
   rowsByCustomer = { [X_ID]: xRows(), [Y_ID]: [realRow(JY, Y_ID)] };
@@ -627,6 +639,180 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
   await boot();
   await waitFor(() => holds(ownerlessBucket(), PHONE_M) === 1 && jobBy(JX), '(9) master: retried on the next load');
   assert(/"haven_jobs_local_only"/.test(fs.readFileSync('persistence.js', 'utf8').match(/PERSISTED_KEYS\s*=\s*\[[^\]]*\]/)?.[0] || ''), '(9) Reset Prototype Data clears the phone-only set-aside (it is in PERSISTED_KEYS)');
+  assert(/"haven_account_device_data"/.test(fs.readFileSync('persistence.js', 'utf8').match(/PERSISTED_KEYS\s*=\s*\[[^\]]*\]/)?.[0] || ''), '(10) Reset Prototype Data clears the per-account store (it is in PERSISTED_KEYS)');
+
+  // ── (10) per-account device data (founder decision, QA v6): X, Y, X, Y on one device ──
+  // Each account's descriptions, photos, ratings, own messages, real street
+  // addresses, notifications and phone-only bookings are kept under its own
+  // id, cleared from the screen on sign-out/switch, never shown to the other
+  // account, and restored on its next sign-in. Low storage loses nothing.
+  const LABEL = 'Saved on this phone only · not synced';
+  const JX3 = '5eed0000-0000-4000-8000-00000000000d';
+  const X_NOTIF2 = notif('n1759000400000_1', LOCAL_ID, 'Pro accepted your job', 'X private alert');
+  const DEVICE_NOTICE = notif('n1759000400000_7', null, 'Welcome', 'Device notice', { type: 'ACCOUNT', isRead: true });
+  const Y_ACCT_NOTIF = { ...notif('n1759000500000_1', LOCAL_ID + 900, 'Job completed', 'Y private alert'), accountBackendJobId: JY };
+  const Y_STREET = '9 Elm St, Austin, TX 78701';
+  const seedXY = () => {
+    Object.keys(storedData).forEach(k => delete storedData[k]);
+    signInStorage(X_ID);
+    storedData['haven_jobs_owner'] = X_ID;
+    storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: [REAL] });
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [
+      masterJob({ id: LOCAL_ID, backendJobId: JX, addressText: REAL_TEXT, addressLabel: 'Cabin', msgs: [CU_MSG, PRO_REPLY], photos: [PHOTO], desc: 'X private desc', rated: true, stars: 5, reviewTxt: 'X private review', hireAgain: true, status: 'complete' }),
+      masterJob({ id: LOCAL_ID + 3, backendJobId: JX3, addressText: 'Orlando, FL', addressLabel: '', msgs: [], photos: [], desc: '', rated: false, stars: 0, reviewTxt: '', hireAgain: null, tpId: null }),
+      PHONE_X,
+    ] });
+    storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [X_NOTIF2, DEVICE_NOTICE] });
+    storedData['haven_account_device_data'] = JSON.stringify({ __v: 1, data: { [Y_ID.toLowerCase()]: {
+      jobs: [{ backendJobId: JY, id: LOCAL_ID + 900, addressText: Y_STREET, addressLabel: 'Y home', msgs: [{ id: 1759000500001, f: 'cu', m: 'Y own note', t: '3:00 PM' }], photos: [PHOTO], desc: 'Y private desc', rated: true, stars: 4, reviewTxt: 'Y private review', hireAgain: true }],
+      notifications: [Y_ACCT_NOTIF] } } });
+  };
+  const acctStore = () => { try { return JSON.parse(storedData['haven_account_device_data'] || 'null')?.data || null; } catch { return null; } };
+  const acctOf = (uid) => (acctStore() || {})[uid.toLowerCase()] || null;
+  const X_TEXT = /X private desc|X private review|X private alert|Gate code is 4411|Phone-only shelf fix/;
+  const Y_TEXT = /Y private desc|Y private review|Y private alert|Y own note/;
+  const onNotifScreen = () => !!document.querySelector('[aria-label="Back"]') && /^\s*‹?\s*Notifications/.test(bodyText().trim());
+  const notifScreen = async () => {
+    if (!onNotifScreen()) {
+      await tap(screen.queryAllByText('Profile').pop(), 'Profile tab');
+      await tap(Array.from(document.querySelectorAll('button')).find(b => /^Notifications/.test(b.getAttribute('aria-label') || '')), 'Notifications');
+    }
+    const t = bodyText();
+    await tap(document.querySelector('[aria-label="Back"]'), 'Back from Notifications');
+    return t;
+  };
+  const toTabs = async () => {
+    for (let i = 0; i < 3 && !screen.queryAllByText(/^Bookings$/).length; i++) {
+      const back = Array.from(document.querySelectorAll('button')).find(b => /^(‹|←|<)?\s*Back/.test(b.textContent.trim()) || /^Back/.test(b.getAttribute('aria-label') || ''));
+      if (!back) break;
+      await tap(back, 'Back');
+    }
+  };
+  const openRated = async (step) => {
+    await toTabs();
+    await tap(screen.queryAllByText(/^Bookings$/).pop(), 'Bookings tab');
+    const card = Array.from(document.querySelectorAll('[role="button"]')).find(el => /Reviewed/.test(el.textContent));
+    if (!card) { assert(false, `missing control: (10) ${step} rated booking card`); return ''; }
+    await tap(card, 'rated card');
+    return bodyText();
+  };
+  const noBareLabel = (t) => !/Saved on this phone only(?! · not synced)/.test(t) && !/not delivered|not sent/.test(t);
+  async function viewX(step) {
+    await toTabs();
+    await waitFor(() => jobBy(JX)?.desc === 'X private desc', `(10) ${step}: X's details restored`);
+    await settle(150);
+    const b = await bookingsText();
+    assert(/Phone-only shelf fix/.test(b) && b.includes('Reviewed · ' + LABEL) && b.includes(LABEL), `(10) ${step}: X's Bookings show X's rating and phone-only booking, labelled`);
+    assert(!Y_TEXT.test(b), `(10) ${step}: X's Bookings show nothing of Y's`);
+    assert(/1 unread/.test(profileAria()), `(10) ${step}: X's badge counts only X's alert (got "${profileAria()}")`);
+    const d = await openRated(step);
+    assert(/X private desc/.test(d) && /Review submitted/.test(d) && jobBy(JX)?.reviewTxt === 'X private review' && jobBy(JX)?.stars === 5, `(10) ${step}: X's description and rating are back`);
+    assert(/1 (shared|added) · Saved on this phone only · not synced/.test(d) && (d.match(new RegExp(LABEL, 'g')) || []).length >= 3, `(10) ${step}: photos, description and rating carry the exact label`);
+    assert(noBareLabel(b) && noBareLabel(d) && !Y_TEXT.test(d), `(10) ${step}: no other label wording; nothing of Y's on X's detail`);
+    assert(jobBy(JX)?.addressText === REAL_TEXT && jobBy(JX3)?.addressText === 'Orlando, FL', `(10) ${step}: X's real street address is back (the city fallback stays a fallback)`);
+    const n = await notifScreen();
+    assert(/X private alert/.test(n) && !/Y private alert/.test(n), `(10) ${step}: X's Notifications show X's alert only`);
+  }
+  async function viewY(step) {
+    await toTabs();
+    await tap(screen.queryAllByText(/^Bookings$/).pop(), 'Bookings tab');
+    await waitFor(() => /Reviewed/.test(bodyText()), `(10) ${step}: Y's details restored`);
+    await settle(150);
+    const b = await bookingsText();
+    assert(!X_TEXT.test(b) && b.includes('Reviewed · ' + LABEL), `(10) ${step}: Y's Bookings show Y's rating, labelled, and nothing of X's`);
+    assert(/1 unread/.test(profileAria()), `(10) ${step}: Y's badge counts only Y's alert (got "${profileAria()}")`);
+    const d = await openRated(step);
+    assert(/Y private desc/.test(d) && /Review submitted/.test(d) && !X_TEXT.test(d) && noBareLabel(d), `(10) ${step}: Y's description and review are shown with the exact label, nothing of X's`);
+    const n = await notifScreen();
+    assert(/Y private alert/.test(n) && !/X private alert/.test(n), `(10) ${step}: Y's Notifications show Y's alert only`);
+  }
+  const nothingLost = (step) => {
+    const all = Object.values(storedData).join(' ');
+    assert(['X private desc', 'X private review', 'X private alert', 'Gate code is 4411', 'Phone-only shelf fix', 'Y private desc', 'Y private review', 'Y private alert', 'Y own note', Y_STREET, REAL_TEXT].every(x => all.includes(x)), `(10) ${step}: nothing of X's or Y's is lost from storage`);
+  };
+  const noSecrets = (step) => {
+    const keys = ['haven_account_device_data'];
+    const perAcct = keys.map(k => storedData[k] || '').join(' ') + JSON.stringify(localOnly()?.owners || {});
+    const tokens = [storedData['haven_auth_access_token'], 'signed-in-access-token'].filter(Boolean);
+    assert(!/payment|card|last4|"tip|token|secret|password|"auth|4242|Visa/i.test(perAcct) && !tokens.some(t => perAcct.includes(t)), `(10) ${step}: the per-account store holds no card/payment/tip details, tokens or secrets`);
+  };
+  rowsByCustomer = { [X_ID]: [realRow(JX, X_ID, { city_label: 'Orlando, FL' }), realRow(JX3, X_ID, { status: 'posted', city_label: 'Orlando, FL', completed_at: null, accepted_at: null })], [Y_ID]: [realRow(JY, Y_ID, { city_label: 'Austin, TX' })] };
+  seedXY();
+  await boot();
+  await viewX('X first');
+  // the chat: the customer's own message with the exact label, never a scripted reply
+  await openRated('chat');
+  if (await tap(Array.from(document.querySelectorAll('button')).find(b => /Chat|Message/.test(b.textContent)), 'Chat button (10)')) {
+    const ct = bodyText();
+    assert(ct.includes('2:05 PM · ' + LABEL) && !/Got it! 👍|On it!/.test(ct) && noBareLabel(ct), '(10) X\'s own message carries the exact label; no scripted pro reply');
+  }
+  // ── exact label, every item type: each text that says "Saved on this phone"
+  // is exactly "Saved on this phone only · not synced" (message, rating,
+  // photos, description, phone-only booking card and its detail).
+  {
+    const labelTexts = () => Array.from(document.body.querySelectorAll('*'))
+      .filter(el => !['STYLE', 'SCRIPT'].includes(el.tagName) && Array.from(el.childNodes).some(c => c.nodeType === 3 && /Saved on this phone/.test(c.textContent)))
+      .map(el => el.textContent.trim());
+    const exact = (t) => t.endsWith(LABEL) && t.split('Saved on this phone').length === 2;
+    const chatL = labelTexts();
+    const msgOk = chatL.some(t => /2:05 PM · /.test(t) && t.endsWith(LABEL));
+    await toTabs();
+    await bookingsText();
+    const listL = labelTexts();
+    const ratingOk = listL.some(t => /Reviewed · /.test(t) && t.endsWith(LABEL));
+    const cardOk = listL.some(t => t === LABEL);
+    await openRated('exact label');
+    const detL = labelTexts();
+    const photosOk = detL.some(t => /^1 (shared|added) · /.test(t) && t.endsWith(LABEL));
+    const descEl = Array.from(document.body.querySelectorAll('div')).find(el => el.children.length === 0 && /X private desc/.test(el.textContent));
+    const descOk = !!descEl && Array.from(descEl.parentElement.children).some(el => el.textContent === LABEL);
+    const ratingDetOk = detL.filter(t => t === LABEL).length >= 2;
+    await toTabs();
+    await tap(screen.queryAllByText(/^Bookings$/).pop(), 'Bookings tab');
+    const phoneCard = Array.from(document.querySelectorAll('[role="button"]')).find(el => /Phone-only shelf fix/.test(el.textContent));
+    let phoneDetL = [];
+    if (await tap(phoneCard, 'phone-only booking card (10)')) phoneDetL = labelTexts();
+    const phoneDetOk = phoneDetL.some(t => t === LABEL);
+    const all = chatL.concat(listL, detL, phoneDetL);
+    assert(msgOk && ratingOk && cardOk && photosOk && descOk && ratingDetOk && phoneDetOk && all.length > 0 && all.every(exact),
+      `(10) exact label on every item type (message ${msgOk}, rating ${ratingOk}/${ratingDetOk}, photos ${photosOk}, description ${descOk}, phone-only card ${cardOk}, phone-only detail ${phoneDetOk}; every label exact ${all.every(exact)})`);
+    await toTabs();
+  }
+  await toTabs();
+  await signOutInTab();
+  let so = bodyText();
+  assert(!X_TEXT.test(so) && !X_TEXT.test(bodyText()) && !/unread/.test(profileAria()), '(10) sign-out: the screen shows nothing of X\'s and no badge');
+  assert(!X_TEXT.test(String(storedData['haven_jobs'] || '') + String(storedData['haven_notifications'] || '')), '(10) sign-out: X\'s data is out of the visible cache and notifications');
+  const xe = (acctOf(X_ID)?.jobs || []).find(e => e.backendJobId === JX);
+  assert(xe?.addressText === REAL_TEXT && xe?.desc === 'X private desc' && xe?.photos?.length === 1 && xe?.stars === 5 && sameJSON(xe?.msgs, [CU_MSG]), '(10) sign-out: X\'s street address, description, photos, rating and own messages are kept under X');
+  assert(!(acctOf(X_ID)?.jobs || []).some(e => e.backendJobId === JX3 && 'addressText' in e), '(10) sign-out: the city fallback is never stored as an address');
+  assert((acctOf(X_ID)?.notifications || []).some(n => n.id === X_NOTIF2.id && n.accountBackendJobId === JX), '(10) sign-out: X\'s alert is kept under X, linked to its job');
+  noSecrets('sign-out');
+  nothingLost('sign-out');
+  await signInInTab(Y_ID);
+  await viewY('then Y');
+  nothingLost('then Y');
+  await signInInTab(X_ID); // account switch without signing out
+  await viewX('X again');
+  noSecrets('X again');
+  nothingLost('X again');
+  // low storage: the per-account store cannot be written at the switch
+  refuseSet = (k) => k === 'haven_account_device_data';
+  const rawXBefore = storedData['haven_jobs'];
+  await signInInTab(Y_ID);
+  await viewY('Y with low storage');
+  assert(storedData['haven_jobs'] === rawXBefore && storedData['haven_jobs_owner'] === X_ID, '(10) low storage: X\'s cache stays in storage untouched (owner X), nothing moved half-way');
+  nothingLost('Y with low storage');
+  refuseSet = null;
+  await boot(); // reload as Y: the move is retried
+  await viewY('Y after reload');
+  assert(!X_TEXT.test(String(storedData['haven_jobs'] || '')) && (acctOf(X_ID)?.jobs || []).some(e => e.desc === 'X private desc'), '(10) retry: X\'s data moved to X\'s store on the next load');
+  nothingLost('Y after reload');
+  await signInInTab(X_ID);
+  await viewX('X last');
+  nothingLost('X last');
+  noSecrets('end');
+
 
   cleanup();
   console.log(`--- Master cache upgrade (QA #87 v3/v4): ${pass} passing, ${fail} failing ---`);
