@@ -5163,7 +5163,7 @@ export default function App(){
           <span style={{fontSize:18}}>{vjTask?vjTask.e:"🔧"}</span>
           <div><div style={{fontSize:12,fontWeight:700,color:isDark?"#FCD9A0":"#92400E"}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontSize:11,color:TS}}>{vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.label:"—")} · ${vjTotal}</div></div>
         </div>
-        {locked&&<div style={{background:"#FFF1F2",borderBottom:"1px solid #FCC",padding:"10px 20px",textAlign:"center",flexShrink:0}}><span style={{fontSize:12,color:"#E11D48",fontWeight:600}}>🔒 Chat closed — job completed successfully.</span></div>}
+        {locked&&<div style={{background:isDark?"#2A1418":"#FFF1F2",borderBottom:isDark?"1px solid #5B2530":"1px solid #FCC",padding:"10px 20px",textAlign:"center",flexShrink:0}}><span style={{fontSize:12,color:isDark?"#FDA4AF":"#BE123C",fontWeight:600}}>🔒 Chat closed — job completed successfully.</span></div>}
         {!CUSTOMER_MESSAGING_CONNECTED&&!locked&&(
           <div role="status" style={{background:W,borderBottom:`1px solid ${BD}`,padding:"10px 20px",display:"flex",gap:10,alignItems:"flex-start",flexShrink:0}}>
             <span aria-hidden="true" style={{fontSize:16}}>💬</span>

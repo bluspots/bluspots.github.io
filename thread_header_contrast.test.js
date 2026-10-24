@@ -192,6 +192,10 @@ const bg = el => { let e = el; while (e) { const c = e.style && (e.style.backgro
     await openThread(theme, 'complete');
     const closed = leaf(/^Chat closed$/);
     assert(closed && ratio(closed.style.color, bg(closed)) >= 4.5, theme + ': "Chat closed" ≥ 4.5:1 (got ' + (closed ? ratio(closed.style.color, bg(closed)).toFixed(2) : '-') + ')');
+    // Closed-chat banner (founder 2026-10-23: include this small accessibility fix in #84).
+    const banner = leaf(/^🔒 Chat closed — job completed successfully\.$/);
+    assert(banner && ratio(banner.style.color, bg(banner)) >= 4.5, theme + ': closed-chat banner ≥ 4.5:1 (got ' + (banner ? ratio(banner.style.color, bg(banner)).toFixed(2) : '-') + ')');
+    if (theme === 'dark') assert(banner && rgb(bg(banner)).join() !== '255,241,242', 'dark: closed-chat banner is not a light-pink block');
   }
   remoteRows = [];
   cleanup();
