@@ -62,6 +62,7 @@ Naming principles:
 | posted → en_route (claim) / any assignment | Pro | No account may claim or be assigned a job it posted (`pro_id` = `customer_id` is refused), whatever its current profile role; enforced server-side on every insert and every change of `pro_id`/`customer_id`, for every caller (0029 IV.2). *(founder decision 2026-10-23)* |
 | any pre‑complete → cancelled | Either | Different sub‑rules by phase; Customer after accept is “request cancel” |
 | complete / cancelled / inspection_completed / materials_declined → anything | Nobody (client) | `complete`, `cancelled`, `inspection_completed` and `materials_declined` are terminal: no move out of them (no reopen, no move to complete, no cancel), enforced server-side for the Customer, the Pro and direct API calls (0029 III.2). Same-status re-sends are not moves. *(founder decision 2026-10-23)* |
+| any → en_route / arrived / diagnosing / materials_requested / in_progress / complete | Never the Customer | The Customer never sets work statuses. The Customer's only status moves are approving or declining materials, the inspection endings above, and cancelling while the job is posted with no Pro; enforced server-side (0029 IV.3). *(founder decision 2026-10-23)* |
 | Rating / tip | Customer | Post‑complete only. Only the job's Customer may set the tip; the Pro and anyone else are rejected server-side (0029 III.5). *(founder decision 2026-10-23)* |
 
 Backend enforcement must reject out‑of‑turn and role‑unauthorized transitions.

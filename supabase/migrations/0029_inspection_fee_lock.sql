@@ -183,6 +183,16 @@
 --        owner, so a privileged exemption would skip the claim itself.
 --        Existing rows are not rewritten; an update that leaves both ids
 --        unchanged is not re-checked.
+--     3. The job's customer never sets work statuses ("The customer cannot
+--        set this job status"): no move into en_route, arrived, diagnosing,
+--        materials_requested, in_progress, complete or posted. The only
+--        status moves the customer may make are materials_approved and
+--        materials_declined (the materials decision), inspection_completed
+--        (the approved inspection endings, I above), and cancelled while
+--        the job is posted with no Pro (RLS 0010 already allows only that;
+--        0029 now refuses the rest even without RLS). The Customer app
+--        writes only cancelled, materials_approved, materials_declined and
+--        inspection_completed.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -382,6 +392,16 @@ begin
     raise exception 'A job can only be completed from in_progress'
       using errcode = '42501',
             hint = 'Start the work (in_progress) before marking the job complete.';
+  end if;
+
+  -- IV.3 (founder 2026-10-23 21:14 ET, rule 3). The customer sets no work status.
+  if is_customer
+     and new.status is distinct from old.status
+     and not (new.status in ('materials_approved', 'materials_declined', 'inspection_completed')
+              or (new.status = 'cancelled' and old.status = 'posted' and old.pro_id is null)) then
+    raise exception 'The customer cannot set this job status'
+      using errcode = '42501',
+            hint = 'The customer may approve or decline materials, end at the inspection fee, or cancel while the job is posted with no Pro.';
   end if;
 
   -- II. Fee integrity: price, payout, margin and fees are fixed once posted.
