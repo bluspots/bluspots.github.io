@@ -5155,15 +5155,15 @@ export default function App(){
             <div style={{width:38,height:38,borderRadius:19,background:vjPro.col,display:"flex",alignItems:"center",justifyContent:"center",color:ON,fontWeight:800,fontSize:14,flexShrink:0}}>{vjPro.i}</div>
             <div>
               <div style={{fontWeight:700,fontSize:15,color:TX}}>{vjPro.n}</div>
-              <div style={{fontSize:12,color:locked?"#EF4444":SC,fontWeight:600}}>{locked?"Chat closed":"● Active job"}</div>
+              <div style={{fontSize:12,color:locked?(isDark?"#F87171":"#B91C1C"):(isDark?"#10B981":"#047857"),fontWeight:600}}>{locked?"Chat closed":"● Active job"}</div>
             </div>
           </div>
         </div>
-        <div style={{background:"#FEF3C7",borderBottom:`1px solid ${BD}`,padding:"10px 20px",display:"flex",gap:10,alignItems:"center",flexShrink:0}}>
+        <div style={{background:isDark?"#2B2114":"#FEF3C7",borderBottom:`1px solid ${BD}`,padding:"10px 20px",display:"flex",gap:10,alignItems:"center",flexShrink:0}}>
           <span style={{fontSize:18}}>{vjTask?vjTask.e:"🔧"}</span>
-          <div><div style={{fontSize:12,fontWeight:700,color:"#92400E"}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontSize:11,color:TS}}>{vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.label:"—")} · ${vjTotal}</div></div>
+          <div><div style={{fontSize:12,fontWeight:700,color:isDark?"#FCD9A0":"#92400E"}}>{vjTask?vjTask.n:"Custom job"}</div><div style={{fontSize:11,color:TS}}>{vj.reqWindow?windowLabel(vj.reqWindow):(vjTp?vjTp.label:"—")} · ${vjTotal}</div></div>
         </div>
-        {locked&&<div style={{background:"#FFF1F2",borderBottom:"1px solid #FCC",padding:"10px 20px",textAlign:"center",flexShrink:0}}><span style={{fontSize:12,color:"#E11D48",fontWeight:600}}>🔒 Chat closed — job completed successfully.</span></div>}
+        {locked&&<div style={{background:isDark?"#2A1418":"#FFF1F2",borderBottom:isDark?"1px solid #5B2530":"1px solid #FCC",padding:"10px 20px",textAlign:"center",flexShrink:0}}><span style={{fontSize:12,color:isDark?"#FDA4AF":"#BE123C",fontWeight:600}}>🔒 Chat closed — job completed successfully.</span></div>}
         {!CUSTOMER_MESSAGING_CONNECTED&&!locked&&(
           <div role="status" style={{background:W,borderBottom:`1px solid ${BD}`,padding:"10px 20px",display:"flex",gap:10,alignItems:"flex-start",flexShrink:0}}>
             <span aria-hidden="true" style={{fontSize:16}}>💬</span>
