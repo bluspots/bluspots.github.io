@@ -34,8 +34,10 @@
 -- direct API requests) every posted row must carry exactly the amounts the
 -- contract fixes at posting; anything else is refused with 42501 and
 -- nothing is written:
---   1. fixed_customer_labor_price_cents > 0 ("The labor price must be
---      greater than $0").
+--   1. (PENDING, not checked) The labor price is NOT checked for > $0
+--      (founder decision 2026-10-23 20:58 ET, 5b): the refusal is held until
+--      the custom-pricing path is documented, so custom-priced jobs are not
+--      broken. The table's own CHECK (>= 0) still applies.
 --   2. margin_rate_bps = 2000, the current founder-set margin (20% of the
 --      listed labor price). Margin adjustments apply to FUTURE jobs only
 --      (founder decision 2026-10-23, item 9): a new rate is a new
@@ -48,10 +50,12 @@
 --      pro receives".
 --   4. inspection_fee_cents = 4500 when requires_diagnosis, else 0 (the
 --      hard-locked $45 Inspection Visit; standard jobs carry none).
---   5. emergency_fee_cents = 3500 when emergency, else 0 (the Customer
---      app's EMERGENCY_FEE = $35; the contract names an emergency fee but
---      no amount, so this value is the app's and needs founder
---      confirmation before paste).
+--   5. A non-emergency job carries no emergency fee: emergency_fee_cents
+--      = 0 when emergency is false ("A non-emergency job cannot carry an
+--      emergency fee"). On an emergency job the AMOUNT is NOT validated
+--      (founder decision 2026-10-23 20:58 ET, 5a: the app's $35 is not
+--      approved; the amount is pending a founder decision, in comparison
+--      with the $10 ASAP surcharge). The table's CHECK (>= 0) still applies.
 --   6. Nothing is pre-charged or pre-paid at posting:
 --      convenience_fee_cents = 0, tip_amount_cents = 0,
 --      materials_reimbursed_cents = 0, materials_estimate_cents = 0,
@@ -61,8 +65,10 @@
 --      a second layer if that trigger is ever missing or disabled.)
 -- Every check compares integers the client sent; nothing is rewritten.
 -- requires_diagnosis itself (category -> diagnosis mapping) is NOT
--- validated here: the mapping lives in the Customer app only (founder /
--- CoS question). status = 'posted' and pro_id is null at posting are
+-- validated here and no category list is added (founder decision
+-- 2026-10-23 20:58 ET, 5c): it waits for the shared category taxonomy.
+-- Until then a client chooses requires_diagnosis, and check 4 only ties
+-- the $45 fee to that flag. status = 'posted' and pro_id is null at posting are
 -- already enforced by RLS (jobs_insert_posted_only).
 --
 -- PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
@@ -107,13 +113,6 @@ begin
     return new;
   end if;
 
-  if new.fixed_customer_labor_price_cents is null
-     or new.fixed_customer_labor_price_cents <= 0 then
-    raise exception 'The labor price must be greater than $0'
-      using errcode = '42501',
-            hint = 'fixed_customer_labor_price_cents is the listed labor price in cents.';
-  end if;
-
   if new.margin_rate_bps is distinct from margin_bps then
     raise exception 'The margin rate must be the current rate (2000 bps)'
       using errcode = '42501',
@@ -134,11 +133,12 @@ begin
             hint = 'inspection_fee_cents = 4500 when requires_diagnosis, else 0.';
   end if;
 
-  if new.emergency_fee_cents is distinct from
-       (case when new.emergency then 3500 else 0 end) then
-    raise exception 'The emergency fee must be $35 on an emergency job and $0 otherwise'
+  -- Emergency jobs: amount not validated (pending founder decision, 5a).
+  if not new.emergency
+     and new.emergency_fee_cents is distinct from 0 then
+    raise exception 'A non-emergency job cannot carry an emergency fee'
       using errcode = '42501',
-            hint = 'emergency_fee_cents = 3500 when emergency, else 0.';
+            hint = 'emergency_fee_cents must be 0 when emergency is false.';
   end if;
 
   if new.convenience_fee_cents is distinct from 0
