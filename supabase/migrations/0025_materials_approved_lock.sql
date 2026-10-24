@@ -4,7 +4,26 @@
 --
 -- Paste this whole file in the Supabase SQL editor as the database owner,
 -- after 0024 (already applied live). Do not apply it from the app, from CI,
--- or from an agent. Safe to re-run.
+-- or from an agent. It is NOT universally safe to re-run; a re-run is:
+--   - a no-op in effect ONLY while 0026 is not installed and
+--     public.jobs_lock_materials_approved() already holds the exact body in
+--     this file: the two columns already exist (add column if not exists),
+--     the column comments, function, EXECUTE grant and column revokes are
+--     re-applied unchanged, and the trigger jobs_lock_materials_approved is
+--     dropped and re-created (new trigger oid, same definition). No row is
+--     read or changed.
+--   - refused with an error by section 0, nothing applied (one
+--     transaction), when jobs.materials_request_seq or
+--     jobs.materials_decided_seq exists, or a public
+--     jobs_lock_materials_approved() body contains materials_request_seq or
+--     haven-version: (0026, 0028 or later), because the 0025 body would
+--     downgrade it.
+--   - NOT guarded otherwise: any other body of
+--     public.jobs_lock_materials_approved() without those markers (an
+--     edited or pre-guard version) is silently replaced by this file's
+--     body, and the column comments, grant and revokes are reset to this
+--     file's.
+-- One transaction (begin; ... commit;): paste the whole file as ONE run.
 --
 -- Why
 --   The Customer receipt (PR #45) counts materials_estimate_cents whenever
@@ -102,6 +121,26 @@
 --   lifecycle change, for the founder separately). It only refuses to record
 --   an amount for it: a Pro-alone approval adds $0 materials.
 
+begin;
+
+-- ── 0. Refuse to downgrade (added 2026-10-23, review finding 1) ───────────
+-- 0026 adds jobs.materials_request_seq / materials_decided_seq, and every
+-- later body of jobs_lock_materials_approved() reads materials_request_seq.
+-- If either is present, re-running 0025 would put back the weaker 0025
+-- function, so stop here: nothing in this file runs.
+do $$
+begin
+  if exists (select 1 from information_schema.columns
+              where table_schema = 'public' and table_name = 'jobs'
+                and column_name in ('materials_request_seq', 'materials_decided_seq'))
+     or exists (select 1 from pg_proc
+                 where pronamespace = 'public'::regnamespace
+                   and proname = 'jobs_lock_materials_approved'
+                   and (prosrc like '%materials_request_seq%' or prosrc like '%haven-version:%')) then
+    raise exception '0025 refused: 0026 or later is installed; re-running 0025 would downgrade jobs_lock_materials_approved. Nothing was changed.';
+  end if;
+end$$;
+
 -- ── 1. Columns ────────────────────────────────────────────────────────────
 alter table public.jobs
   add column if not exists materials_approved_cents integer null
@@ -195,6 +234,7 @@ revoke insert (materials_approved_cents, materials_approved_at),
        update (materials_approved_cents, materials_approved_at)
   on table public.jobs from authenticated;
 
+commit;
 -- ── Founder step: optional backfill (decide first, then run by hand) ──────
 -- Existing rows get materials_approved_cents = null, which the updated
 -- Customer app shows as $0 materials. Rows already at materials_approved,
@@ -262,7 +302,15 @@ revoke insert (materials_approved_cents, materials_approved_at),
 --
 -- Option C (buckets 1 and 2). materials_approved_at is set to the backfill
 -- time: the real approval time is not stored anywhere. Only rows still null,
--- so it never overwrites a decision the trigger recorded. Safe to re-run.
+-- so it never overwrites a decision the trigger recorded. It is NOT
+-- universally safe to re-run, and nothing guards it or refuses a re-run.
+-- A second run is a no-op ONLY when it uses the same <0025 paste time> and
+-- no row still matches (materials_approved_cents null, estimate > 0, request
+-- before that time, bucket 1 or 2), i.e. every row the first run matched was
+-- filled. Otherwise it fills every row that matches at that moment (a
+-- later paste time, or a row whose status, reimbursement or fee changed
+-- since, can match for the first time) and stamps materials_approved_at =
+-- now() on them. It never overwrites a non-null materials_approved_cents.
 -- update public.jobs
 --    set materials_approved_cents = materials_estimate_cents,
 --        materials_approved_at    = now()
