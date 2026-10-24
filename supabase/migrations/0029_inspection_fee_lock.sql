@@ -32,7 +32,7 @@
 --     (pg_trigger.tgfoid). Compare the installed body with this file before
 --     any re-run.
 --
--- What it adds: ONE new BEFORE UPDATE trigger on public.jobs,
+-- What it adds: ONE new BEFORE INSERT OR UPDATE trigger on public.jobs,
 -- jobs_lock_pricing_and_inspection, with its own function. The 0025-0028
 -- function jobs_lock_materials_approved and its trigger are NOT changed
 -- (byte-for-byte the 0028 text). BEFORE triggers on the same table fire in
@@ -104,7 +104,8 @@
 --     is exactly what the pro receives". Not locked by II (governed
 --     elsewhere): materials_* (0025-0028), materials_reimbursed_cents and
 --     tip_amount_cents (III.5), emergency (flag only), payment_snapshot (III.6).
---     INSERT (posting itself) is not checked by this trigger.
+--     On INSERT (posting itself) this trigger checks only IV.2 below
+--     (posting amounts are 0031's, deferred).
 --   III. Founder decisions 2026-10-23 18:50 ET, items 1-6 (CoS relay;
 --     decisions/FOUNDER_DECISIONS_2026-10-23.md B). Non-privileged callers
 --     only; each refusal is SQLSTATE 42501 and leaves the row unchanged.
@@ -172,10 +173,20 @@
 --        diagnosing, materials_requested or materials_approved. The Pro
 --        app already PATCHes complete only with status=eq.in_progress.
 --        Non-privileged callers (privileged callers: see below).
+--     2. No account may claim or be assigned a job it posted ("A job cannot
+--        be claimed by or assigned to the account that posted it"):
+--        pro_id = customer_id is refused on INSERT and on any UPDATE that
+--        changes pro_id or customer_id, whatever either profile's role is
+--        (a customer who switched to Pro included; the check reads ids
+--        only). This one applies to EVERY caller, privileged included:
+--        pro_claim_job (0011/0023) is SECURITY DEFINER and runs as its
+--        owner, so a privileged exemption would skip the claim itself.
+--        Existing rows are not rewritten; an update that leaves both ids
+--        unchanged is not re-checked.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
---     0025/0026/0028) skip this trigger entirely and keep their current
+--     0025/0026/0028) skip this trigger (except IV.2) and keep their current
 --     behaviour: any status move into inspection_completed or diagnosing
 --     and any fee or price correction. Manual corrections stay possible there.
 --
@@ -235,6 +246,20 @@ declare
   old_rank integer;
   new_rank integer;
 begin
+  -- IV.2 (founder 2026-10-23 21:14 ET, rule 2). Every caller, privileged too.
+  if new.pro_id is not null
+     and new.pro_id = new.customer_id
+     and (tg_op = 'INSERT'
+          or new.pro_id is distinct from old.pro_id
+          or new.customer_id is distinct from old.customer_id) then
+    raise exception 'A job cannot be claimed by or assigned to the account that posted it'
+      using errcode = '42501',
+            hint = 'pro_id must differ from customer_id.';
+  end if;
+  if tg_op = 'INSERT' then
+    return new;
+  end if;
+
   -- PRIVILEGED: owner / SQL editor / service_role keep their behaviour.
   if privileged then
     return new;
@@ -415,7 +440,7 @@ revoke all on function public.jobs_lock_pricing_and_inspection() from public, an
 -- ── 2. Trigger (fires after jobs_lock_materials_approved: name order) ──────
 drop trigger if exists jobs_lock_pricing_and_inspection on public.jobs;
 create trigger jobs_lock_pricing_and_inspection
-  before update on public.jobs
+  before insert or update on public.jobs
   for each row execute function public.jobs_lock_pricing_and_inspection();
 
 commit;
