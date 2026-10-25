@@ -232,7 +232,8 @@ async function checkReceipt(job, who) {
   await waitFor(() => /PAYMENT BREAKDOWN/.test(bodyText()), 'receipt screen');
   const receiptText = bodyText();
   assert(receiptText.includes(job.pro.n), `${who}: receipt shows the pro name`);
-  noClaims(receiptText.replace(/This job is covered by Haven's trust & safety guarantee\.|covered by Haven's satisfaction guarantee\./g, ''), `${who}: in-app receipt`);
+  assert(!/guarantee/i.test(receiptText), `${who}: no guarantee claim on the completed job (COPY-01)`);
+  noClaims(receiptText, `${who}: in-app receipt`);
 
   // Share text (Copy Receipt Details).
   clipboardText = null;
