@@ -2069,18 +2069,15 @@ const EMERGENCY_OPTIONS=[
   {key:"garage",label:"Garage door stuck",        e:"🚪", taskId:43, desc:"Emergency: garage door stuck — needs urgent attention."},
   {key:"other", label:"Other urgent repair",      e:"❗", taskId:null, customTitle:"", customPrice:"", ccat:"Repair", desc:"Emergency: urgent repair needed — details below."},
 ];
-// Demo/placeholder support number — replace before launch.
-const SUPPORT_PHONE_DISPLAY="(407) 555-0147";
-const SUPPORT_PHONE_LINK="tel:+14075550147";
 // Phase 1A: the Home Report placeholder card on My Home is hidden from the
 // Customer UI. Code is kept intact; flip to true to show it again.
 const SHOW_HOME_REPORT_CARD=false;
 
 const TOPICS=[
   {t:"Booking & pricing questions",a:"All prices shown are fixed — what you see at booking is what you pay, plus a surge fee only if you choose ASAP scheduling. There are no hidden fees or hourly surprises."},
-  {t:"Cancel or reschedule a job",a:"You can cancel a job any time before a pro accepts it for free from the Bookings tab. Once a pro is en route, cancellations may include a small fee to compensate their travel time."},
-  {t:"Report an issue with a pro",a:"If you experience a problem with a pro or a completed job, contact Haven Support. Our support team can review the booking details, messages, photos, and receipt and help determine the next steps."},
-  {t:"Refunds & billing",a:"If a job wasn't completed to your satisfaction, contact support within 48 hours of completion and we'll review it for a partial or full refund."},
+  {t:"Cancel or reschedule a job",a:"You can cancel a job any time before a pro accepts it for free from the Bookings tab."},
+  {t:"Report an issue with a pro",a:"In-app support isn't available yet, so issues with a Pro or a completed job can't be reported through the app right now."},
+  {t:"Refunds & billing",a:"Payments aren't collected in the app yet, so there are no in-app charges to refund. Haven doesn't offer a refund policy or guarantee in the app at this time."},
   {t:"Trust & safety",a:"If you're ever in immediate danger, contact local emergency services first — Haven Support is not a substitute for emergency services."},
 ];
 
@@ -2438,7 +2435,6 @@ function App(){
     const live=liveContextRef.current;
     if(!live.isAppVisible) return true;
     if(type===NOTIF_TYPES.MESSAGE && live.scr==="messages" && conversationId!=null && live.vjid===conversationId) return false;
-    if(type===NOTIF_TYPES.SUPPORT && live.scr==="help" && live.showSupportChat) return false;
     if(type===NOTIF_TYPES.JOB_UPDATE && (live.scr==="tracking"||live.scr==="posted") && jobId!=null && live.vjid===jobId) return false;
     if(type===NOTIF_TYPES.RECEIPT && live.scr==="receipt" && jobId!=null && live.vjid===jobId) return false;
     return true;
@@ -2515,7 +2511,6 @@ function App(){
     const copy={
       requested:["Cancellation request received","We've received your cancellation request and will follow up shortly."],
       approved:["Cancellation approved","Your cancellation has been approved."],
-      denied:["Cancellation needs attention","Haven Support has a question about your cancellation request."],
     }[kind];
     if(!copy)return;
     createNotification({type:NOTIF_TYPES.CANCELLATION,title:copy[0],body:copy[1],jobId,destination:{screen:"tracking",jobId}});
@@ -2537,21 +2532,6 @@ function App(){
         return next;
       }
       return [makeNotification({type:NOTIF_TYPES.MESSAGE,title:`New message from ${proName}`,body:"Tap to view the conversation.",jobId,destination:{screen:"messages",jobId}}),...prev];
-    });
-  };
-  const handleIncomingSupportMessage=()=>{
-    if(!notifAllowed(NOTIF_TYPES.SUPPORT))return;
-    if(!shouldCreateNotification({type:NOTIF_TYPES.SUPPORT}))return; // live in the open support conversation — seen, not suppressed-then-delayed
-    setNotifications(prev=>{
-      const idx=prev.findIndex(n=>n.type===NOTIF_TYPES.SUPPORT&&!n.isRead);
-      if(idx>=0){
-        const existing=prev[idx];
-        const count=(existing.count||1)+1;
-        const updated={...existing,count,title:`${count} new messages from Haven Support`,createdAt:Date.now()};
-        const next=prev.slice(); next[idx]=updated;
-        return next;
-      }
-      return [makeNotification({type:NOTIF_TYPES.SUPPORT,title:"New message from Haven Support",body:"Tap to view the conversation.",destination:{screen:"help",supportChat:true}}),...prev];
     });
   };
   const markNotifRead=(id,read=true)=>setNotifications(prev=>prev.map(n=>n.id===id?{...n,isRead:read}:n));
@@ -2584,7 +2564,7 @@ function App(){
       case "rating": setVjid(job.id); openRating(); break;
       case "receipt": openReceipt(job.id); break;
       case "messages": setVjid(job.id); goTo("messages"); break;
-      case "help": openHelp(); if(d.supportChat) setShowSupportChat(true); break;
+      case "help": openHelp(); break;
       case "payment": goTo("payment"); break;
       case "draftAddress":
         if(hasDraft){ goTo(tid?"task":"custom",navFrom[tid?"task":"custom"]); }
@@ -2931,11 +2911,7 @@ function App(){
   const [selectedCardId,setSelectedCardId]=useState(1); // which card the current booking will use
   const [showCardPicker,setShowCardPicker]=useState(false);
   // Help & support
-  const [showSupportChat,setShowSupportChat]=useState(false);
-  useEffect(()=>{ liveContextRef.current = {scr,tab,vjid,isAppVisible,showSupportChat}; });
-  const [supportMsgs,setSupportMsgs]=useState([{id:1,f:"agent",m:"Hi! I'm a support specialist — what can I help with today?",t:"Just now"}]);
-  const [supportInput,setSupportInput]=useState("");
-  const [supportTyping,setSupportTyping]=useState(false);
+  useEffect(()=>{ liveContextRef.current = {scr,tab,vjid,isAppVisible}; });
   const [openTopicIdx,setOpenTopicIdx]=useState(null);
   // Pro profile
   const [proProfileId,setProProfileId]=useState(null);
@@ -3801,7 +3777,7 @@ function App(){
   };
   const openReceipt=(jobId)=>{ setVjid(jobId); goTo("receipt"); };
   const openProProfile=(pro,ctx)=>{setProProfileId(pro.i);setProProfileCtx(ctx);goTo("proProfile");};
-  const openHelp=()=>{setShowSupportChat(false);setOpenTopicIdx(null);goTo("help");};
+  const openHelp=()=>{setOpenTopicIdx(null);goTo("help");};
 
   // Payment methods
   const setCardDefault=id=>{setCards(cs=>cs.map(c=>({...c,isDefault:c.id===id})));setExpandedCard(null);};
@@ -3821,19 +3797,6 @@ function App(){
     setConfirmDeleteAddrId(null);
   };
   const setPrimaryAddress=id=>{setAddresses(as=>as.map(a=>({...a,isPrimary:a.id===id})));setExpandedAddr(null);};
-
-  // Support chat
-  const sendSupportMsg=()=>{
-    if(!supportInput.trim())return;
-    const txt=supportInput.trim();
-    setSupportMsgs(p=>[...p,{id:Date.now(),f:"me",m:txt,t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}]);
-    setSupportInput("");setSupportTyping(true);
-    setTimeout(()=>{
-      setSupportTyping(false);
-      setSupportMsgs(p=>[...p,{id:Date.now()+1,f:"agent",m:"Thanks for the details — a specialist will follow up shortly. Anything else I can help with in the meantime?",t:new Date().toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'})}]);
-      handleIncomingSupportMessage();
-    },1800);
-  };
 
   const openBrowse=(cats=null,label="",emergency=false)=>{
     setCatGroup(cats?{cats,label}:null);
@@ -4831,7 +4794,7 @@ function App(){
           )}
 
           {proProfileCtx==="tracking"&&vj&&(
-            <button onClick={()=>goTo("messages")} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:N,color:ON,fontWeight:800,fontSize:15,cursor:"pointer"}}>💬 Message {p.n.split(" ")[0]}</button>
+            <button onClick={()=>goTo("messages")} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:N,color:ON,fontWeight:800,fontSize:15,cursor:"pointer"}}>{CUSTOMER_MESSAGING_CONNECTED?`💬 Message ${p.n.split(" ")[0]}`:"💬 Messages · not available yet"}</button>
           )}
         </div>
       </div>
@@ -5609,11 +5572,8 @@ function App(){
     if(y>footerY-10){ doc.addPage(); y=MARGIN; }
     divider(footerY-14,0.75);
     doc.setFont("helvetica","bold"); doc.setFontSize(7.5); setFaint();
-    doc.text("QUESTIONS?",MARGIN,footerY);
     doc.text("RECEIPT DETAILS",rightX,footerY);
     doc.setFont("helvetica","normal"); doc.setFontSize(8.5); setMuted();
-    doc.text("support@haven.app",MARGIN,footerY+12);
-    doc.text("1-800-555-0199",MARGIN,footerY+24);
     doc.text(`Receipt ID: ${receiptId}`,rightX,footerY+12);
     doc.text(`Transaction ID: ${transactionId}`,rightX,footerY+24);
     if(payment.showCard) doc.text(`${payment.brand} •••• ${payment.last4} · Paid ${dateStr}`,rightX,footerY+36);
@@ -5653,7 +5613,6 @@ function App(){
         receipt?`${payment.paid?"Total paid":"Total"}: ${receiptMoney(receipt.totalCents)}`:"Total not available yet",
         "",
         ...(payment.showCard?[`Payment method: ${payment.brand} •••• ${payment.last4} — Paid`,""]:[]),
-        "Haven Support: support@haven.app",
       ].join("\n"),
     };
   };
@@ -5845,17 +5804,18 @@ function App(){
             </div>
             )}
 
-            <div style={{background:SL,borderRadius:14,padding:14,display:"flex",gap:10,alignItems:"center",marginBottom:20}}>
-              <span style={{fontSize:16}}>✅</span>
-              <span style={{fontSize:12,color:SC,fontWeight:600,lineHeight:1.4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                {vj.rated?<>Rated {starDisplay(vj.stars,13)} — covered by Haven's satisfaction guarantee.</>:"This job is covered by Haven's trust & safety guarantee."}
+            {/* COPY-01: no guarantee claims, and no support promise (no support channel
+                exists yet). Unrated: neutral card with the 🎧 support icon (founder-approved). */}
+            <div style={{background:vj.rated?SL:W,border:vj.rated?"none":`1px solid ${BD}`,borderRadius:14,padding:14,display:"flex",gap:10,alignItems:"center",marginBottom:20}}>
+              <span aria-hidden="true" style={{fontSize:16}}>{vj.rated?"✅":"🎧"}</span>
+              <span style={{fontSize:12,color:vj.rated?SC:TS,fontWeight:600,lineHeight:1.4,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                {vj.rated?<>Rated {starDisplay(vj.stars,13)} — thanks for rating this job.</>:"Something not right with this job? In-app support isn't available yet."}
               </span>
             </div>
 
-            <div style={{borderTop:`1px solid ${BD}`,paddingTop:14,textAlign:"center"}}>
-              <div style={{fontSize:11,color:TM,lineHeight:1.6}}>Questions about this receipt? Contact Haven Support at support@haven.app</div>
-              {payment.paid&&<div style={{fontSize:10,color:TM,marginTop:6}}>This receipt confirms a completed payment. No balance is owed.</div>}
-            </div>
+            {payment.paid&&<div style={{borderTop:`1px solid ${BD}`,paddingTop:14,textAlign:"center"}}>
+              <div style={{fontSize:10,color:TM}}>This receipt confirms a completed payment. No balance is owed.</div>
+            </div>}
           </div>
 
           <div className="no-print" style={{display:"flex",justifyContent:"flex-end",marginTop:16,paddingBottom:8}}>
@@ -6190,7 +6150,7 @@ function App(){
           <div style={{background:W,borderRadius:18,padding:"4px 16px",boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:6}}>
             {notifRow("Push notifications","Enable notifications on this device","push")}
             {notifRow("Job updates","Important booking and cancellation changes","jobUpdates")}
-            {notifRow("Messages","Messages from pros and Haven Support","messages")}
+            {notifRow("Messages","Messages from pros","messages")}
             {notifRow("Offers and updates","Optional Haven promotions and product news","promos")}
             {notifRow("Email updates","Receipts and account activity","email")}
           </div>
@@ -6347,60 +6307,10 @@ function App(){
 
   // ── HELP & SUPPORT ────────────────────────────────────────────────────────
   const helpScreen=()=>{
-    if(showSupportChat) return(
-      <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
-        {subHeader("Support chat",()=>setShowSupportChat(false))}
-        <div className="sc" style={{flex:1,overflowY:"auto",padding:"16px 20px"}}>
-          {supportMsgs.map(m=>{
-            const mine=m.f==="me";
-            return(
-              <div key={m.id} style={{display:"flex",flexDirection:mine?"row-reverse":"row",gap:10,marginBottom:14,alignItems:"flex-end"}}>
-                {!mine&&<div style={{width:30,height:30,borderRadius:15,background:N,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:13,flexShrink:0}}>🎧</div>}
-                <div style={{maxWidth:"72%"}}>
-                  <div style={{background:mine?N:W,borderRadius:mine?"18px 18px 4px 18px":"18px 18px 18px 4px",padding:"10px 14px",boxShadow:mine?"none":"0 1px 4px rgba(28,43,58,.08)"}}>
-                    <div style={{fontSize:14,color:mine?W:TX,lineHeight:1.45}}>{m.m}</div>
-                  </div>
-                  <div style={{fontSize:10,color:TM,marginTop:4,textAlign:mine?"right":"left",fontWeight:500}}>{m.t}</div>
-                </div>
-              </div>
-            );
-          })}
-          {supportTyping&&(
-            <div style={{display:"flex",gap:10,marginBottom:14,alignItems:"flex-end"}}>
-              <div style={{width:30,height:30,borderRadius:15,background:N,display:"flex",alignItems:"center",justifyContent:"center",color:W,fontWeight:700,fontSize:13,flexShrink:0}}>🎧</div>
-              <div style={{background:W,borderRadius:"18px 18px 18px 4px",padding:"12px 16px",boxShadow:"0 1px 4px rgba(28,43,58,.08)"}}>
-                <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                  {[0,1,2].map(i=><div key={i} style={{width:7,height:7,borderRadius:3.5,background:TM,opacity:.7,animation:`bounce 0.6s ${i*0.15}s infinite alternate`}}/>)}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-        <div style={{flexShrink:0,padding:"12px 16px 24px",background:W,borderTop:`1px solid ${BD}`,display:"flex",gap:10,alignItems:"center"}}>
-          <input value={supportInput} onChange={e=>setSupportInput(e.target.value)} onKeyDown={e=>e.key==="Enter"&&sendSupportMsg()}
-            placeholder="Describe your issue…"
-            style={{flex:1,background:BG,border:`1.5px solid ${BD}`,borderRadius:24,padding:"12px 18px",fontSize:14,color:TX,outline:"none"}}/>
-          <button onClick={sendSupportMsg} style={{width:46,height:46,borderRadius:23,background:supportInput.trim()?N:BD,border:"none",color:W,fontSize:18,cursor:supportInput.trim()?"pointer":"default",display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>➤</button>
-        </div>
-      </div>
-    );
     return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
         {subHeader("Help & support",()=>backFrom("help",{scr:"home",tab:"profile"}))}
         <div className="sc" style={{flex:1,overflowY:"auto",padding:20}}>
-          <a href={SUPPORT_PHONE_LINK} style={{textDecoration:"none",background:W,borderRadius:18,padding:16,marginBottom:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
-            <span style={{fontSize:22}}>📞</span>
-            <div style={{flex:1}}>
-              <div style={{fontWeight:700,fontSize:14,color:TX}}>Speak with support</div>
-              <div style={{fontSize:13,fontWeight:700,color:N,marginTop:2}}>{SUPPORT_PHONE_DISPLAY}</div>
-            </div>
-            <span style={{color:TM,fontSize:18}}>›</span>
-          </a>
-          <div onClick={()=>setShowSupportChat(true)} style={{background:W,borderRadius:18,padding:16,marginBottom:16,boxShadow:"0 2px 10px rgba(28,43,58,.07)",display:"flex",gap:12,alignItems:"center",cursor:"pointer"}}>
-            <span style={{fontSize:22}}>💬</span>
-            <div style={{flex:1}}><div style={{fontWeight:700,fontSize:14,color:TX}}>Chat with support</div><div style={{fontSize:12,color:TS,marginTop:2}}>Avg. response time: 3 minutes</div></div>
-            <span style={{color:TM,fontSize:18}}>›</span>
-          </div>
           <div style={{fontSize:12,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:10}}>Common topics</div>
           <div style={{background:W,borderRadius:18,overflow:"hidden",boxShadow:"0 2px 10px rgba(28,43,58,.07)",marginBottom:16}}>
             {TOPICS.map((topic,i)=>{
@@ -6780,7 +6690,7 @@ function App(){
               <span style={{color:TM,fontSize:18,alignSelf:"flex-start"}}>›</span>
             </div>
             <button onClick={()=>goTo("messages")} style={{width:"100%",padding:"11px 0",borderRadius:14,border:`1.5px solid ${vj.status==="complete"?BD:NT}`,background:vj.status==="complete"?BG:(isDark?"rgba(241,239,233,.06)":"rgba(28,43,58,.06)"),color:vj.status==="complete"?TM:NT,fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
-              💬 {vj.status==="complete"?"Chat (closed)":"Message"}
+              💬 {vj.status==="complete"?"Chat (closed)":CUSTOMER_MESSAGING_CONNECTED?"Message":"Messages · not available yet"}
             </button>
           </div>
           <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
@@ -6804,7 +6714,6 @@ function App(){
                   {vj.cancelStatus==="requested"?(
                     <div style={{margin:"0 20px 24px",background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:16,padding:16,textAlign:"center"}}>
                       <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:4}}>Pending Cancellation</div>
-                      <div style={{fontSize:12,color:"#991B1B",lineHeight:1.5}}>Haven Support will review timing and any work already performed, then follow up with you.</div>
                     </div>
                   ):!showCancelRequest?(
                     <div style={{margin:"0 20px 24px",textAlign:"center"}}>
@@ -6813,10 +6722,9 @@ function App(){
                   ):(
                     <div style={{margin:"0 20px 24px",background:W,borderRadius:18,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                       <div style={{fontWeight:700,fontSize:14,color:TX,marginBottom:6}}>Cancel this job?</div>
-                      <div style={{fontSize:12,color:TS,lineHeight:1.5,marginBottom:14}}>A pro has already accepted. Haven Support may need to review timing, work already performed, or applicable fees before this can be cancelled.</div>
+                      <div style={{fontSize:12,color:TS,lineHeight:1.5,marginBottom:14}}>A pro has already accepted.</div>
                       <button onClick={()=>setShowCancelRequest(false)} style={{width:"100%",padding:12,borderRadius:12,border:"none",background:AM,color:ON,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Continue with job</button>
                       <button onClick={requestCancellation} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:BG,color:TX,fontWeight:700,fontSize:13,cursor:"pointer",marginBottom:8}}>Request cancellation</button>
-                      <button onClick={()=>{setShowCancelRequest(false);openHelp();}} style={{width:"100%",padding:12,borderRadius:12,border:`1.5px solid ${BD}`,background:"transparent",color:TX,fontWeight:700,fontSize:13,cursor:"pointer"}}>Contact Haven Support</button>
                     </div>
                   )}
                 </>

@@ -232,7 +232,8 @@ async function checkReceipt(job, who) {
   await waitFor(() => /PAYMENT BREAKDOWN/.test(bodyText()), 'receipt screen');
   const receiptText = bodyText();
   assert(receiptText.includes(job.pro.n), `${who}: receipt shows the pro name`);
-  noClaims(receiptText.replace(/This job is covered by Haven's trust & safety guarantee\.|covered by Haven's satisfaction guarantee\./g, ''), `${who}: in-app receipt`);
+  assert(!/guarantee/i.test(receiptText), `${who}: no guarantee claim on the completed job (COPY-01)`);
+  noClaims(receiptText, `${who}: in-app receipt`);
 
   // Share text (Copy Receipt Details).
   clipboardText = null;
@@ -353,7 +354,7 @@ async function checkReceipt(job, who) {
     await waitFor(() => /Pro profile/.test(bodyText()), 'Pro profile');
     const text = bodyText();
     assert(!BROKEN_TEXT.test(text), 'no null/undefined/NaN on the demo pro profile');
-    assert(/Marcus T\./.test(text) && /💬 Message Marcus/.test(text), 'name and Message shown');
+    assert(/Marcus T\./.test(text) && /💬 Messages · not available yet/.test(text) && !/💬 Message Marcus/.test(text), 'name shown; the message entry says messaging is not available yet (MSG-02)');
   });
 
   await step('5. Home header and Help topics show no claim', async () => {
