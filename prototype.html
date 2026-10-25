@@ -4794,7 +4794,7 @@ function App(){
           )}
 
           {proProfileCtx==="tracking"&&vj&&(
-            <button onClick={()=>goTo("messages")} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:N,color:ON,fontWeight:800,fontSize:15,cursor:"pointer"}}>💬 Message {p.n.split(" ")[0]}</button>
+            <button onClick={()=>goTo("messages")} style={{width:"100%",padding:16,borderRadius:16,border:"none",background:N,color:ON,fontWeight:800,fontSize:15,cursor:"pointer"}}>{CUSTOMER_MESSAGING_CONNECTED?`💬 Message ${p.n.split(" ")[0]}`:"💬 Messages · not available yet"}</button>
           )}
         </div>
       </div>
@@ -6690,7 +6690,7 @@ function App(){
               <span style={{color:TM,fontSize:18,alignSelf:"flex-start"}}>›</span>
             </div>
             <button onClick={()=>goTo("messages")} style={{width:"100%",padding:"11px 0",borderRadius:14,border:`1.5px solid ${vj.status==="complete"?BD:NT}`,background:vj.status==="complete"?BG:(isDark?"rgba(241,239,233,.06)":"rgba(28,43,58,.06)"),color:vj.status==="complete"?TM:NT,fontWeight:700,fontSize:14,cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",gap:7}}>
-              💬 {vj.status==="complete"?"Chat (closed)":"Message"}
+              💬 {vj.status==="complete"?"Chat (closed)":CUSTOMER_MESSAGING_CONNECTED?"Message":"Messages · not available yet"}
             </button>
           </div>
           <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>

@@ -354,7 +354,7 @@ async function checkReceipt(job, who) {
     await waitFor(() => /Pro profile/.test(bodyText()), 'Pro profile');
     const text = bodyText();
     assert(!BROKEN_TEXT.test(text), 'no null/undefined/NaN on the demo pro profile');
-    assert(/Marcus T\./.test(text) && /💬 Message Marcus/.test(text), 'name and Message shown');
+    assert(/Marcus T\./.test(text) && /💬 Messages · not available yet/.test(text) && !/💬 Message Marcus/.test(text), 'name shown; the message entry says messaging is not available yet (MSG-02)');
   });
 
   await step('5. Home header and Help topics show no claim', async () => {
