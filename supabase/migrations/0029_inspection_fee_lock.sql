@@ -25,12 +25,25 @@
 --     public.jobs_lock_materials_approved() does not carry all three 0028
 --     markers, or trigger jobs_lock_materials_approved on public.jobs is
 --     missing.
---   - NOT guarded otherwise. 0029 has no downgrade check: if any other
---     body of jobs_lock_pricing_and_inspection() is installed (an edited
---     or later version), a re-run silently replaces it. Section 0 matches
---     the 0028 function by text and does not read the trigger's function
---     (pg_trigger.tgfoid). Compare the installed body with this file before
---     any re-run.
+--   - refused with an error by the version guard (sections 0b / 0c; Hub
+--     decisions H, 2026-10-23: an older 0029 must not overwrite newer
+--     function behaviour; same pattern as the guarded 0025 / 0026), nothing
+--     applied, when: public.jobs_lock_pricing_and_inspection() carries a
+--     "haven-version:" line other than this file's ("haven-version:
+--     0029-v1"), i.e. a later 0029 is installed (0b); or trigger
+--     jobs_lock_pricing_and_inspection on public.jobs runs any function other
+--     than public.jobs_lock_pricing_and_inspection() (renamed, or moved to
+--     another schema), or that function's body (pg_proc.prosrc, by md5) is
+--     not this file's body or one of the earlier published #90 0029 bodies,
+--     e.g. a later body with its version line stripped (0c, which reads
+--     pg_trigger.tgfoid and pg_proc). Pasting this file over an earlier 0029
+--     body is the intended upgrade and is allowed; re-pasting it over itself
+--     is the no-op above. A later 0029 must carry a new "haven-version:" line
+--     and list this file's body md5 among its known bodies.
+--     Limit: the earlier 0029 files (c6e926e ... the R3-fix commit) carry no
+--     guard, so pasting one of THEM over this version would still replace
+--     it. Use only this file; the read-only Verify query at the bottom shows
+--     which 0029 body is installed.
 --
 -- What it adds: ONE new BEFORE INSERT OR UPDATE trigger on public.jobs,
 -- jobs_lock_pricing_and_inspection, with its own function. The 0025-0028
@@ -261,6 +274,92 @@ begin
   end if;
 end$$;
 
+-- ── 0b. Refuse to downgrade (version guard; Hub decisions H, 2026-10-23) ──
+-- This file's function body carries the line "haven-version: 0029-v1". A
+-- later 0029 is expected to carry a different "haven-version:" line. If the
+-- installed public.jobs_lock_pricing_and_inspection() carries any other
+-- version line, re-running this file would undo it, so stop here: nothing
+-- in this file runs.
+do $$
+begin
+  if exists (select 1 from pg_proc
+              where pronamespace = 'public'::regnamespace
+                and proname = 'jobs_lock_pricing_and_inspection'
+                and prosrc like '%haven-version:%'
+                and prosrc not like '%haven-version: 0029-v1 %') then
+    raise exception '0029 refused: a later version of public.jobs_lock_pricing_and_inspection() is installed (haven-version line); re-running this 0029 would downgrade it. Nothing was changed.';
+  end if;
+end$$;
+
+-- ── 0c. Catalog + body check (version guard; Hub decisions H, 2026-10-23) ─
+-- 0b only reads the text. This check reads the catalog: if trigger
+-- jobs_lock_pricing_and_inspection exists on public.jobs, the function it
+-- runs (pg_trigger.tgfoid) must be exactly
+-- public.jobs_lock_pricing_and_inspection(); and that function, when it
+-- exists (with or without the trigger), must hold this file's body or an
+-- earlier published #90 0029 body, identified by md5(pg_proc.prosrc):
+--   2393909415ad489e6a8902cf97e6a2dd  0029-v1, this file (section 1)
+--   332ca406d006fa6b90772006ceff14b1  #90 b5275ab6 (IV.3 R3 fix)
+--   370deabf52b372d92007a3f21cf79d1e  #90 a9d4682a (IV.4)
+--   11151a78c19f2e29617206751292cc0f  #90 f35cc52d (IV.3)
+--   bf593ba828a666f76c6d4386bbe47d59  #90 c0d32a44 (IV.2)
+--   0dcde0f7d4bf21a2d9fc6300797d0a28  #90 41be34b0 (IV.1)
+--   13df9ffc104827369eb3ea30f0f88e69  #90 605e3543 (III.2 decision 4)
+--   ea2581327fd7a828aa01ad5af0a8118c  #90 08273ea / cf0af5fb (III.6)
+--   d5209e8891823ec6d7b421a8460b1e2c  #90 1688398 (III.5)
+--   b1d5237b56e1ea75d87d266f8baff17d  #90 4a71a8d (III.4)
+--   e7bfb778bbd04988f0a835b7b5ed3ff9  #90 acd9e56 (III.3)
+--   58a98626f598faa52e413df86e4c850c  #90 2b9e130 (III.2)
+--   46993bccf4158eaec9d30ade4170de67  #90 4eefc2b (III.1)
+--   52cd1e9aca2fc0d1cf582e5e51f1a3de  #90 cf84a18 / 022b30d (rule D)
+--   7bcbaeff971d7e349e87144d6b752e20  #90 c6e926e (first SQL draft)
+-- Anything else (function renamed, moved to another schema, or a later
+-- body without its version line) means re-running 0029 could downgrade or
+-- bypass it, so stop here: nothing in this file runs. No trigger and no
+-- function yet (first paste) is allowed.
+do $$
+declare
+  t record;
+  known text[] := array['2393909415ad489e6a8902cf97e6a2dd',
+                        '332ca406d006fa6b90772006ceff14b1',
+                        '370deabf52b372d92007a3f21cf79d1e',
+                        '11151a78c19f2e29617206751292cc0f',
+                        'bf593ba828a666f76c6d4386bbe47d59',
+                        '0dcde0f7d4bf21a2d9fc6300797d0a28',
+                        '13df9ffc104827369eb3ea30f0f88e69',
+                        'ea2581327fd7a828aa01ad5af0a8118c',
+                        'd5209e8891823ec6d7b421a8460b1e2c',
+                        'b1d5237b56e1ea75d87d266f8baff17d',
+                        'e7bfb778bbd04988f0a835b7b5ed3ff9',
+                        '58a98626f598faa52e413df86e4c850c',
+                        '46993bccf4158eaec9d30ade4170de67',
+                        '52cd1e9aca2fc0d1cf582e5e51f1a3de',
+                        '7bcbaeff971d7e349e87144d6b752e20'];
+begin
+  for t in
+    select tg.tgfoid, tg.tgfoid::regprocedure::text as fn, md5(p.prosrc) as body_md5
+      from pg_trigger tg
+      join pg_proc p on p.oid = tg.tgfoid
+     where tg.tgrelid = 'public.jobs'::regclass
+       and tg.tgname = 'jobs_lock_pricing_and_inspection'
+  loop
+    if to_regprocedure('public.jobs_lock_pricing_and_inspection()') is null
+       or t.tgfoid <> to_regprocedure('public.jobs_lock_pricing_and_inspection()')::oid
+       or not (t.body_md5 = any (known)) then
+      raise exception '0029 refused: trigger jobs_lock_pricing_and_inspection on public.jobs runs % (body md5 %), not a known 0029 public.jobs_lock_pricing_and_inspection(); re-running this 0029 could downgrade or bypass it. Nothing was changed.', t.fn, t.body_md5;
+    end if;
+  end loop;
+  for t in
+    select md5(p.prosrc) as body_md5
+      from pg_proc p
+     where p.oid = to_regprocedure('public.jobs_lock_pricing_and_inspection()')
+  loop
+    if not (t.body_md5 = any (known)) then
+      raise exception '0029 refused: public.jobs_lock_pricing_and_inspection() has an unknown body (md5 %), not this 0029 or an earlier published one; re-running this 0029 could downgrade it. Nothing was changed.', t.body_md5;
+    end if;
+  end loop;
+end$$;
+
 -- ── 1. Trigger function ───────────────────────────────────────────────────
 -- SECURITY INVOKER on purpose so current_user is the real caller role.
 create or replace function public.jobs_lock_pricing_and_inspection()
@@ -269,6 +368,8 @@ language plpgsql
 security invoker
 set search_path = public
 as $$
+-- haven-version: 0029-v1 (2026-10-23 decisions F + H: rules 1-4, R3 fix, version guard).
+-- Sections 0b / 0c of this file read this line and the body md5; a later 0029 must change both.
 declare
   privileged boolean := current_user not in ('anon', 'authenticated');
   is_customer boolean;
@@ -511,6 +612,10 @@ create trigger jobs_lock_pricing_and_inspection
 commit;
 
 -- ── Verify (read-only) ────────────────────────────────────────────────────
+-- Which 0029 body is installed (this file: 2393909415ad489e6a8902cf97e6a2dd,
+-- "haven-version: 0029-v1"):
+-- select md5(prosrc), substring(prosrc from 'haven-version: [^ ]+')
+--   from pg_proc where oid = to_regprocedure('public.jobs_lock_pricing_and_inspection()');
 -- Trigger installed, 0028 function untouched:
 -- select tgname from pg_trigger
 --  where tgrelid = 'public.jobs'::regclass and not tgisinternal order by 1;
