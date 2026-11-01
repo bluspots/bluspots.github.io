@@ -53,7 +53,7 @@ Naming principles:
 | en_route → arrived | Pro | Arrival confirmation |
 | arrived → diagnosing | Pro | Diagnosis categories only. The Customer can never move a job into diagnosing. *(founder decision 2026-10-23)* Only the job's **assigned** Pro, only from `arrived`, only when `requires_diagnosis` is true; every other move into diagnosing is rejected server-side (0029 III.1). *(founder decision 2026-10-23)* |
 | diagnosing → in_progress | Pro | Scope matched what was listed |
-| diagnosing → materials_requested | Pro | Scope exceeded what was listed |
+| diagnosing → materials_requested | Pro | Scope exceeded what was listed. A materials request is made from `diagnosing`, never from `posted`, `en_route` or `arrived`; enforced server-side on the status move and on job creation for every client (0029 IV.5). The assigned Pro's follow-up request from `in_progress` (after a receipt; the only request point on standard jobs) is unchanged pending founder confirmation. *(founder decision 2026-10-23)* |
 | materials_requested → materials_approved | Customer | Approves request; authorizes purchase only |
 | materials_requested → materials_declined | Customer | Standard (non-diagnosis) decline; the server sets the $30 convenience fee (0029 III.4). *(founder decision 2026-10-23)* |
 | materials_approved → in_progress | Pro | Submits receipt w/ actual materials cost + photo |

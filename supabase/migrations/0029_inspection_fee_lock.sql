@@ -30,7 +30,8 @@
 --     function behaviour; same pattern as the guarded 0025 / 0026), nothing
 --     applied, when: public.jobs_lock_pricing_and_inspection() carries a
 --     "haven-version:" line other than this file's ("haven-version:
---     0029-v1"), i.e. a later 0029 is installed (0b); or trigger
+--     0029-v2") or the earlier guarded "0029-v1" (#90 9da3344a), i.e. a
+--     later 0029 is installed (0b); or trigger
 --     jobs_lock_pricing_and_inspection on public.jobs runs any function other
 --     than public.jobs_lock_pricing_and_inspection() (renamed, or moved to
 --     another schema), or that function's body (pg_proc.prosrc, by md5) is
@@ -42,8 +43,9 @@
 --     and list this file's body md5 among its known bodies.
 --     Limit: the earlier 0029 files (c6e926e ... the R3-fix commit) carry no
 --     guard, so pasting one of THEM over this version would still replace
---     it. Use only this file; the read-only Verify query at the bottom shows
---     which 0029 body is installed.
+--     it. The guarded 0029-v1 file (#90 9da3344a) is refused by its own 0b
+--     over this version. Use only this file; the read-only Verify query at
+--     the bottom shows which 0029 body is installed.
 --
 -- What it adds: ONE new BEFORE INSERT OR UPDATE trigger on public.jobs,
 -- jobs_lock_pricing_and_inspection, with its own function. The 0025-0028
@@ -229,6 +231,24 @@
 --        request (e.g. a request left by a privileged move). Non-privileged
 --        callers. ON HOLD, not built: a customer lowering a reimbursement
 --        below the approved amount.
+--     5. Founder decision 2026-10-23 23:15 ET: a materials request is made
+--        from diagnosing, never from posted, en_route or arrived ("Materials
+--        can only be requested from diagnosing"). Enforced on both request
+--        paths for every non-privileged caller: the status move INTO
+--        materials_requested (the Pro app's bestEffortPatchMaterialsRequested
+--        PATCH; 0028 counts it as a new request), and a jobs INSERT that
+--        starts at materials_requested (RLS 0002 already allows only posted
+--        inserts; 0029 refuses it even without RLS). public.materials_requests
+--        (0001) is not a request path: no app writes it and 0027 revokes
+--        every client right on it. KEPT, pending founder confirmation: the
+--        assigned Pro's follow-up request from in_progress (0009 / 0026
+--        counting rule, III.3's one backward exception). haven-pro main
+--        offers Request Materials on diagnosing and "Need materials? Request
+--        them" on in_progress; on standard (non-diagnosis) jobs in_progress
+--        is the only place a request can be made (they never diagnose), so
+--        refusing it would break the standard materials flow and the $30
+--        standard decline. The Pro app never requests from en_route or
+--        arrived.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
@@ -275,10 +295,11 @@ begin
 end$$;
 
 -- ── 0b. Refuse to downgrade (version guard; Hub decisions H, 2026-10-23) ──
--- This file's function body carries the line "haven-version: 0029-v1". A
--- later 0029 is expected to carry a different "haven-version:" line. If the
--- installed public.jobs_lock_pricing_and_inspection() carries any other
--- version line, re-running this file would undo it, so stop here: nothing
+-- This file's function body carries the line "haven-version: 0029-v2"; the
+-- earlier guarded 0029 (#90 9da3344a) carries "haven-version: 0029-v1", which
+-- this file upgrades. A later 0029 is expected to carry a different
+-- "haven-version:" line. If the installed
+-- public.jobs_lock_pricing_and_inspection() carries any other version line, re-running this file would undo it, so stop here: nothing
 -- in this file runs.
 do $$
 begin
@@ -286,6 +307,7 @@ begin
               where pronamespace = 'public'::regnamespace
                 and proname = 'jobs_lock_pricing_and_inspection'
                 and prosrc like '%haven-version:%'
+                and prosrc not like '%haven-version: 0029-v2 %'
                 and prosrc not like '%haven-version: 0029-v1 %') then
     raise exception '0029 refused: a later version of public.jobs_lock_pricing_and_inspection() is installed (haven-version line); re-running this 0029 would downgrade it. Nothing was changed.';
   end if;
@@ -298,7 +320,8 @@ end$$;
 -- public.jobs_lock_pricing_and_inspection(); and that function, when it
 -- exists (with or without the trigger), must hold this file's body or an
 -- earlier published #90 0029 body, identified by md5(pg_proc.prosrc):
---   2393909415ad489e6a8902cf97e6a2dd  0029-v1, this file (section 1)
+--   99489fce15d494f2fd60e33369582d76  0029-v2, this file (section 1)
+--   2393909415ad489e6a8902cf97e6a2dd  #90 9da3344a (0029-v1, version guard)
 --   332ca406d006fa6b90772006ceff14b1  #90 b5275ab6 (IV.3 R3 fix)
 --   370deabf52b372d92007a3f21cf79d1e  #90 a9d4682a (IV.4)
 --   11151a78c19f2e29617206751292cc0f  #90 f35cc52d (IV.3)
@@ -320,7 +343,8 @@ end$$;
 do $$
 declare
   t record;
-  known text[] := array['2393909415ad489e6a8902cf97e6a2dd',
+  known text[] := array['99489fce15d494f2fd60e33369582d76',
+                        '2393909415ad489e6a8902cf97e6a2dd',
                         '332ca406d006fa6b90772006ceff14b1',
                         '370deabf52b372d92007a3f21cf79d1e',
                         '11151a78c19f2e29617206751292cc0f',
@@ -368,7 +392,7 @@ language plpgsql
 security invoker
 set search_path = public
 as $$
--- haven-version: 0029-v1 (2026-10-23 decisions F + H: rules 1-4, R3 fix, version guard).
+-- haven-version: 0029-v2 (2026-10-23 decisions F + H: rules 1-4, R3 fix, IV.5 materials from diagnosing, version guard).
 -- Sections 0b / 0c of this file read this line and the body md5; a later 0029 must change both.
 declare
   privileged boolean := current_user not in ('anon', 'authenticated');
@@ -391,6 +415,13 @@ begin
             hint = 'pro_id must differ from customer_id.';
   end if;
   if tg_op = 'INSERT' then
+    -- IV.5 (founder 2026-10-23 23:15 ET), insert path: no client creates a
+    --    job that starts at materials_requested.
+    if not privileged and new.status = 'materials_requested' then
+      raise exception 'Materials can only be requested from diagnosing'
+        using errcode = '42501',
+              hint = 'A new job starts at posted; Request Materials is the assigned Pro''s step from diagnosing.';
+    end if;
     return new;
   end if;
 
@@ -509,6 +540,18 @@ begin
     new.convenience_fee_cents := 3000;
   end if;
 
+  -- IV.5 (founder 2026-10-23 23:15 ET). A materials request (move INTO
+  --    materials_requested) only from diagnosing, never from posted, en_route
+  --    or arrived. The assigned Pro's follow-up request from in_progress is
+  --    kept (Pro app flow; standard jobs' only request point; see header).
+  if new.status = 'materials_requested'
+     and old.status is distinct from 'materials_requested'
+     and old.status not in ('diagnosing', 'in_progress') then
+    raise exception 'Materials can only be requested from diagnosing'
+      using errcode = '42501',
+            hint = 'Request Materials is the assigned Pro''s step from diagnosing (or a follow-up request from in_progress), never from en_route or arrived.';
+  end if;
+
   -- IV.1 (founder 2026-10-23 21:14 ET, rule 1). complete only from in_progress.
   if new.status = 'complete'
      and old.status is distinct from 'complete'
@@ -613,7 +656,7 @@ commit;
 
 -- ── Verify (read-only) ────────────────────────────────────────────────────
 -- Which 0029 body is installed (this file: 2393909415ad489e6a8902cf97e6a2dd,
--- "haven-version: 0029-v1"):
+-- "haven-version: 0029-v2"):
 -- select md5(prosrc), substring(prosrc from 'haven-version: [^ ]+')
 --   from pg_proc where oid = to_regprocedure('public.jobs_lock_pricing_and_inspection()');
 -- Trigger installed, 0028 function untouched:
