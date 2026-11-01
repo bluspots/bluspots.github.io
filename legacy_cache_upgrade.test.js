@@ -73,13 +73,15 @@ global.URL.revokeObjectURL = global.URL.revokeObjectURL || (() => {});
 const storedData = {};
 // Optional storage refusal, to simulate a full quota for one key.
 let refuseSet = null; // (key, value) => true to throw
+const draftLog = []; // every write and removal of haven_draft (QA #87 v9: no transient cross-account write)
 global.localStorage = {
   getItem: (k) => (k in storedData ? storedData[k] : null),
   setItem: (k, v) => {
     if (refuseSet && refuseSet(k, String(v))) { const e = new Error('QuotaExceededError'); e.name = 'QuotaExceededError'; throw e; }
+    if (k === 'haven_draft') draftLog.push({ op: 'set', v: String(v), live: storedData['haven_auth_user_id'] || '' });
     storedData[k] = String(v);
   },
-  removeItem: (k) => { delete storedData[k]; },
+  removeItem: (k) => { if (k === 'haven_draft') draftLog.push({ op: 'remove', prev: storedData[k], live: storedData['haven_auth_user_id'] || '' }); delete storedData[k]; },
   clear: () => { Object.keys(storedData).forEach(k => delete storedData[k]); },
 };
 global.window.localStorage = global.localStorage;
@@ -1409,6 +1411,7 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
     // the other tab: X signed out, Y signed in (shared storage changes, no auth event here)
     rc14 = readCount; // (tab 1 may already read for Y from the shared session id)
     signOutStorage(); delete storedData['haven_draft']; signInStorage(Y_ID);
+    draftLog.length = 0;
     if (withEvent) {
       await act(async () => { window.dispatchEvent(new window.StorageEvent('storage', { key: 'haven_auth_user_id' })); });
       await settle(150);
@@ -1421,6 +1424,8 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
       else assert(false, `${tag}: the draft form is open`);
     }
     assert(!draftStored(), `${tag}: nothing of X's draft is written to storage under Y's session`);
+    const xWrites = draftLog.filter(e => e.op === 'set' && /XDRAFT/.test(e.v));
+    assert(xWrites.length === 0, `${tag}: X's draft is never written, even for a moment, once the session is Y's (${xWrites.length} writes, e.g. owner ${xWrites[0] ? (JSON.parse(xWrites[0].v).owner || '').slice(0, 8) : '-'})`);
     await act(async () => { authCb && authCb('SIGNED_IN', storedSession()); });
     await settle(200);
     await yNeverGetsDraft('normal', withEvent ? 'second tab' : 'stale second tab');
@@ -1443,10 +1448,13 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
     assert(navScr() === 'custom' && /XDRAFT title/.test(fieldsText()), `${tag}: tab 1 has X's draft open`);
     signOutStorage(); signInStorage(Y_ID);
     storedData['haven_draft'] = JSON.stringify({ __v: 2, owner: Y_ID, data: YDRAFT });
+    draftLog.length = 0;
     await act(async () => { window.dispatchEvent(new window.StorageEvent('storage', { key: 'haven_draft' })); });
     await settle(150);
     assert(memHolds(['XDRAFT', 'XDRAFTPHOTO']).length === 0 && !draftSeen(), `${tag}: X's draft leaves tab 1`);
     assert(draftRec() && draftRec().owner === Y_ID && /YOWN draft body/.test(storedData['haven_draft']), `${tag}: Y's own draft is left in storage`);
+    assert(!draftLog.some(e => e.op === 'remove' && /YOWN/.test(e.prev || '')), `${tag}: tab 1 never removes Y's draft, even for a moment`);
+    assert(!draftLog.some(e => e.op === 'set' && /XDRAFT/.test(e.v)), `${tag}: tab 1 never writes X's draft over Y's`);
     await act(async () => { authCb && authCb('SIGNED_IN', storedSession()); });
     await settle(250);
     assert(!draftStored(), `${tag}: nothing of X's draft is stored`);

@@ -4807,6 +4807,7 @@ function App() {
   const hasDraft = tid !== null || ctitle.trim() !== "";
   const draftHydratedRef = useRef(false);
   const draftOwnerRef = useRef("");
+  const [draftStateOwner, setDraftStateOwner] = useState("");
   const applyDraft = (d) => {
     if (!d || typeof d !== "object") return;
     if (d.tid != null) setTid(d.tid);
@@ -4841,6 +4842,7 @@ function App() {
     if (draftHydratedRef.current) clearDraftForAccountChange(false);
     draftOwnerRef.current = uid;
     draftHydratedRef.current = true;
+    setDraftStateOwner(uid);
     if (uid && stored && stored.owner && havenSameDraftOwner(stored.owner, uid)) applyDraft(stored.data);
     else if (stored) {
       try {
@@ -4871,6 +4873,7 @@ function App() {
       }
       const owner = draftOwnerRef.current;
       const live = havenJobsAccountId();
+      if (!havenSameDraftOwner(draftStateOwner, owner)) return;
       if (currentlyDraft) {
         if (!owner || !havenSameDraftOwner(owner, live)) return;
         localStorage.setItem("haven_draft", JSON.stringify({ __v: 2, owner, data }));
@@ -4881,7 +4884,7 @@ function App() {
       }
     } catch {
     }
-  }, [tid, tpid, reqWindow, ctitle, ccat, cprice, desc, photos, emergency, selectedAddressId, selectedCardId]);
+  }, [tid, tpid, reqWindow, ctitle, ccat, cprice, desc, photos, emergency, selectedAddressId, selectedCardId, draftStateOwner]);
   const tabBarTap = (t) => {
     const now = Date.now();
     const isDoubleTap = lastTabTap.tab === t && now - lastTabTap.time < 500;

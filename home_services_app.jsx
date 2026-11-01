@@ -2678,6 +2678,11 @@ export default function App(){
   // signed in. Any other stored draft (another account's, one saved while
   // signed out, or an older build's with no owner) is deleted, not restored.
   const draftOwnerRef = useRef("");
+  // The account the draft fields now in memory belong to. Set in the same
+  // update as those fields, so a render that still holds the previous
+  // account's fields (the session moved under it, e.g. in another tab) is
+  // never saved under the new account.
+  const [draftStateOwner,setDraftStateOwner]=useState("");
   const applyDraft=(d)=>{
       if(!d||typeof d!=="object")return;
       if(d.tid!=null)setTid(d.tid);
@@ -2708,6 +2713,7 @@ export default function App(){
     if(draftHydratedRef.current) clearDraftForAccountChange(false);
     draftOwnerRef.current=uid;
     draftHydratedRef.current=true;
+    setDraftStateOwner(uid);
     if(uid && stored && stored.owner && havenSameDraftOwner(stored.owner, uid)) applyDraft(stored.data);
     else if(stored) { try{ localStorage.removeItem("haven_draft"); }catch{} }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -2739,6 +2745,7 @@ export default function App(){
       // it is still the signed-in one (another tab may have switched).
       const owner=draftOwnerRef.current;
       const live=havenJobsAccountId();
+      if(!havenSameDraftOwner(draftStateOwner, owner)) return; // these fields are the previous account's
       if(currentlyDraft){
         if(!owner || !havenSameDraftOwner(owner, live)) return;
         localStorage.setItem("haven_draft",JSON.stringify({__v:2,owner,data}));
@@ -2748,7 +2755,7 @@ export default function App(){
         localStorage.removeItem("haven_draft");
       }
     }catch{}
-  },[tid,tpid,reqWindow,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId]);
+  },[tid,tpid,reqWindow,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId,draftStateOwner]);
   // Bottom-tab-bar tap handler ONLY — every other internal "return to root"
   // call site (goHome/goBookings/goProfile, used as fixed-destination back
   // targets from many screens) still goes through the untouched goTab above,
