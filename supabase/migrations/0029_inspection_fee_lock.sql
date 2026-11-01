@@ -193,6 +193,22 @@
 --        0029 now refuses the rest even without RLS). The Customer app
 --        writes only cancelled, materials_approved, materials_declined and
 --        inspection_completed.
+--        R3 fix (founder decision 2026-10-23 11:14 PM ET, Hub decisions H,
+--        under rule 3; closes QA #90 R3 at a9d4682a): the customer may
+--        approve materials (move INTO materials_approved) ONLY from
+--        materials_requested with an undecided request
+--        (materials_request_seq > materials_decided_seq, read from OLD):
+--        "There is no pending materials request to approve". Before this,
+--        the customer (also after switching the profile to Pro) could move
+--        en_route, arrived or diagnosing straight to materials_approved with
+--        nothing to approve, a work-status jump that skipped arrived /
+--        diagnosing. Same check on the other customer decisions: the
+--        standard decline (III.4) is already only from materials_requested;
+--        the inspection endings (I) already check the request. NOT changed
+--        (outside decision H): a decline of a materials_requested row whose
+--        request is already decided, reachable only on rows a privileged
+--        caller or legacy data left that way. The Customer app shows Approve
+--        only on a pending request.
 --     4. Completion is refused while a materials request is pending
 --        (materials_request_seq > materials_decided_seq, read from OLD):
 --        "A materials request is still pending; decide it first". With rule
@@ -409,6 +425,18 @@ begin
     raise exception 'A materials request is still pending; decide it first'
       using errcode = '42501',
             hint = 'The customer must approve or decline the pending materials request before the job can be completed.';
+  end if;
+
+  -- IV.3 R3 fix (founder 2026-10-23 11:14 PM ET, Hub H; rule 3). The customer
+  --    approves materials only from materials_requested with an undecided
+  --    request (read from OLD).
+  if is_customer
+     and new.status = 'materials_approved'
+     and old.status is distinct from 'materials_approved'
+     and not (old.status = 'materials_requested' and undecided) then
+    raise exception 'There is no pending materials request to approve'
+      using errcode = '42501',
+            hint = 'The customer approves materials only while a materials request is pending (materials_requested).';
   end if;
 
   -- IV.3 (founder 2026-10-23 21:14 ET, rule 3). The customer sets no work status.

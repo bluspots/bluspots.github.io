@@ -55,6 +55,7 @@ Naming principles:
 | diagnosing → in_progress | Pro | Scope matched what was listed |
 | diagnosing → materials_requested | Pro | Scope exceeded what was listed |
 | materials_requested → materials_approved | Customer | Approves request; authorizes purchase only |
+| materials_requested → materials_declined | Customer | Standard (non-diagnosis) decline; the server sets the $30 convenience fee (0029 III.4). *(founder decision 2026-10-23)* |
 | materials_approved → in_progress | Pro | Submits receipt w/ actual materials cost + photo |
 | materials_requested → inspection_completed | Customer | Declines on diagnosis categories (requires_diagnosis, undecided request). *(founder decision 2026-10-23)* |
 | diagnosing → inspection_completed | Customer | Ends at the $45 inspection fee after diagnosis: requires_diagnosis and no undecided materials request. *(founder decision 2026-10-23)* |
@@ -68,6 +69,8 @@ Naming principles:
 Backend enforcement must reject out‑of‑turn and role‑unauthorized transitions.
 
 *(founder decision 2026-10-23)* No backward status moves: a move to an earlier status on the ladder posted → en_route → arrived → diagnosing → materials_requested → materials_approved → in_progress → (complete | materials_declined | inspection_completed) is rejected server-side (0029 III.3). The one authorized backward move is the assigned Pro's new materials request `in_progress → materials_requested` (after a receipt). A move into `cancelled` is not backward; who may cancel is unchanged.
+
+*(founder decision 2026-10-23)* The Customer approves materials only from `materials_requested` with an undecided (pending) request: a move to `materials_approved` from any other status (e.g. en_route, arrived or diagnosing), or with no undecided request, is rejected server-side (0029 IV.3 R3 fix).
 
 *(founder decision 2026-10-23)* Completion is refused while a materials request is pending (undecided): the Customer must approve or decline it first; enforced server-side (0029 IV.4).
 
