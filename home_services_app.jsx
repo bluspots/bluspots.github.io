@@ -1494,6 +1494,8 @@ export default function App(){
     const flagUnavailable=()=>{ setShowUnavailableToast(true); setTimeout(()=>setShowUnavailableToast(false),3000); };
     const job = d.jobId!=null ? jobs.find(j=>j.id===d.jobId) : null;
     if(d.jobId!=null && !job){ flagUnavailable(); return; }
+    // QA #87 v8 (1): a phone-only booking never reached Haven: only its own "Not sent" screen.
+    if(job && havenIsPhoneOnly(job)){ setVjid(job.id); setShowCancelConfirm(false); setShowCancelRequest(false); goTo("posted"); return; }
     switch(d.screen){
       case "tracking": setVjid(job.id); goTo("tracking"); break;
       case "rating": setVjid(job.id); openRating(); break;
@@ -4880,6 +4882,7 @@ export default function App(){
     }catch{ setListShareFallbackJobId(job.id); }
   };
   const receiptScreen=()=>{
+    if(havenIsPhoneOnly(vj)) return postedScreen(); // QA #87 v8 (1): a phone-only booking only ever shows its "Not sent" view
     if(!vj) return unavailableScreen("Receipt",()=>backFrom("receipt",{scr:"myhome",tab:"home"}));
     // Intentional exception: receipts always render light, regardless of the
     // app's current theme — a receipt reads as a fixed document (like a
@@ -5836,6 +5839,7 @@ export default function App(){
 
   // ── TRACKING ────────────────────────────────────────────────────────────────
   const trackingScreen=()=>{
+    if(havenIsPhoneOnly(vj)) return postedScreen(); // QA #87 v8 (1): a phone-only booking only ever shows its "Not sent" view
     if(!vj) return unavailableScreen("Tracking",goBookings);
     const info=SI[vj.status]||SI.en_route;
     const emBg={en_route:"#FEF3C7",arrived:"#DBEAFE",in_progress:"#FEF3C7",complete:SL}[vj.status]||"#FEF3C7";
@@ -6067,6 +6071,7 @@ export default function App(){
 
   // ── RATING ─────────────────────────────────────────────────────────────────
   const tipScreen=()=>{
+    if(havenIsPhoneOnly(vj)) return postedScreen(); // QA #87 v8 (1): a phone-only booking only ever shows its "Not sent" view
     if(!vj) return unavailableScreen("Tip Pro",goBookings);
     if(!HAVEN_TIPPING_AVAILABLE) return(
       <div style={{flex:1,display:"flex",flexDirection:"column",overflow:"hidden",background:BG}}>
@@ -6182,6 +6187,7 @@ export default function App(){
     else if(e.key==="End"){ e.preventDefault(); setStars(5); }
   };
   const ratingScreen=()=>{
+    if(havenIsPhoneOnly(vj)) return postedScreen(); // QA #87 v8 (1): a phone-only booking only ever shows its "Not sent" view
     if(!vj) return unavailableScreen("Rate your experience",goBookings);
     const HIRE=[["yes","Yes, definitely! 👍"],["maybe","Maybe"],["no","No"]];
     return(
@@ -6274,6 +6280,7 @@ export default function App(){
 
   // ── MESSAGES ────────────────────────────────────────────────────────────────
   const messagesScreen=()=>{
+    if(havenIsPhoneOnly(vj)) return postedScreen(); // QA #87 v8 (1): a phone-only booking only ever shows its "Not sent" view
     if(!vj) return unavailableScreen("Messages",goBookings);
     const locked=vj.status==="complete";
     return(

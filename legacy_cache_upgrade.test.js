@@ -25,6 +25,9 @@
  * (10) Per-account device data, X/Y/X/Y on one device (also low storage):
  *     each sees only its own data with the exact label, badges are right,
  *     sign-out clears the screen, nothing is lost, no card data or secrets.
+ * (13) QA #87 v8: a phone-only booking never opens a live screen: its alerts
+ *     (tracking, messages, rating, receipt), its card and a restored state on
+ *     tracking, messages, rating, tip or receipt all show only "Not sent".
  * Messages use the app's real shapes: only the customer's own (f:"cu") come
  * back; scripted pre-A2 pro replies (f:"pro") stay set aside, never shown.
  * Ownerless notifications are set aside too and come back only with a job
@@ -1078,6 +1081,120 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
     await signOutInTab();
   }
   refuseSet = null;
+
+  // ── (13) QA #87 v8 (1): a phone-only booking never opens a live screen ──
+  // Quagon v7 blocking point 1: its alert opened the tracking screen with a
+  // made-up Pro. Every entry point now ends on its own "Not sent" view (the
+  // exact label and the "never reached Haven" line), never on tracking,
+  // messages, rating, tip or receipt: its alerts (each destination), its card
+  // in Bookings, a restored navigation state on each of those screens (the
+  // screen itself refuses it), and the buttons on the "Not sent" view.
+  // The App's own vjid / scr / tab state hooks (declared together, in that order).
+  function appNavHooks() {
+    let fiber = null;
+    for (const el of document.body.querySelectorAll('*')) { const k = Object.keys(el).find(n => n.startsWith('__reactFiber')); if (k) { fiber = el[k]; break; } }
+    if (!fiber) return null;
+    while (fiber.return) fiber = fiber.return;
+    if (fiber.stateNode && fiber.stateNode.current) fiber = fiber.stateNode.current; // the committed tree
+    let app = null;
+    const find = (f) => { for (let x = f; x && !app; x = x.sibling) { if (x.type === RawApp) { app = x; return; } if (x.child) find(x.child); } };
+    find(fiber);
+    if (!app) return null;
+    const hooks = []; for (let h = app.memoizedState; h; h = h.next) hooks.push(h);
+    const SCR = new Set(['home', 'browse', 'diagnose', 'emergency', 'task', 'custom', 'posted', 'tracking', 'messages', 'rating', 'payment', 'editProfile', 'myhome', 'receiptList', 'receipt', 'addressEdit', 'proProfile', 'addresses', 'help', 'serviceHistory', 'notifCenter', 'settings', 'tip', 'jobPreferences']);
+    const TABS = new Set(['home', 'bookings', 'profile']);
+    const at = [];
+    for (let i = 0; i + 2 < hooks.length; i++) {
+      const [a, b, c] = [hooks[i], hooks[i + 1], hooks[i + 2]];
+      if (a.queue && b.queue && c.queue && (a.memoizedState === null || typeof a.memoizedState === 'number') && SCR.has(b.memoizedState) && TABS.has(c.memoizedState)) at.push(i);
+    }
+    if (at.length !== 1) return null;
+    return { vjid: hooks[at[0]], scr: hooks[at[0] + 1], tab: hooks[at[0] + 2] };
+  }
+  const navScr = () => { const h = appNavHooks(); return h ? h.scr.memoizedState : '(nav hooks not found)'; };
+  // A restored navigation state: the given job on the given screen.
+  async function restoreNav(jobId, scr, tab) {
+    const h = appNavHooks();
+    if (!h) { assert(false, '(13) nav hooks found'); return; }
+    await act(async () => { h.vjid.queue.dispatch(jobId); h.tab.queue.dispatch(tab || 'bookings'); h.scr.queue.dispatch(scr); });
+    await settle(120);
+  }
+  const FAKE_LIVE = /Marcus|Pro is on the way|is heading to you|💬 Message|Chat \(closed\)|BOOKING SUMMARY|BILLED TO|Rate your experience|Tip Pro|Looking for a pro|Pending/;
+  const notSentShown = (t) => /Not sent/.test(t) && t.includes(LABEL) && /This booking never reached Haven or a Pro/.test(t) && !FAKE_LIVE.test(t);
+  const PO13 = { ...phoneOnly(LOCAL_ID + 70, 'XPO13 phone-only booking'), status: 'en_route', desc: 'XPO13 desc', msgs: [CU_MSG, PRO_REPLY] };
+  const DESTS = ['tracking', 'messages', 'rating', 'receipt'];
+  const PO13_NOTIFS = DESTS.map((d, i) => notif('n1759000700000_' + i, PO13.id, 'XPO13 alert ' + d, 'XPO13 ' + d + ' alert body', { destination: { screen: d, jobId: PO13.id } }));
+  const seed13 = () => {
+    Object.keys(storedData).forEach(k => delete storedData[k]);
+    signInStorage(X_ID);
+    storedData['haven_jobs_owner'] = X_ID;
+    storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: [REAL] });
+    storedData['haven_addresses_owner'] = X_ID;
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [masterJob({ id: LOCAL_ID, backendJobId: JX }), PO13] });
+    storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: PO13_NOTIFS });
+  };
+  const openNotifCenter = async () => {
+    await toTabs();
+    const prof = () => screen.queryAllByText('Profile').pop();
+    await tap(prof(), 'Profile tab'); await tap(prof(), 'Profile tab (again: back to its root)');
+    if (!onNotifScreen()) await tap(Array.from(document.querySelectorAll('button')).find(b => /^Notifications/.test(b.getAttribute('aria-label') || '')), 'Notifications (13)');
+  };
+  rowsByCustomer = { [X_ID]: [realRow(JX, X_ID)] };
+  refuseSet = null;
+  for (const round of ['first load', 'after sign-out and sign-in', 'after reload']) {
+    if (round === 'first load') { seed13(); await boot(); }
+    else if (round === 'after sign-out and sign-in') { await toTabs(); await signOutInTab(); await signInInTab(X_ID); }
+    else await boot();
+    await waitFor(() => readCount && jobBy(JX), `(13) ${round}: X's read lands`);
+    const shown = () => Array.from(document.querySelectorAll('[role="button"]')).some(el => /XPO13 phone-only booking/.test(el.textContent));
+    await toTabs();
+    await bookingsText();
+    await waitFor(shown, `(13) ${round}: X's phone-only booking is in Bookings`);
+    assert(shown(), `(13) ${round}: X's phone-only booking is in Bookings`);
+    for (const d of DESTS) {
+      await openNotifCenter();
+      const row = screen.queryAllByText(new RegExp('XPO13 ' + d + ' alert body')).pop();
+      assert(!!row, `(13) ${round}: the phone-only booking's ${d} alert is listed`);
+      if (!(await tap(row, `${d} alert`))) continue;
+      await settle(120);
+      const t = bodyText();
+      assert(navScr() === 'posted', `(13) ${round}: its ${d} alert opens the "Not sent" screen itself, never ${d} (screen: ${navScr()})`);
+      assert(notSentShown(t), `(13) ${round}: its ${d} alert shows "Not sent", the exact label and "never reached Haven", with no Pro, status, chat, rating or bill`);
+      assert(!Array.from(document.querySelectorAll('button')).some(b => /Message|Chat|Rate|Tip|Receipt|Track/i.test(b.textContent)), `(13) ${round}: the "Not sent" view (from the ${d} alert) has no button to a chat, rating, tip, receipt or tracking`);
+      await tap(btn(/^← Bookings$/), '← Bookings');
+    }
+    // its card in Bookings
+    await bookingsText();
+    await tap(Array.from(document.querySelectorAll('[role="button"]')).find(el => /XPO13 phone-only booking/.test(el.textContent)), 'XPO13 card');
+    assert(navScr() === 'posted' && notSentShown(bodyText()), `(13) ${round}: its card in Bookings opens "Not sent"`);
+    const shownId = appNavHooks()?.vjid.memoizedState;
+    assert(shownId != null && shownId !== jobBy(JX)?.id, `(13) ${round}: the viewed booking is the phone-only one`);
+    // a restored navigation state on each refused screen: the screen refuses it
+    for (const s of ['tracking', 'messages', 'rating', 'tip', 'receipt']) {
+      await restoreNav(shownId, s, 'bookings');
+      const t = bodyText();
+      assert(notSentShown(t), `(13) ${round}: restored on the ${s} screen, the phone-only booking shows only its "Not sent" view (no Pro, chat, rating, tip or bill)`);
+    }
+    await restoreNav(shownId, 'posted', 'bookings');
+    await tap(btn(/^← Bookings$/), '← Bookings');
+  }
+  // A live (backend) job still opens its real screens from its alert.
+  {
+    const LIVE_NOTIF = notif('n1759000700000_9', LOCAL_ID, 'Job done', 'XLIVE13 alert body', { destination: { screen: 'tracking', jobId: LOCAL_ID } });
+    seed13();
+    storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [LIVE_NOTIF] });
+    await boot();
+    await waitFor(() => readCount && jobBy(JX), '(13) live: X read lands');
+    await bookingsText();
+    await openNotifCenter();
+    const live = jobBy(JX);
+    const row = screen.queryAllByText(/XLIVE13 alert body/).pop();
+    if (await tap(row, 'live alert')) {
+      await settle(120);
+      assert(navScr() === 'tracking' && !/Not sent/.test(bodyText()), `(13) a backend job's alert still opens its tracking screen (screen: ${navScr()}, job ${live ? 'loaded' : 'missing'})`);
+    } else assert(false, '(13) the live job alert is listed');
+    await toTabs();
+  }
 
 
   cleanup();
