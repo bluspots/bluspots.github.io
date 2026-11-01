@@ -2810,6 +2810,25 @@ function havenReadAccountAddrs() {
   }
 }
 const havenSameId = (a, b) => !!a && !!b && String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+const havenSameDraftOwner = (a, b) => String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+function havenReadDraft() {
+  try {
+    const raw = localStorage.getItem("haven_draft");
+    if (!raw) return null;
+    let parsed = null;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      return { owner: "", data: null };
+    }
+    if (!parsed || typeof parsed !== "object") return { owner: "", data: null };
+    const data = "data" in parsed ? parsed.data : parsed;
+    const owner = typeof parsed.owner === "string" ? parsed.owner : "";
+    return { owner, data };
+  } catch {
+    return null;
+  }
+}
 function havenAddrRestore(k, v) {
   try {
     if (v == null) localStorage.removeItem(k);
@@ -4435,7 +4454,6 @@ function App() {
       setBackendReceipts({});
       proLabelTriedRef.current = {};
       if (owner) setNotifications((prev) => prev.filter((n) => n.jobId == null));
-      if (owner) clearDraftForAccountChange();
       havenWriteJobsOwner(uid);
     }
     if (uid) hydrateMyJobs();
@@ -4788,39 +4806,77 @@ function App() {
   }, [scr]);
   const hasDraft = tid !== null || ctitle.trim() !== "";
   const draftHydratedRef = useRef(false);
+  const draftOwnerRef = useRef("");
+  const applyDraft = (d) => {
+    if (!d || typeof d !== "object") return;
+    if (d.tid != null) setTid(d.tid);
+    if (d.tpid === 1 || d.tpid >= 101) setTpid(d.tpid);
+    else if (d.tpid === APPT_TIME_PREF_ID && reqWindowValid(d.reqWindow)) {
+      setTpid(d.tpid);
+      setReqWindow(d.reqWindow);
+    }
+    if (typeof d.ctitle === "string") setCtitle(d.ctitle);
+    if (typeof d.ccat === "string") setCcat(d.ccat);
+    if (typeof d.cprice === "string") setCprice(d.cprice);
+    if (typeof d.desc === "string") setDesc(d.desc);
+    if (Array.isArray(d.photos)) setPhotos(d.photos);
+    if (typeof d.emergency === "boolean") setEmergency(d.emergency);
+    if (d.selectedAddressId != null) setSelectedAddressId(d.selectedAddressId);
+    if (d.selectedCardId != null) setSelectedCardId(d.selectedCardId);
+  };
   useEffect(() => {
     if (draftHydratedRef.current) return;
+    if (getSupabaseConfig()) return;
     draftHydratedRef.current = true;
     try {
-      const raw = localStorage.getItem("haven_draft");
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
-      const d = parsed && typeof parsed === "object" && "data" in parsed ? parsed.data : parsed;
-      if (!d || typeof d !== "object") return;
-      if (d.tid != null) setTid(d.tid);
-      if (d.tpid === 1 || d.tpid >= 101) setTpid(d.tpid);
-      else if (d.tpid === APPT_TIME_PREF_ID && reqWindowValid(d.reqWindow)) {
-        setTpid(d.tpid);
-        setReqWindow(d.reqWindow);
-      }
-      if (typeof d.ctitle === "string") setCtitle(d.ctitle);
-      if (typeof d.ccat === "string") setCcat(d.ccat);
-      if (typeof d.cprice === "string") setCprice(d.cprice);
-      if (typeof d.desc === "string") setDesc(d.desc);
-      if (Array.isArray(d.photos)) setPhotos(d.photos);
-      if (typeof d.emergency === "boolean") setEmergency(d.emergency);
-      if (d.selectedAddressId != null) setSelectedAddressId(d.selectedAddressId);
-      if (d.selectedCardId != null) setSelectedCardId(d.selectedCardId);
+      applyDraft(havenReadDraft()?.data);
     } catch {
     }
+  }, []);
+  useEffect(() => {
+    if (!getSupabaseConfig() || !havenSessionLoaded) return;
+    const uid = havenAccountId || "";
+    if (draftHydratedRef.current && havenSameDraftOwner(draftOwnerRef.current, uid)) return;
+    const stored = havenReadDraft();
+    if (draftHydratedRef.current) clearDraftForAccountChange(false);
+    draftOwnerRef.current = uid;
+    draftHydratedRef.current = true;
+    if (uid && stored && stored.owner && havenSameDraftOwner(stored.owner, uid)) applyDraft(stored.data);
+    else if (stored) {
+      try {
+        localStorage.removeItem("haven_draft");
+      } catch {
+      }
+    }
+  }, [havenAccountId, havenSessionLoaded]);
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.addEventListener) return;
+    const onStorage = (e) => {
+      if (!getSupabaseConfig() || !draftHydratedRef.current) return;
+      if (e && e.key != null && !/^haven_auth|^haven_draft$|^sb-/.test(e.key)) return;
+      if (!havenSameDraftOwner(draftOwnerRef.current, havenJobsAccountId())) clearDraftForAccountChange(false);
+    };
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
   }, []);
   useEffect(() => {
     if (!draftHydratedRef.current) return;
     try {
       const currentlyDraft = tid !== null || ctitle.trim() !== "";
+      const data = { tid, tpid, reqWindow, ctitle, ccat, cprice, desc, photos, emergency, selectedAddressId, selectedCardId };
+      if (!getSupabaseConfig()) {
+        if (currentlyDraft) localStorage.setItem("haven_draft", JSON.stringify({ __v: 1, data }));
+        else localStorage.removeItem("haven_draft");
+        return;
+      }
+      const owner = draftOwnerRef.current;
+      const live = havenJobsAccountId();
       if (currentlyDraft) {
-        localStorage.setItem("haven_draft", JSON.stringify({ __v: 1, data: { tid, tpid, reqWindow, ctitle, ccat, cprice, desc, photos, emergency, selectedAddressId, selectedCardId } }));
+        if (!owner || !havenSameDraftOwner(owner, live)) return;
+        localStorage.setItem("haven_draft", JSON.stringify({ __v: 2, owner, data }));
       } else {
+        const stored = havenReadDraft();
+        if (stored && stored.owner && !havenSameDraftOwner(stored.owner, owner)) return;
         localStorage.removeItem("haven_draft");
       }
     } catch {
@@ -4871,7 +4927,7 @@ function App() {
     scrubDraftFromTabMemory();
     navFn();
   };
-  const clearDraftForAccountChange = () => {
+  const clearDraftForAccountChange = (removeStored = true) => {
     setTid(null);
     setTpid(null);
     setReqWindow(null);
@@ -4889,9 +4945,11 @@ function App() {
     setLocCheck(null);
     setShowDiscardConfirm(false);
     scrubDraftFromTabMemory();
-    try {
-      localStorage.removeItem("haven_draft");
-    } catch {
+    if (removeStored) {
+      try {
+        localStorage.removeItem("haven_draft");
+      } catch {
+      }
     }
     if (scr === "task" || scr === "custom") goHome();
   };

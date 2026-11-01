@@ -608,6 +608,19 @@ function havenReadAccountAddrs(){
   }catch{ return {}; }
 }
 const havenSameId = (a,b)=> !!a && !!b && String(a).trim().toLowerCase()===String(b).trim().toLowerCase();
+// QA #87 v9: the booking draft and the account id it belongs to ("" = none).
+const havenSameDraftOwner = (a,b)=> String(a||"").trim().toLowerCase()===String(b||"").trim().toLowerCase();
+function havenReadDraft(){
+  try{
+    const raw=localStorage.getItem("haven_draft");
+    if(!raw) return null;
+    let parsed=null; try{ parsed=JSON.parse(raw); }catch{ return {owner:"", data:null}; }
+    if(!parsed || typeof parsed!=="object") return {owner:"", data:null};
+    const data=("data" in parsed) ? parsed.data : parsed;
+    const owner=typeof parsed.owner==="string" ? parsed.owner : "";
+    return {owner, data};
+  }catch{ return null; }
+}
 function havenAddrRestore(k, v){ try{ if(v==null) localStorage.removeItem(k); else localStorage.setItem(k, v); }catch{} }
 // The shared (ownerless) list goes aside unchanged; an address already set
 // aside is not added twice.
@@ -2254,9 +2267,6 @@ export default function App(){
       setBackendReceipts({});
       proLabelTriedRef.current={};
       if(owner) setNotifications(prev=>prev.filter(n=>n.jobId==null));
-      // QA #87 v8 (2): the previous account's unsent booking draft leaves
-      // memory and storage too (never seen, edited or posted by the next one).
-      if(owner) clearDraftForAccountChange();
       havenWriteJobsOwner(uid);
     }
     if(uid) hydrateMyJobs();
@@ -2662,14 +2672,13 @@ export default function App(){
   // existing "no address/card saved" fallback UI already handles it —
   // nothing extra needed here for that case.
   const draftHydratedRef = useRef(false);
-  useEffect(()=>{
-    if(draftHydratedRef.current)return;
-    draftHydratedRef.current=true;
-    try{
-      const raw=localStorage.getItem("haven_draft");
-      if(!raw)return;
-      const parsed=JSON.parse(raw);
-      const d=(parsed&&typeof parsed==="object"&&"data" in parsed)?parsed.data:parsed;
+  // QA #87 v9: with a backend, the draft is stored with the account id that
+  // typed it ({__v:2, owner:<uid>, data}; the id only, no email or token) and
+  // restored only once the session has loaded and that account is the one
+  // signed in. Any other stored draft (another account's, one saved while
+  // signed out, or an older build's with no owner) is deleted, not restored.
+  const draftOwnerRef = useRef("");
+  const applyDraft=(d)=>{
       if(!d||typeof d!=="object")return;
       if(d.tid!=null)setTid(d.tid);
       // Old drafts may hold a retired window (This morning…): the customer picks again.
@@ -2683,15 +2692,59 @@ export default function App(){
       if(typeof d.emergency==="boolean")setEmergency(d.emergency);
       if(d.selectedAddressId!=null)setSelectedAddressId(d.selectedAddressId);
       if(d.selectedCardId!=null)setSelectedCardId(d.selectedCardId);
-    }catch{}
+  };
+  useEffect(()=>{
+    if(draftHydratedRef.current)return;
+    if(getSupabaseConfig()) return; // with a backend: restored by the session effect below
+    draftHydratedRef.current=true;
+    try{ applyDraft(havenReadDraft()?.data); }catch{}
+  },[]);
+  useEffect(()=>{
+    if(!getSupabaseConfig() || !havenSessionLoaded) return;
+    const uid=havenAccountId||"";
+    if(draftHydratedRef.current && havenSameDraftOwner(draftOwnerRef.current, uid)) return; // same account (e.g. a token refresh)
+    const stored=havenReadDraft();
+    // Sign-out or another account: the previous account's draft leaves memory.
+    if(draftHydratedRef.current) clearDraftForAccountChange(false);
+    draftOwnerRef.current=uid;
+    draftHydratedRef.current=true;
+    if(uid && stored && stored.owner && havenSameDraftOwner(stored.owner, uid)) applyDraft(stored.data);
+    else if(stored) { try{ localStorage.removeItem("haven_draft"); }catch{} }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[havenAccountId, havenSessionLoaded]);
+  // Another tab signed out or switched account (or rewrote the draft): this
+  // tab's draft leaves memory at once, before it could be written for anyone.
+  useEffect(()=>{
+    if(typeof window==="undefined" || !window.addEventListener) return;
+    const onStorage=(e)=>{
+      if(!getSupabaseConfig() || !draftHydratedRef.current) return;
+      if(e && e.key!=null && !/^haven_auth|^haven_draft$|^sb-/.test(e.key)) return;
+      if(!havenSameDraftOwner(draftOwnerRef.current, havenJobsAccountId())) clearDraftForAccountChange(false);
+    };
+    window.addEventListener("storage", onStorage);
+    return ()=>window.removeEventListener("storage", onStorage);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   },[]);
   useEffect(()=>{
     if(!draftHydratedRef.current)return; // don't stomp storage with pre-hydration defaults on first render
     try{
       const currentlyDraft = tid!==null || ctitle.trim()!=="";
+      const data={tid,tpid,reqWindow,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId};
+      if(!getSupabaseConfig()){
+        if(currentlyDraft) localStorage.setItem("haven_draft",JSON.stringify({__v:1,data}));
+        else localStorage.removeItem("haven_draft");
+        return;
+      }
+      // QA #87 v9: only for the account the draft belongs to, and only while
+      // it is still the signed-in one (another tab may have switched).
+      const owner=draftOwnerRef.current;
+      const live=havenJobsAccountId();
       if(currentlyDraft){
-        localStorage.setItem("haven_draft",JSON.stringify({__v:1,data:{tid,tpid,reqWindow,ctitle,ccat,cprice,desc,photos,emergency,selectedAddressId,selectedCardId}}));
+        if(!owner || !havenSameDraftOwner(owner, live)) return;
+        localStorage.setItem("haven_draft",JSON.stringify({__v:2,owner,data}));
       }else{
+        const stored=havenReadDraft();
+        if(stored && stored.owner && !havenSameDraftOwner(stored.owner, owner)) return; // another account's draft: not ours to remove
         localStorage.removeItem("haven_draft");
       }
     }catch{}
@@ -2748,12 +2801,12 @@ export default function App(){
   // QA #87 v8 (2): the in-progress booking draft (haven_draft) belongs to the
   // account that typed it. On sign-out or an account switch it is cleared from
   // memory and storage at once (an unsent draft is not kept per account).
-  const clearDraftForAccountChange=()=>{
+  const clearDraftForAccountChange=(removeStored=true)=>{
     setTid(null);setTpid(null);setReqWindow(null);setApptDay(null);setDesc("");setPhotos([]);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
     setSelectedAddressId(1);setSelectedCardId(1);
     setShowAddressPicker(false);setShowCardPicker(false);setLocCheck(null);setShowDiscardConfirm(false);
     scrubDraftFromTabMemory();
-    try{ localStorage.removeItem("haven_draft"); }catch{}
+    if(removeStored){ try{ localStorage.removeItem("haven_draft"); }catch{} }
     if(scr==="task"||scr==="custom") goHome();
   };
   const resetBookingSelections=()=>{

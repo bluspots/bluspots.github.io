@@ -31,6 +31,11 @@
  * (14) QA #87 v8: the unsent booking draft (haven_draft) is cleared from memory
  *     and storage on sign-out and on an account switch: Y never sees, lands
  *     on or posts X's draft (sign-out, switch, reload; normal/near-full/full).
+ * (15) QA #87 v9: the draft is stored with its account id and restored only to
+ *     that account once its session has loaded; a draft from master or v7 (no
+ *     owner), one saved while signed out, or another account's is deleted:
+ *     upgrade then sign-out / lapsed session / Y at first load, X's own draft
+ *     across a reload, and a stale second tab; normal/near-full/full storage.
  * Messages use the app's real shapes: only the customer's own (f:"cu") come
  * back; scripted pre-A2 pro replies (f:"pro") stay set aside, never shown.
  * Ownerless notifications are set aside too and come back only with a job
@@ -1224,7 +1229,8 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
     storedData['haven_account_addresses'] = JSON.stringify({ __v: 1, data: { [Y_ID.toLowerCase()]: [Y_HOME] } });
     storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [masterJob({ id: LOCAL_ID, backendJobId: JX })] });
     storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
-    storedData['haven_draft'] = JSON.stringify({ __v: 1, data: XDRAFT });
+    // (v9: this build stores the draft with the id of the account that typed it)
+    storedData['haven_draft'] = JSON.stringify({ __v: 2, owner: X_ID, data: XDRAFT });
   };
   // Y's view: Bookings opens Bookings (not a draft), nothing of X's draft
   // anywhere, and any "Post Job" button Y can reach sends nothing of it.
@@ -1283,6 +1289,138 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
       }
       refuseSet = null;
     }
+  }
+  refuseSet = null;
+
+  // ── (15) QA #87 v9: a draft with no owner (master / v7) never reaches anyone ──
+  // Quagon v8 blocking point: X types a draft on master ff485678 or v7, signs
+  // out (or the session lapses), the phone updates, and Y found X's draft in
+  // Bookings > "Post a custom job" and could post it. Now the draft is kept
+  // with its account id and only restored once that account's session has
+  // loaded; anything else (no owner, another owner, signed out) is deleted.
+  const draftRec = () => { try { return storedData['haven_draft'] ? JSON.parse(storedData['haven_draft']) : null; } catch { return null; } };
+  const modeLimit = (mode) => {
+    if (mode === 'near-full') { const limit = usedBytes() + 1500; refuseSet = (k, v) => !/^haven_auth/.test(k) && usedBytes() - (k in storedData ? k.length + storedData[k].length : 0) + k.length + v.length > limit; }
+    else if (mode === 'full') { const limit = usedBytes(); refuseSet = (k, v) => !/^haven_auth/.test(k) && usedBytes() - (k in storedData ? k.length + storedData[k].length : 0) + k.length + v.length > limit; }
+    else refuseSet = null;
+  };
+  const seed15 = (era, auth) => {
+    Object.keys(storedData).forEach(k => delete storedData[k]);
+    if (auth) signInStorage(auth);
+    if (era === 'v7') { storedData['haven_jobs_owner'] = X_ID; storedData['haven_addresses_owner'] = X_ID; }
+    storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: [X_HOME] });
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [masterJob({ id: LOCAL_ID, backendJobId: JX })] });
+    storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
+    storedData['haven_draft'] = JSON.stringify({ __v: 1, data: XDRAFT }); // master and v7 store it with no owner
+  };
+  async function goBookings15() { await toTabs(); await tap(screen.queryAllByText(/^Bookings$/).pop(), 'Bookings tab (15)'); await settle(100); }
+  for (const mode of ['normal', 'near-full', 'full']) {
+    for (const [era, how] of [['master', 'signed out, then Y'], ['master', 'lapsed session, then Y'], ['master', 'Y at first load'], ['v7', 'signed out, then Y'], ['v7', 'Y at first load'], ['v7', 'X at first load']]) {
+      const tag = `(15) ${mode} ${era} ${how}`;
+      rowsByCustomer = { [X_ID]: [realRow(JX, X_ID)], [Y_ID]: [realRow(JY, Y_ID, { city_label: 'Austin, TX' })] };
+      const firstUid = how === 'Y at first load' ? Y_ID : (how === 'X at first load' || how === 'lapsed session, then Y') ? X_ID : null;
+      seed15(era, firstUid);
+      writes.length = 0;
+      modeLimit(mode);
+      rc14 = readCount;
+      await boot();
+      if (how === 'lapsed session, then Y') {
+        // X's session from the old build lapses on the updated phone (no sign-out tap)
+        await waitFor(() => readCount > rc14, `${tag}: X's read`);
+        await settle(150);
+        await signOutInTab();
+      } else if (!firstUid) {
+        await settle(250);
+      } else {
+        await waitFor(() => readCount > rc14 && (mode !== 'normal' || jobBy(firstUid === X_ID ? JX : JY)), `${tag}: first read`);
+        await settle(250);
+      }
+      assert(!draftStored(), `${tag}: the ownerless draft is deleted from storage`);
+      assert(memHolds(['XDRAFT', 'XDRAFTPHOTO']).length === 0, `${tag}: the ownerless draft is not in the app's memory (found: ${memHolds(['XDRAFT']).join(', ')})`);
+      assert(!draftSeen() && !['task', 'custom'].includes(navScr()), `${tag}: nothing of it is on screen (screen ${navScr()})`);
+      if (how === 'X at first load') {
+        // accepted: a leftover draft from before the update is lost, even for its typist
+        await goBookings15();
+        assert(!['task', 'custom'].includes(navScr()) && !draftSeen(), `${tag}: X's Bookings opens Bookings (the leftover draft is gone, as accepted)`);
+      } else {
+        if (firstUid !== Y_ID) { rc14 = readCount; await signInInTab(Y_ID); }
+        await yNeverGetsDraft(mode, `${era} ${how}`);
+      }
+      refuseSet = null;
+    }
+  }
+
+  // X's own draft (this build, stamped) comes back to X across a reload, and is
+  // stored with X's id only (no email, no token).
+  for (const mode of ['normal', 'near-full', 'full']) {
+    const tag = `(15) ${mode} X reload`;
+    rowsByCustomer = { [X_ID]: [realRow(JX, X_ID)], [Y_ID]: [realRow(JY, Y_ID)] };
+    seed14();
+    modeLimit(mode);
+    rc14 = readCount;
+    await boot();
+    await waitFor(() => readCount > rc14 && (mode !== 'normal' || jobBy(JX)), `${tag}: X's read`);
+    await settle(150);
+    const rec = draftRec();
+    assert(rec && rec.owner === X_ID && /XDRAFT/.test(JSON.stringify(rec.data)), `${tag}: the stored draft keeps X's id`);
+    assert(rec && !/@example\.com|signed-in-access-token/.test(storedData['haven_draft']), `${tag}: the stored draft holds no email or token`);
+    await goBookings15();
+    assert(navScr() === 'custom' && /XDRAFT title/.test(fieldsText()) && /XDRAFT secret gate code 4821/.test(fieldsText()), `${tag}: X's own draft comes back to X (screen ${navScr()})`);
+    if (mode === 'normal') {
+      const ta = document.querySelector('textarea');
+      if (ta) { await act(async () => { fireEvent.change(ta, { target: { value: 'XDRAFT edited by X 77' } }); }); await settle(120); }
+      assert(/XDRAFT edited by X 77/.test(storedData['haven_draft'] || '') && (draftRec() || {}).owner === X_ID, `${tag}: X's edit is stored under X's id`);
+    }
+    refuseSet = null;
+  }
+  // A draft saved while signed out (this build) is not restored to whoever signs in.
+  {
+    Object.keys(storedData).forEach(k => delete storedData[k]);
+    storedData['haven_draft'] = JSON.stringify({ __v: 2, owner: '', data: XDRAFT });
+    rowsByCustomer = { [Y_ID]: [realRow(JY, Y_ID)] };
+    writes.length = 0;
+    rc14 = readCount;
+    await boot();
+    await settle(250);
+    assert(!draftStored(), '(15) a draft with an empty owner is deleted at a signed-out start');
+    rc14 = readCount;
+    await signInInTab(Y_ID);
+    await yNeverGetsDraft('normal', 'empty-owner draft');
+  }
+
+  // Stale second tab: tab 1 has X's draft open; another tab signs X out and Y
+  // in. Tab 1 must drop X's draft (storage event) and never write it for Y,
+  // even before any event arrives.
+  for (const withEvent of [true, false]) {
+    const tag = `(15) second tab ${withEvent ? 'with' : 'before'} the storage event`;
+    rowsByCustomer = { [X_ID]: [realRow(JX, X_ID)], [Y_ID]: [realRow(JY, Y_ID)] };
+    seed14();
+    refuseSet = null;
+    writes.length = 0;
+    rc14 = readCount;
+    await boot();
+    await waitFor(() => readCount > rc14 && jobBy(JX), `${tag}: X's read`);
+    await settle(150);
+    await goBookings15();
+    assert(navScr() === 'custom' && /XDRAFT title/.test(fieldsText()), `${tag}: tab 1 has X's draft open`);
+    // the other tab: X signed out, Y signed in (shared storage changes, no auth event here)
+    rc14 = readCount; // (tab 1 may already read for Y from the shared session id)
+    signOutStorage(); delete storedData['haven_draft']; signInStorage(Y_ID);
+    if (withEvent) {
+      await act(async () => { window.dispatchEvent(new window.StorageEvent('storage', { key: 'haven_auth_user_id' })); });
+      await settle(150);
+      assert(memHolds(['XDRAFT', 'XDRAFTPHOTO']).length === 0, `${tag}: X's draft leaves tab 1's memory (found: ${memHolds(['XDRAFT']).join(', ')})`);
+      assert(!draftSeen(), `${tag}: X's draft is off tab 1's screen`);
+    } else {
+      // tab 1 still shows X's form; an edit there must not be stored for Y's session
+      const ta = document.querySelector('textarea');
+      if (ta) { await act(async () => { fireEvent.change(ta, { target: { value: 'XDRAFT stale tab edit 99' } }); }); await settle(150); }
+      else assert(false, `${tag}: the draft form is open`);
+    }
+    assert(!draftStored(), `${tag}: nothing of X's draft is written to storage under Y's session`);
+    await act(async () => { authCb && authCb('SIGNED_IN', storedSession()); });
+    await settle(200);
+    await yNeverGetsDraft('normal', withEvent ? 'second tab' : 'stale second tab');
   }
   refuseSet = null;
 
