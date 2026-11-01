@@ -22,6 +22,7 @@ posted → en_route → arrived → diagnosing? → (materials_requested → mat
                                  diagnosing → inspection_completed (Customer ends after diagnosis)   [founder decision 2026-10-23]
 any pre‑complete → cancelled
 ```
+*(founder decision 2026-10-23)* A materials request is never made from `en_route` or `arrived` (or `posted`): only from `diagnosing`, plus the assigned Pro's follow-up from `in_progress` (0029 IV.5).
 
 inspection_completed is reached ONLY by the Customer, from `diagnosing` or from `materials_requested` (diagnosis decline); never from `arrived`, never by the Pro; every other move into it is rejected. *(founder decision 2026-10-23)*
 
@@ -54,6 +55,7 @@ Naming principles:
 | arrived → diagnosing | Pro | Diagnosis categories only. The Customer can never move a job into diagnosing. *(founder decision 2026-10-23)* Only the job's **assigned** Pro, only from `arrived`, only when `requires_diagnosis` is true; every other move into diagnosing is rejected server-side (0029 III.1). *(founder decision 2026-10-23)* |
 | diagnosing → in_progress | Pro | Scope matched what was listed |
 | diagnosing → materials_requested | Pro | Scope exceeded what was listed. A materials request is made from `diagnosing`, never from `posted`, `en_route` or `arrived`; enforced server-side on the status move and on job creation for every client (0029 IV.5). The assigned Pro's follow-up request from `in_progress` (after a receipt; the only request point on standard jobs) is unchanged pending founder confirmation. *(founder decision 2026-10-23)* |
+| in_progress → materials_requested | Pro (assigned) | Follow-up materials request (haven-pro "Need materials? Request them"); on standard (non-diagnosis) jobs this is the only request point. Kept server-side (0029 IV.5, the one authorized backward move in III.3) pending founder confirmation of how "only from Diagnosing" applies to it. Never from `en_route` or `arrived`. *(founder decision 2026-10-23)* |
 | materials_requested → materials_approved | Customer | Approves request; authorizes purchase only |
 | materials_requested → materials_declined | Customer | Standard (non-diagnosis) decline; the server sets the $30 convenience fee (0029 III.4). *(founder decision 2026-10-23)* |
 | materials_approved → in_progress | Pro | Submits receipt w/ actual materials cost + photo |
