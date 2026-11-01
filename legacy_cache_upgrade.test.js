@@ -36,6 +36,9 @@
  *     owner), one saved while signed out, or another account's is deleted:
  *     upgrade then sign-out / lapsed session / Y at first load, X's own draft
  *     across a reload, and a stale second tab; normal/near-full/full storage.
+ * (16) QA #87 v9: the saved-address guards checked directly: a list owned by
+ *     another account is never shown, overwritten, or (full storage) shown
+ *     instead of the signed-in account's list in memory.
  * Messages use the app's real shapes: only the customer's own (f:"cu") come
  * back; scripted pre-A2 pro replies (f:"pro") stay set aside, never shown.
  * Ownerless notifications are set aside too and come back only with a job
@@ -97,7 +100,7 @@ const scriptMatch = html.match(/<script type="text\/babel">([\s\S]*?)<\/script>/
 if (!scriptMatch) { console.error('no babel script block in prototype.html'); process.exit(1); }
 const scriptBody = scriptMatch[1].replace(
   /const root = ReactDOM\.createRoot\(document\.getElementById\('root'\)\);\s*root\.render\(<ErrorBoundary><App\/><\/ErrorBoundary>\);\s*$/,
-  'module.exports.App = App; module.exports.ErrorBoundary = ErrorBoundary;'
+  'module.exports.App = App; module.exports.ErrorBoundary = ErrorBoundary; module.exports.addr = { havenAddressesVisible, havenClaimAddresses, havenBootAddresses };'
 );
 const { code } = babel.transformSync(scriptBody, { presets: [['@babel/preset-react', { runtime: 'classic' }]], filename: 'shipped.jsx' });
 const moduleObj = { exports: {} };
@@ -1423,6 +1426,75 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
     await yNeverGetsDraft('normal', withEvent ? 'second tab' : 'stale second tab');
   }
   refuseSet = null;
+
+  // Another tab signs X out, Y in, and Y starts its own draft: tab 1 drops
+  // X's draft but never removes or overwrites Y's, and Y gets its own back.
+  {
+    const tag = '(15) second tab, Y drafts there';
+    const YDRAFT = { tid: null, tpid: null, reqWindow: null, ctitle: 'YOWN draft title', ccat: 'Repair', cprice: '12', desc: 'YOWN draft body', photos: [], emergency: false, selectedAddressId: 1, selectedCardId: 1 };
+    rowsByCustomer = { [X_ID]: [realRow(JX, X_ID)], [Y_ID]: [realRow(JY, Y_ID)] };
+    seed14();
+    refuseSet = null;
+    rc14 = readCount;
+    await boot();
+    await waitFor(() => readCount > rc14 && jobBy(JX), `${tag}: X's read`);
+    await settle(150);
+    await goBookings15();
+    assert(navScr() === 'custom' && /XDRAFT title/.test(fieldsText()), `${tag}: tab 1 has X's draft open`);
+    signOutStorage(); signInStorage(Y_ID);
+    storedData['haven_draft'] = JSON.stringify({ __v: 2, owner: Y_ID, data: YDRAFT });
+    await act(async () => { window.dispatchEvent(new window.StorageEvent('storage', { key: 'haven_draft' })); });
+    await settle(150);
+    assert(memHolds(['XDRAFT', 'XDRAFTPHOTO']).length === 0 && !draftSeen(), `${tag}: X's draft leaves tab 1`);
+    assert(draftRec() && draftRec().owner === Y_ID && /YOWN draft body/.test(storedData['haven_draft']), `${tag}: Y's own draft is left in storage`);
+    await act(async () => { authCb && authCb('SIGNED_IN', storedSession()); });
+    await settle(250);
+    assert(!draftStored(), `${tag}: nothing of X's draft is stored`);
+    await goBookings15();
+    assert(navScr() === 'custom' && /YOWN draft title/.test(fieldsText()) && !draftSeen(), `${tag}: Y gets its own draft back, nothing of X's (screen ${navScr()})`);
+  }
+  refuseSet = null;
+
+  // ── (16) QA #87 v9: the saved-address guards themselves (Quagon M7a/M7d/M7k) ──
+  // The account effects normally mask these lines, so they are checked
+  // directly: the list a stale owner left is never shown to, overwritten by,
+  // or (in full storage) shown instead of the signed-in account's list.
+  {
+    const A = moduleObj.exports.addr;
+    const X_LIST = [X_HOME], Y_LIST = [Y_HOME];
+    const xText = () => JSON.stringify(X_HOME.street || X_HOME.label || X_HOME);
+    cleanup();
+    // (a) the loader's validator: another account's stored list is not shown
+    Object.keys(storedData).forEach(k => delete storedData[k]);
+    signInStorage(Y_ID);
+    refuseSet = null;
+    A.havenBootAddresses();
+    storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: X_LIST });
+    storedData['haven_addresses_owner'] = X_ID; // e.g. written by a stale tab
+    const shown = A.havenAddressesVisible(X_LIST);
+    assert(Array.isArray(shown) && shown.length === 0, `(16) the addresses loader shows no list owned by another account (got ${JSON.stringify(shown).slice(0, 60)})`);
+    // (d) claiming Y's list never overwrites a visible list owned by X
+    storedData['haven_account_addresses'] = JSON.stringify({ __v: 1, data: { [Y_ID.toLowerCase()]: Y_LIST } });
+    A.havenBootAddresses(); // (stash X's, claim Y's) then X's list reappears from elsewhere
+    storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: X_LIST });
+    storedData['haven_addresses_owner'] = X_ID;
+    storedData['haven_account_addresses'] = JSON.stringify({ __v: 1, data: { [Y_ID.toLowerCase()]: Y_LIST } });
+    const before = storedData['haven_addresses'];
+    A.havenClaimAddresses(Y_ID);
+    assert(storedData['haven_addresses'] === before && storedData['haven_addresses_owner'] === X_ID, '(16) claiming Y\'s addresses never overwrites the list X still owns');
+    // (k) full storage: the validator returns the signed-in account's list held in memory
+    Object.keys(storedData).forEach(k => delete storedData[k]);
+    signInStorage(Y_ID);
+    storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: X_LIST });
+    storedData['haven_addresses_owner'] = X_ID;
+    storedData['haven_account_addresses'] = JSON.stringify({ __v: 1, data: { [Y_ID.toLowerCase()]: Y_LIST } });
+    refuseSet = (k) => !/^haven_auth/.test(k);
+    A.havenBootAddresses(); // the move of X's list is refused: memory only
+    const fullShown = A.havenAddressesVisible(X_LIST);
+    assert(JSON.stringify(fullShown) === JSON.stringify(Y_LIST), `(16) full storage: the loader shows Y's list from memory, never X's stored list (got ${JSON.stringify(fullShown).slice(0, 60)})`);
+    refuseSet = null;
+    Object.keys(storedData).forEach(k => delete storedData[k]);
+  }
 
   cleanup();
   console.log(`--- Master cache upgrade (QA #87 v3/v4): ${pass} passing, ${fail} failing ---`);
