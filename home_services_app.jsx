@@ -2278,6 +2278,9 @@ export default function App(){
       setBackendReceipts({});
       proLabelTriedRef.current={};
       if(owner) setNotifications(prev=>prev.filter(n=>n.jobId==null));
+      // QA #87 v8 (2): the previous account's unsent booking draft leaves
+      // memory and storage too (never seen, edited or posted by the next one).
+      if(owner) clearDraftForAccountChange();
       havenWriteJobsOwner(uid);
     }
     if(uid) hydrateMyJobs();
@@ -2765,6 +2768,17 @@ export default function App(){
     setShowDiscardConfirm(false);
     scrubDraftFromTabMemory();
     navFn();
+  };
+  // QA #87 v8 (2): the in-progress booking draft (haven_draft) belongs to the
+  // account that typed it. On sign-out or an account switch it is cleared from
+  // memory and storage at once (an unsent draft is not kept per account).
+  const clearDraftForAccountChange=()=>{
+    setTid(null);setTpid(null);setReqWindow(null);setApptDay(null);setDesc("");setPhotos([]);setCtitle("");setCcat("Repair");setCprice("");setEmergency(false);
+    setSelectedAddressId(1);setSelectedCardId(1);
+    setShowAddressPicker(false);setShowCardPicker(false);setLocCheck(null);setShowDiscardConfirm(false);
+    scrubDraftFromTabMemory();
+    try{ localStorage.removeItem("haven_draft"); }catch{}
+    if(scr==="task"||scr==="custom") goHome();
   };
   const resetBookingSelections=()=>{
     setReqWindow(null);setApptDay(null);

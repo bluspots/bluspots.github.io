@@ -28,6 +28,9 @@
  * (13) QA #87 v8: a phone-only booking never opens a live screen: its alerts
  *     (tracking, messages, rating, receipt), its card and a restored state on
  *     tracking, messages, rating, tip or receipt all show only "Not sent".
+ * (14) QA #87 v8: the unsent booking draft (haven_draft) is cleared from memory
+ *     and storage on sign-out and on an account switch: Y never sees, lands
+ *     on or posts X's draft (sign-out, switch, reload; normal/near-full/full).
  * Messages use the app's real shapes: only the customer's own (f:"cu") come
  * back; scripted pre-A2 pro replies (f:"pro") stay set aside, never shown.
  * Ownerless notifications are set aside too and come back only with a job
@@ -119,8 +122,10 @@ function realRow(id, customer, extra) {
     ...extra,
   };
 }
-global.fetch = async (url) => {
+const writes = []; // every non-GET request (QA #87 v8 (2): nothing of another account's draft is sent)
+global.fetch = async (url, opts) => {
   const u = decodeURIComponent(String(url));
+  if (opts && opts.method && String(opts.method).toUpperCase() !== 'GET') writes.push({ u, body: typeof opts.body === 'string' ? opts.body : '' });
   const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
   if (u.endsWith('/auth/v1/health')) return ok({});
   if (u.includes('/rest/v1/rpc/is_qa_tester')) return ok(false);
@@ -1196,6 +1201,90 @@ const localOnlyStore = () => { try { return JSON.parse(storedData['haven_jobs_lo
     await toTabs();
   }
 
+
+  // ── (14) QA #87 v8 (2): an unsent booking draft never reaches the next account ──
+  // Quagon v7 blocking point 2: haven_draft was device-wide, so Y landed on
+  // X's draft (title, budget, description, photo) and could edit and post it.
+  // Now sign-out and an account switch clear the draft from memory and from
+  // storage: sign-out then Y, a direct X→Y switch, and a reload as Y over X's
+  // stored draft, in normal, near-full and full storage. Y never sees it (on
+  // screen, in form fields or in memory), never lands on it, and never posts it.
+  const XDRAFT_PHOTO = 'data:image/png;base64,XDRAFTPHOTO' + 'A'.repeat(120);
+  const XDRAFT = { tid: null, tpid: null, reqWindow: null, ctitle: 'XDRAFT title', ccat: 'Repair', cprice: '77', desc: 'XDRAFT secret gate code 4821', photos: [XDRAFT_PHOTO], emergency: false, selectedAddressId: X_HOME.id, selectedCardId: 1 };
+  const fieldsText = () => Array.from(document.querySelectorAll('input,textarea')).map(e => e.value).join('\n');
+  const draftSeen = () => /XDRAFT/.test(bodyText()) || /XDRAFT/.test(fieldsText());
+  const draftStored = () => Object.entries(storedData).some(([k, v]) => !/^haven_auth/.test(k) && /XDRAFT/.test(v));
+  const draftWrites = () => writes.filter(w => /XDRAFT/.test(w.u + w.body));
+  const seed14 = () => {
+    Object.keys(storedData).forEach(k => delete storedData[k]);
+    signInStorage(X_ID);
+    storedData['haven_jobs_owner'] = X_ID;
+    storedData['haven_addresses'] = JSON.stringify({ __v: 1, data: [X_HOME] });
+    storedData['haven_addresses_owner'] = X_ID;
+    storedData['haven_account_addresses'] = JSON.stringify({ __v: 1, data: { [Y_ID.toLowerCase()]: [Y_HOME] } });
+    storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [masterJob({ id: LOCAL_ID, backendJobId: JX })] });
+    storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
+    storedData['haven_draft'] = JSON.stringify({ __v: 1, data: XDRAFT });
+  };
+  // Y's view: Bookings opens Bookings (not a draft), nothing of X's draft
+  // anywhere, and any "Post Job" button Y can reach sends nothing of it.
+  let rc14 = 0;
+  async function yNeverGetsDraft(mode, how) {
+    // (in near-full / full storage the read lands in memory only)
+    await waitFor(() => readCount > rc14 && (mode !== 'normal' || jobBy(JY)), `(14) ${mode} ${how}: Y's read lands`);
+    await settle(250);
+    assert(!['task', 'custom'].includes(navScr()) && !draftSeen(), `(14) ${mode} ${how}: Y does not land on X's draft (screen ${navScr()})`);
+    await toTabs();
+    await tap(screen.queryAllByText(/^Bookings$/).pop(), 'Bookings tab (14)');
+    await settle(100);
+    assert(!['task', 'custom'].includes(navScr()) && !/Post a custom job/.test(bodyText()), `(14) ${mode} ${how}: Y's Bookings tab opens Bookings, not X's draft (screen ${navScr()})`);
+    assert(!draftSeen(), `(14) ${mode} ${how}: no part of X's draft is on Y's screen or in a form field`);
+    const post = btn(/^Post Job/);
+    if (post) await tap(post, 'Post Job (14)');
+    assert(draftWrites().length === 0, `(14) ${mode} ${how}: nothing of X's draft is ever sent (${draftWrites().length} writes)`);
+    assert(memHolds(['XDRAFT']).length === 0, `(14) ${mode} ${how}: X's draft is not in the app's memory`);
+    assert(!draftStored(), `(14) ${mode} ${how}: X's draft is not in storage`);
+  }
+  for (const mode of ['normal', 'near-full', 'full']) {
+    for (const how of ['sign-out then Y', 'switch X to Y', 'reload as Y']) {
+      rowsByCustomer = { [X_ID]: [realRow(JX, X_ID)], [Y_ID]: [realRow(JY, Y_ID, { city_label: 'Austin, TX' })] };
+      seed14();
+      writes.length = 0;
+      if (how === 'reload as Y') { signInStorage(Y_ID); } // X's draft and cache stay on the phone; Y's session opens it
+      if (mode === 'near-full') { const limit = usedBytes() + 1500; refuseSet = (k, v) => !/^haven_auth/.test(k) && usedBytes() - (k in storedData ? k.length + storedData[k].length : 0) + k.length + v.length > limit; }
+      else if (mode === 'full') { const limit = usedBytes(); refuseSet = (k, v) => !/^haven_auth/.test(k) && usedBytes() - (k in storedData ? k.length + storedData[k].length : 0) + k.length + v.length > limit; }
+      else refuseSet = null;
+      rc14 = readCount;
+      await boot();
+      if (how !== 'reload as Y') {
+        await waitFor(() => readCount > rc14 && (mode !== 'normal' || jobBy(JX)), `(14) ${mode} ${how}: X's read lands`);
+        await settle(150);
+        // X still gets its own draft back on its own phone session
+        await tap(screen.queryAllByText(/^Bookings$/).pop(), 'Bookings tab (14, X)');
+        await settle(100);
+        assert(navScr() === 'custom' && /XDRAFT title/.test(fieldsText()) && /XDRAFT secret gate code 4821/.test(fieldsText()), `(14) ${mode} ${how}: X's own draft comes back to X (screen ${navScr()})`);
+        if (how === 'sign-out then Y') {
+          await signOutInTab();
+          assert(!draftStored(), `(14) ${mode} sign-out: X's draft is removed from storage at sign-out`);
+          assert(memHolds(['XDRAFT', 'XDRAFTPHOTO']).length === 0, `(14) ${mode} sign-out: X's draft (title, description, photo) leaves the app's memory (found: ${memHolds(['XDRAFT']).join(', ')})`);
+          assert(!draftSeen(), `(14) ${mode} sign-out: X's draft is off the screen`);
+        }
+        rc14 = readCount;
+        await signInInTab(Y_ID);
+      }
+      await yNeverGetsDraft(mode, how);
+      if (how === 'switch X to Y') {
+        // Back to X: the cleared draft is gone for good (not kept per account), nothing else of X's lost.
+        const rcX = readCount;
+        await signInInTab(X_ID);
+        await waitFor(() => readCount > rcX, `(14) ${mode} back to X: X's read`);
+        await settle(150);
+        assert(!draftStored() && memHolds(['XDRAFT']).length === 0, `(14) ${mode} back to X: the draft stays cleared`);
+      }
+      refuseSet = null;
+    }
+  }
+  refuseSet = null;
 
   cleanup();
   console.log(`--- Master cache upgrade (QA #87 v3/v4): ${pass} passing, ${fail} failing ---`);
