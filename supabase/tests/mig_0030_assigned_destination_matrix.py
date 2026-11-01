@@ -235,7 +235,7 @@ def matrix(db, g):
     # ── disallowed statuses (job still assigned to P1)
     for st in INACTIVE:
         got = q(db, 'P1', rpc(J1), setup=f"update public.jobs set status = '{st}' where id = '{J1}'")
-        check(g, f'P1 assigned, {st}: refused', got, '{"ok": false, "error": "status_not_active"}')
+        check(g, f'P1 assigned, {st}: refused', got, json.dumps({"ok": False, "error": "status_not_active", "status": st}))
     check(g, 'P1 on a posted, unassigned job (J_post): not_found', q(db, 'P1', rpc(J_POST)), NOT_FOUND)
     # ── no coordinates
     for col in ('lat', 'lng'):
@@ -291,14 +291,16 @@ def matrix(db, g):
                       "from public.jobs_posted_within_radius()"), f'{J_POST}|NULL|NULL|Orlando, FL')
     check(g, 'board P3 (New York): only J_far, lat/lng null',
           q(db, 'P3', "select id || '|' || coalesce(lat::text,'NULL') from public.jobs_posted_within_radius()"), f'{J_FAR}|NULL')
-    exact = q(db, 'postgres', f"select round(round(public.haven_distance_miles({NEAR[0]}, {NEAR[1]}, {POST[0]}, {POST[1]}) * 2) / 2, 1)")
-    check(g, 'board P2: distance_mi = exact rounded to 0.5 mi',
-          q(db, 'P2', "select distance_mi from public.jobs_posted_within_radius()"), exact)
+    check(g, 'board P2: distance_mi = round(exact * 2) / 2 (contract formula)',
+          q(db, 'P2', f"select distance_mi = round(public.haven_distance_miles({NEAR[0]}, {NEAR[1]}, {POST[0]}, {POST[1]}) * 2) / 2 "
+                      "from public.jobs_posted_within_radius()"), 't')
+    check(g, 'board P2: distance_mi value (6.5 mi fixture)',
+          q(db, 'P2', "select distance_mi = 6.5 from public.jobs_posted_within_radius()"), 't')
     check(g, 'board P2: distance_mi is a multiple of 0.5 and != full precision',
           q(db, 'P2', f"select (distance_mi * 2 = trunc(distance_mi * 2)) and distance_mi <> "
                       f"public.haven_distance_miles({NEAR[0]}, {NEAR[1]}, {POST[0]}, {POST[1]}) from public.jobs_posted_within_radius()"), 't')
     for d, e in (('0.24', '0.0'), ('0.26', '0.5'), ('3.74', '3.5'), ('3.76', '4.0'), ('24.99', '25.0')):
-        check(g, f'rounding rule round(d*2)/2: {d} -> {e}', q(db, 'postgres', f"select round(round({d}::numeric * 2) / 2, 1)"), e)
+        check(g, f'rounding rule round(d*2)/2: {d} -> {e}', q(db, 'postgres', f"select round({d}::numeric * 2) / 2 = {e}"), 't')
     # ── claim flow: winner gets the point, others do not
     claim = f"select 1 from public.pro_claim_job('{J_POST}') \\g /dev/null\n"
     got = q(db, 'P2', claim + f"select public.get_assigned_job_destination('{J_POST}')->'destination'")
@@ -340,6 +342,12 @@ def main():
     for p in migration_files():
         if p:
             print('base', os.path.basename(p), sha(p)[:16])
+    m30 = open(F30).read()
+    blk = m30[m30.index('-- ── Rollback (only if this file must be undone'):]
+    blk = '\n'.join(l[3:] if l.startswith('-- ') else l[2:] for l in blk.split('\n') if l.startswith('--'))
+    rb = open(R30).read()
+    check('files', 'rollback block in 0030 == rollback file (begin..commit)',
+          blk[blk.index('begin;'):blk.index('commit;')] == rb[rb.index('begin;'):rb.index('commit;')], True)
     db = PREFIX + '_main'
     build(db)
     G = 'pre'

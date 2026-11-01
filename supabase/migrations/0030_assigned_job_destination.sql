@@ -9,6 +9,8 @@
 -- all. Do not apply it from the app, from CI, or from an agent.
 -- Re-running it is a no-op (create or replace with the same bodies, same
 -- revoke / grant). Rollback: supabase/rollback/0030_assigned_job_destination_rollback.sql
+-- (same SQL as the commented Rollback block at the end of this file).
+-- Contract: Hub backend/contracts/mapbox-assigned-destination-0030.md
 --
 -- Why
 --   1. public.jobs_posted_within_radius() (0023) returns the exact lat/lng of
@@ -22,7 +24,7 @@
 --   (a) jobs_posted_within_radius(): SAME signature and return columns
 --       (create or replace, no drop, so the deployed Pro build keeps working).
 --       lat and lng are always null. distance_mi is rounded to the nearest
---       0.5 mi (round(d * 2) / 2, shown with one decimal). The radius filter
+--       0.5 mi (round(d * 2) / 2). The radius filter
 --       still uses the exact distance. Every other column, filter, order,
 --       SECURITY DEFINER, search_path and grant is unchanged from 0023.
 --   (b) New public.get_assigned_job_destination(p_job_id uuid) returns jsonb.
@@ -42,7 +44,7 @@
 --           status_not_active  assigned to the caller but status is not one of
 --                              en_route, arrived, diagnosing,
 --                              materials_requested, materials_approved,
---                              in_progress
+--                              in_progress; also carries status.
 --           no_coordinates     assigned + active but lat or lng is null; also
 --                              carries city_label for the UI fallback.
 --
@@ -139,7 +141,7 @@ as $$
     j.status::text,
     j.pro_id,
     j.inspection_fee_cents,
-    round(round(public.haven_distance_miles(p.operating_lat, p.operating_lng, j.lat, j.lng) * 2) / 2, 1)
+    round(public.haven_distance_miles(p.operating_lat, p.operating_lng, j.lat, j.lng) * 2) / 2
   from public.jobs j
   join public.profiles p on p.id = auth.uid()
   where auth.uid() is not null
@@ -188,7 +190,7 @@ begin
 
   if v_job.status not in ('en_route', 'arrived', 'diagnosing',
                           'materials_requested', 'materials_approved', 'in_progress') then
-    return jsonb_build_object('ok', false, 'error', 'status_not_active');
+    return jsonb_build_object('ok', false, 'error', 'status_not_active', 'status', v_job.status);
   end if;
 
   if v_job.lat is null or v_job.lng is null then
@@ -257,3 +259,68 @@ commit;
 --                  'public.get_assigned_job_destination(uuid)'::regprocedure);
 -- Expect: both prosecdef = t, provolatile = s, proconfig = {search_path=public},
 -- owner = owner of public.jobs, anon_exec = f, auth_exec = t.
+
+-- ── Rollback (only if this file must be undone; NOT AUTHORIZED) ─────────
+-- Identical to supabase/rollback/0030_assigned_job_destination_rollback.sql.
+-- Restores 0023's board exactly and drops the RPC. Run the lines between begin and commit.
+-- begin;
+--
+-- create or replace function public.jobs_posted_within_radius()
+-- returns table (
+--   id uuid,
+--   category text,
+--   title text,
+--   fixed_pro_labor_payout_cents integer,
+--   requires_diagnosis boolean,
+--   city_label text,
+--   lat numeric,
+--   lng numeric,
+--   emergency boolean,
+--   posted_at timestamptz,
+--   status text,
+--   pro_id uuid,
+--   inspection_fee_cents integer,
+--   distance_mi numeric
+-- )
+-- language sql
+-- stable
+-- security definer
+-- set search_path = public
+-- as $$
+--   select
+--     j.id,
+--     j.category,
+--     j.title,
+--     j.fixed_pro_labor_payout_cents,
+--     j.requires_diagnosis,
+--     j.city_label,
+--     j.lat,
+--     j.lng,
+--     j.emergency,
+--     j.posted_at,
+--     j.status::text,
+--     j.pro_id,
+--     j.inspection_fee_cents,
+--     public.haven_distance_miles(p.operating_lat, p.operating_lng, j.lat, j.lng)
+--   from public.jobs j
+--   join public.profiles p on p.id = auth.uid()
+--   where auth.uid() is not null
+--     and j.status = 'posted'
+--     and j.pro_id is null
+--     and j.lat is not null
+--     and j.lng is not null
+--     and p.operating_lat is not null
+--     and p.operating_lng is not null
+--     and public.haven_profile_radius_miles(p.pro_workspace) is not null
+--     and public.haven_distance_miles(p.operating_lat, p.operating_lng, j.lat, j.lng)
+--         <= public.haven_profile_radius_miles(p.pro_workspace)
+--   order by j.posted_at desc;
+-- $$;
+--
+-- revoke all on function public.jobs_posted_within_radius() from public;
+-- revoke all on function public.jobs_posted_within_radius() from anon;
+-- grant execute on function public.jobs_posted_within_radius() to authenticated;
+--
+-- drop function if exists public.get_assigned_job_destination(uuid);
+--
+-- commit;
