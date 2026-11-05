@@ -63,6 +63,7 @@ def b1_http_attack():
     not the job's true point. The secret job is inserted by the DB owner on this throwaway DB and
     removed afterwards; P2's profile is restored."""
     import subprocess as sp
+    sys.dont_write_bytecode = True  # no __pycache__ in the repo
     sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
     import mig_0030_assigned_destination_matrix as M
     psql = ['psql', '-X', '-q', '-tA', '-v', 'ON_ERROR_STOP=1', URI]
