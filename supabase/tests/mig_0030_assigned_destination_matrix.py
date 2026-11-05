@@ -291,8 +291,9 @@ def matrix(db, g):
                       "from public.jobs_posted_within_radius()"), f'{J_POST}|NULL|NULL|Orlando, FL')
     check(g, 'board P3 (New York): only J_far, lat/lng null',
           q(db, 'P3', "select id || '|' || coalesce(lat::text,'NULL') from public.jobs_posted_within_radius()"), f'{J_FAR}|NULL')
-    check(g, 'board P2: distance_mi = round(exact * 2) / 2 (contract formula)',
-          q(db, 'P2', f"select distance_mi = round(public.haven_distance_miles({NEAR[0]}, {NEAR[1]}, {POST[0]}, {POST[1]}) * 2) / 2 "
+    pc = cell(*POST)
+    check(g, f'board P2: distance_mi = round(d * 2) / 2, d = distance to J_post cell centre {pc[0]},{pc[1]:.6f} (B1)',
+          q(db, 'P2', f"select distance_mi = round(public.haven_distance_miles({NEAR[0]}, {NEAR[1]}, {pc[0]}, {pc[1]:.12f}) * 2) / 2 "
                       "from public.jobs_posted_within_radius()"), 't')
     check(g, 'board P2: distance_mi value (6.5 mi fixture)',
           q(db, 'P2', "select distance_mi = 6.5 from public.jobs_posted_within_radius()"), 't')
@@ -332,6 +333,271 @@ def matrix(db, g):
           bprops, 'true|s|search_path=public|false|true|0')
 
 
+# ── B1: board grid + triangulation attacks ────────────────────────────────
+# Python model of the board's grid (must match the SQL in 0030 exactly).
+import math
+from decimal import Decimal as D
+
+R_MI = 3958.8
+J_SEC1 = 'e0300000-0000-4000-8000-0000000000e1'   # secret posted job, off-centre in cell K
+J_SEC2 = 'e0300000-0000-4000-8000-0000000000e2'   # second job in the same cell K, other corner
+ATTACK_BASE = (28.540000, -81.380000)              # the attacking Pro's (P2) own starting point
+
+
+def cell(lat, lng):
+    lat, lng = D(str(lat)), D(str(lng))
+    row = min(max(math.floor((lat + 90) / D('0.01')), 0), 17999)
+    clat = D(-90) + (D(row) + D('0.5')) * D('0.01')
+    n = max(1, math.floor(36000 * math.cos(math.radians(float(clat)))))
+    col = math.floor((lng + 180) * n / 360) % n
+    return (float(clat), -180 + (col + 0.5) * 360 / n, n)
+
+
+def hav(a, b):
+    p1, p2 = math.radians(a[0]), math.radians(b[0])
+    x = math.sin((p2 - p1) / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(math.radians(b[1] - a[1]) / 2) ** 2
+    return 2 * R_MI * math.asin(min(1, math.sqrt(x)))
+
+
+def move(o, brg, miles):
+    return (o[0] + miles / 69.093 * math.cos(brg), o[1] + miles / (69.093 * math.cos(math.radians(o[0]))) * math.sin(brg))
+
+
+K = cell(28.5655, -81.3555)
+T1 = (round(K[0] + 0.0042, 6), round(K[1] - 0.0049, 6))
+T2 = (round(K[0] - 0.0040, 6), round(K[1] + 0.0050, 6))
+KC = (K[0], K[1])
+
+
+def job_insert(jid, pt, cust=None):
+    lat, lng = ('null', 'null') if pt is None else (pt[0] if pt[0] is not None else 'null', pt[1] if pt[1] is not None else 'null')
+    return ("insert into public.jobs(id, customer_id, pro_id, status, category, title, city_label, lat, lng, "
+            "fixed_customer_labor_price_cents, fixed_pro_labor_payout_cents, posted_at) values "
+            f"('{jid}', '{cust or C2}', null, 'posted', 'Plumbing', 'secret {jid[-2:]}', 'Orlando, FL', {lat}, {lng}, "
+            f"8900, 7120, now())")
+
+
+SEC_SETUP = job_insert(J_SEC1, T1) + ';\n' + job_insert(J_SEC2, T2)
+
+
+def set_own(pt, r):
+    return (f"update public.profiles set operating_lat = {pt[0]:.6f}, operating_lng = {pt[1]:.6f}, "
+            f"pro_workspace = jsonb_build_object('travelRadius', '{r}') where id = auth.uid() \\g /dev/null\n")
+
+
+class Oracle:
+    """What an ordinary Pro (P2) can do: PATCH own profile, read the board. Counts board calls."""
+    def __init__(self, db, jid):
+        self.db, self.jid, self.calls = db, jid, 0
+
+    def board(self, pt, r):
+        self.calls += 1
+        got = q(self.db, 'P2', set_own(pt, r) + f"select coalesce((select distance_mi::text from public.jobs_posted_within_radius() "
+                                                 f"where id = '{self.jid}'), 'absent')", setup=SEC_SETUP)
+        if got.startswith('ERR'):
+            raise SystemExit('oracle error: ' + got)
+        return None if got == 'absent' else D(got)
+
+
+def solve(anchors, start):
+    """Least-squares (Gauss-Newton) point P with hav(P, B_i) = d_i."""
+    P = list(start)
+    for _ in range(80):
+        a = b = c = g0 = g1 = 0.0
+        for B, d in anchors:
+            f = hav(P, B) - d; e = 1e-7
+            fa = (hav((P[0] + e, P[1]), B) - hav(P, B)) / e
+            fb = (hav((P[0], P[1] + e), B) - hav(P, B)) / e
+            a += fa * fa; b += fa * fb; c += fb * fb; g0 += fa * f; g1 += fb * f
+        det = a * c - b * b
+        if det == 0:
+            break
+        P[0] -= (c * g0 - b * g1) / det; P[1] -= (-b * g0 + a * g1) / det
+    return tuple(P)
+
+
+def attack_radius(o, radii=(5,), bearings=(0, 2.1, 4.2)):
+    """Membership oracle at the radius edge: bisect along each bearing where the job (dis)appears."""
+    anchors = []
+    for i, brg in enumerate(bearings):
+        r = radii[i % len(radii)]
+        lo, hi = 0.0, r + 4.0
+        assert o.board(move(ATTACK_BASE, brg, lo), r) is not None
+        for _ in range(40):
+            mid = (lo + hi) / 2
+            if o.board(move(ATTACK_BASE, brg, mid), r) is not None:
+                lo = mid
+            else:
+                hi = mid
+        anchors.append((move(ATTACK_BASE, brg, lo), float(r)))
+    return solve(anchors, ATTACK_BASE)
+
+
+def attack_step(o, bearings=(0, 2.1, 4.2)):
+    """Distance-step oracle at radius 25: bisect where the rounded distance_mi flips (k/2 + 0.25)."""
+    anchors = []
+    for brg in bearings:
+        d0 = o.board(ATTACK_BASE, 25); lo, t = 0.0, 0.0
+        while True:
+            t += 0.2; d = o.board(move(ATTACK_BASE, brg, t), 25)
+            if d != d0:
+                hi = t; break
+            lo = t
+        for _ in range(40):
+            mid = (lo + hi) / 2
+            if o.board(move(ATTACK_BASE, brg, mid), 25) == d0:
+                lo = mid
+            else:
+                hi = mid
+        d1 = o.board(move(ATTACK_BASE, brg, hi), 25)
+        anchors.append((move(ATTACK_BASE, brg, lo), float(d0 + d1) / 2))
+    return solve(anchors, ATTACK_BASE)
+
+
+ATTACKS = (
+    ('A operating-point sweep, radius-edge oracle (radius 5, 3 bearings)', lambda o: attack_radius(o)),
+    ('B radius sweep 5/10/15/25/50 x 5 bearings, radius-edge oracle',
+     lambda o: attack_radius(o, radii=(5, 10, 15, 25, 50), bearings=tuple(i * 2 * math.pi / 5 for i in range(5)))),
+    ('C operating-point sweep, distance-step oracle (radius 25)', lambda o: attack_step(o)),
+)
+
+
+def triangulation(db, g, coarse=True):
+    """coarse=True: after 0030 the best estimate is the cell centre. coarse=False (control, 0023 board):
+    the same attacks recover the exact point, proving they are real attacks."""
+    tol_m = 5.0
+    est = {}
+    for name, fn in ATTACKS:
+        for jid, T in ((J_SEC1, T1), (J_SEC2, T2)):
+            o = Oracle(db, jid)
+            E = fn(o)
+            est[(name, jid)] = E
+            e_true = hav(E, T) * 1609.344
+            e_cell = hav(E, KC) * 1609.344
+            floor_m = hav(KC, T) * 1609.344
+            tag = f'{name} on {jid[-2:]} ({o.calls} board calls): est {E[0]:.6f},{E[1]:.6f} err_true {e_true:.1f} m, err_cell_centre {e_cell:.2f} m'
+            if coarse:
+                check(g, f'{tag}: converges to cell centre (< {tol_m} m)', e_cell < tol_m, True)
+                check(g, f'{tag}: error vs true point >= dist(true, cell centre) {floor_m:.0f} m - {tol_m} m',
+                      e_true >= floor_m - tol_m, True)
+                check(g, f'{tag}: error vs true point >= 400 m (test point placed off-centre)', e_true >= 400, True)
+            else:
+                check(g, f'[control, exact board] {tag}: recovers true point (< {tol_m} m)', e_true < tol_m, True)
+    if coarse:
+        for name, _ in ATTACKS:
+            a, b = est[(name, J_SEC1)], est[(name, J_SEC2)]
+            check(g, f'{name}: two jobs {hav(T1, T2)*1609.344:.0f} m apart in one cell give the same estimate (< {tol_m} m)',
+                  hav(a, b) * 1609.344 < tol_m, True)
+
+
+def indistinguishable(db, g):
+    """Same cell => same board answer from every point and radius (presence and distance_mi)."""
+    import random
+    rnd = random.Random(30)
+    pts = [move(KC, rnd.uniform(0, 2 * math.pi), rnd.uniform(0, 55)) for _ in range(90)]
+    pts += [move(KC, rnd.uniform(0, 2 * math.pi), r + rnd.uniform(-0.6, 0.6)) for r in (5, 10, 15, 25, 50) for _ in range(12)]
+    radii = (5, 10, 15, 25, 50)
+    script = 'begin;\n' + owner_setup(SEC_SETUP) + as_actor('P2')
+    for pt in pts:
+        for r in radii:
+            script += set_own(pt, r)
+            script += (f"select coalesce((select distance_mi::text from public.jobs_posted_within_radius() where id = '{J_SEC1}'), '-')"
+                       f" || '|' || coalesce((select distance_mi::text from public.jobs_posted_within_radius() where id = '{J_SEC2}'), '-');\n")
+    script += 'rollback;\n'
+    r = psql(db, script)
+    lines = [l for l in r.stdout.splitlines() if '|' in l]
+    combos = [(pt, rr) for pt in pts for rr in radii]
+    same = sum(1 for l in lines if l.split('|')[0] == l.split('|')[1])
+    shown = sum(1 for l in lines if l.split('|')[0] != '-')
+    hidden = len(lines) - shown
+    exact_differs = 0
+    for (pt, rr) in combos:
+        p1 = (round(pt[0], 6), round(pt[1], 6))
+        d1, d2 = hav(p1, T1), hav(p1, T2)
+        if (d1 <= rr) != (d2 <= rr) or (d1 <= rr and round(d1 * 2) != round(d2 * 2)):
+            exact_differs += 1
+    check(g, f'same-cell jobs indistinguishable: {len(lines)} (point, radius) probes, identical presence + distance_mi',
+          (r.returncode, len(lines), same), (0, len(combos), len(combos)))
+    check(g, f'probe set is not vacuous: shown {shown}, hidden {hidden}, and an exact-point board would differ on {exact_differs}',
+          shown > 50 and hidden > 50 and exact_differs > 50, True)
+
+
+def grid_checks(db, g):
+    # model sanity (Python model of the SQL grid; the SQL is checked against it below)
+    lat_mi = hav((K[0] - 0.005, K[1]), (K[0] + 0.005, K[1]))
+    lng_mi = hav((K[0], K[1] - 180 / K[2]), (K[0], K[1] + 180 / K[2]))
+    check(g, f'grid cell near Orlando ({K[0]} N, n={K[2]}): {lat_mi:.3f} mi N-S x {lng_mi:.3f} mi E-W (both 0.65..0.75)',
+          0.65 < lat_mi < 0.75 and 0.65 < lng_mi < 0.75, True)
+    check(g, 'T1 and T2 are in the same cell, off-centre by >= 0.25 mi',
+          (cell(*T1) == K and cell(*T2) == K and hav(T1, KC) > 0.25 and hav(T2, KC) > 0.25), True)
+    for la in (28.5, 45.0, 60.0, 75.0):
+        c = cell(la, 10.0)
+        check(g, f'grid cell E-W width at {la} N ~0.69 mi (n={c[2]})',
+              0.68 < hav((c[0], c[1] - 180 / c[2]), (c[0], c[1] + 180 / c[2])) < 0.70, True)
+    # board uses the cell centre: Pro at the centre sees distance 0.0 for both jobs (exact would be 0.5)
+    o = (round(KC[0], 6), round(KC[1], 6))
+    got = q(db, 'P2', set_own(o, 5) + f"select string_agg(id || ':' || distance_mi::float8, ',' order by id) from public.jobs_posted_within_radius() "
+                                      f"where id in ('{J_SEC1}','{J_SEC2}')", setup=SEC_SETUP)
+    check(g, f'Pro at cell centre: both jobs distance 0.0 (exact would be {round(hav(o, T1)*2)/2} / {round(hav(o, T2)*2)/2})',
+          got, f'{J_SEC1}:0,{J_SEC2}:0')
+    # radius filter uses the cell centre: point where centre is inside 5 mi but T1 outside -> listed; claim refused
+    brg = math.atan2((T1[1] - KC[1]) * math.cos(math.radians(KC[0])), T1[0] - KC[0]) + math.pi  # away from T1
+    p_in = move(KC, brg, 4.9); p_in = (round(p_in[0], 6), round(p_in[1], 6))
+    check(g, f'fixture: centre {hav(p_in, KC):.3f} mi <= 5 < true {hav(p_in, T1):.3f} mi', hav(p_in, KC) <= 5 < hav(p_in, T1), True)
+    check(g, 'radius filter on cell centre: job whose TRUE point is outside 5 mi is listed (distance 5.0)',
+          q(db, 'P2', set_own(p_in, 5) + f"select distance_mi::float8 from public.jobs_posted_within_radius() where id = '{J_SEC1}'",
+            setup=SEC_SETUP), '5')
+    check(g, 'consequence: that listed job is refused by pro_claim_job (exact-point radius check unchanged)',
+          q(db, 'P2', set_own(p_in, 5) + f"select 1 from public.pro_claim_job('{J_SEC1}')", setup=SEC_SETUP),
+          'ERR:job outside operating radius')
+    p_out = move(KC, brg + math.pi, 5.1); p_out = (round(p_out[0], 6), round(p_out[1], 6))
+    check(g, f'fixture: true {hav(p_out, T1):.3f} mi <= 5 < centre {hav(p_out, KC):.3f} mi', hav(p_out, T1) <= 5 < hav(p_out, KC), True)
+    check(g, 'radius filter on cell centre: job whose TRUE point is inside 5 mi is not listed',
+          q(db, 'P2', set_own(p_out, 5) + f"select count(*) from public.jobs_posted_within_radius() where id = '{J_SEC1}'",
+            setup=SEC_SETUP), '0')
+    check(g, 'consequence: pro_claim_job still accepts it from there (exact check unchanged; id must already be known)',
+          q(db, 'P2', set_own(p_out, 5) + f"select pro_id = auth.uid() from public.pro_claim_job('{J_SEC1}')", setup=SEC_SETUP), 't')
+    # edge cases: poles, antimeridian, equator, nulls, out-of-range latitude
+    E = {'np': ('e0300000-0000-4000-8000-0000000000d1', (90, 0)),
+         'sp': ('e0300000-0000-4000-8000-0000000000d2', (-90, 0)),
+         'np2': ('e0300000-0000-4000-8000-0000000000d3', (89.999999, 123.4)),
+         'am180': ('e0300000-0000-4000-8000-0000000000d4', (28.5, 180)),
+         'amm180': ('e0300000-0000-4000-8000-0000000000d5', (28.5, -180)),
+         'am179': ('e0300000-0000-4000-8000-0000000000d6', (28.5, 179.999999)),
+         'eq': ('e0300000-0000-4000-8000-0000000000d7', (0, 0)),
+         'eqs': ('e0300000-0000-4000-8000-0000000000d8', (-0.000001, -0.000001)),
+         'nolat': ('e0300000-0000-4000-8000-0000000000d9', (None, -81.3)),
+         'nolng': ('e0300000-0000-4000-8000-0000000000da', (28.5, None)),
+         'lat95': ('e0300000-0000-4000-8000-0000000000db', (95, 10))}
+    setup = ';\n'.join(job_insert(j, p) for j, p in E.values())
+
+    def board_at(pt, r=5):
+        got = q(db, 'P2', set_own(pt, r) + "select string_agg(id || ':' || distance_mi::float8, ',' order by id) from public.jobs_posted_within_radius() "
+                                           "where id::text like 'e0300000-0000-4000-8000-0000000000d%'", setup=setup)
+        return dict(x.split(':') for x in got.split(',')) if got not in ('-', '') and not got.startswith('ERR') else got
+
+    def ctr(k):
+        c = cell(*E[k][1]); return (round(c[0], 6), round(c[1], 6))
+    b = board_at(ctr('np'))
+    check(g, f'north pole job (90,0) -> cell centre {ctr("np")} (row clamped, n={cell(90, 0)[2]}): listed at 0.0; (89.999999,123.4) other polar cell listed',
+          b, lambda b: isinstance(b, dict) and b.get(E['np'][0]) == '0' and E['np2'][0] in b and E['sp'][0] not in b)
+    b = board_at(ctr('sp'))
+    check(g, 'south pole job (-90,0): listed at 0.0 from its cell centre', b, lambda b: isinstance(b, dict) and b.get(E['sp'][0]) == '0')
+    b = board_at(ctr('am180'))
+    check(g, f'antimeridian: lng 180 and -180 share one cell (centre {ctr("am180")}), both 0.0; lng 179.999999 is the adjacent cell (0.5), not 24,900 mi',
+          b, lambda b: isinstance(b, dict) and b.get(E['am180'][0]) == '0' and b.get(E['amm180'][0]) == '0' and b.get(E['am179'][0]) == '0.5')
+    b = board_at(ctr('eq'))
+    check(g, 'equator: (0,0) at 0.0, (-0.000001,-0.000001) in the cell to the south (0.5)',
+          b, lambda b: isinstance(b, dict) and b.get(E['eq'][0]) == '0' and b.get(E['eqs'][0]) == '0.5')
+    b50 = [board_at(pt, 50) for pt in ((28.5, -81.3), (28.5, 0.0), (0.0, 0.0), (89.0, 0.0))]
+    check(g, 'null lat or null lng: never listed (any point, radius 50), no error',
+          all(not isinstance(x, str) or x == '-' for x in b50) and
+          all(E['nolat'][0] not in x and E['nolng'][0] not in x for x in b50 if isinstance(x, dict)), True)
+    b = board_at(ctr('np'), 50)
+    check(g, 'invalid lat 95 (numeric(9,6) allows it) does not break the board: clamped into the polar row',
+          isinstance(b, dict) and E['lat95'][0] in b, True)
+
+
 BOARD_COLS = ("id, category, title, fixed_pro_labor_payout_cents, requires_diagnosis, city_label, emergency, posted_at, "
               "status, pro_id, inspection_fee_cents")
 
@@ -364,6 +630,9 @@ def main():
 
     rc, err = apply_file(db, F30)
     check('apply', '0030 applies cleanly on master + 0027', rc, 0)
+    grid_checks(db, 'grid')
+    triangulation(db, 'b1-triangulation')
+    indistinguishable(db, 'b1-triangulation')
     if rc:
         print(err)
     post1 = state(db)
@@ -394,6 +663,17 @@ def main():
     check('rollback', '0030 re-applied after rollback: no error, state == first apply', (rc, diff(post1, state(db))), (0, []))
     matrix(db, 'matrix-after-rollback-reapply')
 
+    # ── control: the same attacks against the pre-B1 board (37d6e541: exact point in filter and
+    #    distance, rounded output) recover the exact point, so the attacks above are real attacks.
+    db3 = PREFIX + '_ctl'
+    build(db3)
+    ctl = open(F30).read().replace('g.cell_lat, g.cell_lng', 'j.lat, j.lng')
+    check('control', 'control board = 0030 with the exact point in distance + filter (2 replacements)',
+          open(F30).read().count('g.cell_lat, g.cell_lng'), 2)
+    r = psql(db3, ctl)
+    check('control', 'control board applies', r.returncode, 0)
+    triangulation(db3, 'control', coarse=False)
+
     # ── without 0027: refused, nothing changed; and the leak 0027 closes
     db2 = PREFIX + '_no27'
     build(db2, with_0027=False)
@@ -405,7 +685,7 @@ def main():
     check('no0027', 'refused run changed nothing', diff(s0, state(db2)), [])
 
     if not os.environ.get('HAVEN_KEEP_DBS'):
-        for x in (db, db2):
+        for x in (db, db2, db3):
             psql('postgres', f'drop database if exists {x};')
     npass = sum(1 for r in RESULTS if r[2])
     nfail = len(RESULTS) - npass
