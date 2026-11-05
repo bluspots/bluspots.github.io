@@ -1,6 +1,7 @@
 -- Haven shared backend — assigned-Pro job destination + board location trim (MIG-0030)
 -- Number: 0030. Order: 0023 -> 0027 -> 0030. Independent of 0025 / 0026 /
--- 0028 / 0029 / 0031 (no shared object).
+-- 0028 / 0029 / 0031 (no shared object: none of them defines the board,
+-- the RPC or pro_claim_job; 0029's jobs trigger is noted under (c)).
 --
 -- DRAFT. NOT AUTHORIZED TO APPLY. Paste only after Quagon QA passes this
 -- exact committed file (sha256 of the body) and Alex approves execution.
@@ -32,7 +33,7 @@
 --       caller's operating point to that cell centre. Every other column,
 --       filter, order, SECURITY DEFINER, search_path and grant is unchanged
 --       from 0023. No column, table or helper function is added.
---       The exact point is still used by pro_claim_job /
+--       The exact point is still used by pro_claim_job (c) /
 --       jobs_enforce_claim_radius (unchanged) and by (b).
 --
 -- Board grid (computed inline in the board's SQL, fixed per job: depends
@@ -74,10 +75,39 @@
 --                              in_progress; also carries status.
 --           no_coordinates     assigned + active but lat or lng is null; also
 --                              carries city_label for the UI fallback.
+--   (c) pro_claim_job(job_id uuid) (QA C1): same signature, return, owner,
+--       grants and every response, with ONE reordering. A Pro who already
+--       holds an active job (en_route, arrived, diagnosing,
+--       materials_requested, materials_approved, in_progress, i.e. the
+--       one_active_job_per_pro unique index) is refused BEFORE the radius
+--       check, with exactly today's unique-violation error (SQLSTATE 23505,
+--       message 'duplicate key value violates unique constraint
+--       "one_active_job_per_pro"', detail 'Key (pro_id)=(<uuid>) already
+--       exists.'; PostgREST 409, which haven-pro already handles). Before
+--       0030 the busy Pro got P0001 'job outside operating radius' when the
+--       exact point was outside and 23505 when inside: a two-sided oracle that
+--       recovered the point to 0.06 m. Now a busy Pro gets the same answer
+--       wherever the job is. Unchanged: signed-out 28000; 'job not claimable'
+--       P0002 (missing / not posted / taken, checked before the busy check as
+--       today); for a Pro with no active job the exact-point radius check
+--       (P0001), the en_route transition, accepted_at, the returned row and
+--       the race (loser gets P0002 after the radius check, as today). The
+--       unique index still enforces one active job under concurrency.
+--       With 0029 applied, a busy Pro claiming a job they posted now gets
+--       23505 instead of 0029's 42501 (the busy check runs first); a Pro
+--       with no active job still gets 42501. No location signal either way.
+--   H1. The three SECURITY DEFINER functions this file creates or redefines
+--       pin search_path = pg_catalog, public, pg_temp (pg_temp last: no
+--       temp-schema type / relation shadowing inside them). Other 0023
+--       functions are deliberately left as they are (see the PR notes).
+--   Version guard (section 0): the board's and pro_claim_job's bodies
+--       (md5 of pg_proc.prosrc) must be 0023's or this file's, and the
+--       one_active_job_per_pro index must exist with the six active
+--       statuses; otherwise the file refuses and changes nothing.
 --
 -- Does not change: public.jobs policies or grants (direct table reads stay as
 --   0027 left them: owner customer + assigned Pro only), any table, column,
---   row, trigger, pro_claim_job, jobs_enforce_claim_radius,
+--   row, trigger, jobs_enforce_claim_radius,
 --   haven_caller_within_radius, pricing, fees, reimbursement, materials
 --   (0025 / 0026 / 0028), inspection (0029), posting validation (0031), or the
 --   job status ladder.
@@ -113,6 +143,40 @@ begin
      or not exists (select 1 from pg_policies
                   where schemaname = 'public' and tablename = 'jobs' and policyname = 'jobs_select_own_customer') then
     raise exception '0030: 0027 policies jobs_select_assigned_pro / jobs_select_own_customer missing. Apply 0027 first. Nothing was changed.';
+  end if;
+  -- Version guard: only 0023's bodies (or this file's, for a re-run) are replaced.
+  if (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.jobs_posted_within_radius()'))
+     not in ('a4c9a1460149dfc69884d29aee779999',  -- 0023
+             '52b6bff79c99a734c8da2521ce6cbbb8') then -- 0030 (this file)
+    raise exception '0030: jobs_posted_within_radius() body (md5 %) is neither 0023 nor 0030. Diff the live definition first. Nothing was changed.',
+      (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.jobs_posted_within_radius()'));
+  end if;
+  if to_regprocedure('public.pro_claim_job(uuid)') is null then
+    raise exception '0030: public.pro_claim_job(uuid) missing. Nothing was changed.';
+  end if;
+  if (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.pro_claim_job(uuid)'))
+     not in ('4760bcab07cf0bf907addf67036f2da7',  -- 0023
+             '789cb65e77775da031012f78227d76ad') then -- 0030 (this file)
+    raise exception '0030: pro_claim_job(uuid) body (md5 %) is neither 0023 nor 0030. Diff the live definition first. Nothing was changed.',
+      (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.pro_claim_job(uuid)'));
+  end if;
+  -- The busy-Pro refusal in (c) mirrors this index; it must exist with the six active statuses.
+  if not exists (
+       select 1
+         from pg_index i
+         join pg_class c on c.oid = i.indexrelid
+        where c.relname = 'one_active_job_per_pro'
+          and c.relnamespace = 'public'::regnamespace
+          and i.indrelid = 'public.jobs'::regclass
+          and i.indisunique
+          and (select count(*) from regexp_matches(pg_get_expr(i.indpred, i.indrelid), '''[a-z_]+''::', 'g')) = 6
+          and pg_get_expr(i.indpred, i.indrelid) like '%''en_route''%'
+          and pg_get_expr(i.indpred, i.indrelid) like '%''arrived''%'
+          and pg_get_expr(i.indpred, i.indrelid) like '%''diagnosing''%'
+          and pg_get_expr(i.indpred, i.indrelid) like '%''materials_requested''%'
+          and pg_get_expr(i.indpred, i.indrelid) like '%''materials_approved''%'
+          and pg_get_expr(i.indpred, i.indrelid) like '%''in_progress''%') then
+    raise exception '0030: unique index public.one_active_job_per_pro (six active statuses) missing or different. Nothing was changed.';
   end if;
   select relowner into jobs_owner from pg_class where oid = 'public.jobs'::regclass;
   select proowner into fn_owner from pg_proc where oid = to_regprocedure('public.jobs_posted_within_radius()');
@@ -152,7 +216,7 @@ returns table (
 language sql
 stable
 security definer
-set search_path = public
+set search_path = pg_catalog, public, pg_temp
 as $$
   select
     j.id,
@@ -204,7 +268,7 @@ returns jsonb
 language plpgsql
 stable
 security definer
-set search_path = public
+set search_path = pg_catalog, public, pg_temp
 as $$
 declare
   v_uid uuid := auth.uid();
@@ -258,6 +322,81 @@ revoke all on function public.get_assigned_job_destination(uuid) from public;
 revoke all on function public.get_assigned_job_destination(uuid) from anon;
 grant execute on function public.get_assigned_job_destination(uuid) to authenticated;
 
+-- ── (c) pro_claim_job: busy-Pro refusal before the radius check (QA C1) ──
+-- Based on 0023's body (the latest definition on master). The only changes:
+-- the active-job refusal block below, and search_path (H1).
+create or replace function public.pro_claim_job(job_id uuid)
+returns setof public.jobs
+language plpgsql
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_pro uuid := auth.uid();
+  v_lat numeric;
+  v_lng numeric;
+  claimed public.jobs;
+begin
+  if v_pro is null then
+    raise exception 'claim requires auth.uid()'
+      using errcode = '28000';
+  end if;
+
+  select j.lat, j.lng
+    into v_lat, v_lng
+  from public.jobs j
+  where j.id = job_id
+    and j.status = 'posted'
+    and j.pro_id is null;
+
+  if not found then
+    raise exception 'job not claimable'
+      using errcode = 'P0002';
+  end if;
+
+  -- C1: one active job per Pro, refused before any location check, with the
+  -- same error the one_active_job_per_pro unique index raises today.
+  if exists (select 1
+               from public.jobs a
+              where a.pro_id = v_pro
+                and a.status in ('en_route', 'arrived', 'diagnosing',
+                                 'materials_requested', 'materials_approved', 'in_progress')) then
+    raise exception 'duplicate key value violates unique constraint "one_active_job_per_pro"'
+      using errcode = '23505',
+            detail = format('Key (pro_id)=(%s) already exists.', v_pro),
+            schema = 'public',
+            table = 'jobs',
+            constraint = 'one_active_job_per_pro';
+  end if;
+
+  if not public.haven_caller_within_radius(v_lat, v_lng) then
+    raise exception 'job outside operating radius'
+      using errcode = 'P0001';
+  end if;
+
+  update public.jobs j
+  set
+    status = 'en_route',
+    pro_id = v_pro,
+    accepted_at = timezone('utc', now())
+  where j.id = job_id
+    and j.status = 'posted'
+    and j.pro_id is null
+  returning j.* into claimed;
+
+  if claimed.id is null then
+    raise exception 'job not claimable'
+      using errcode = 'P0002';
+  end if;
+
+  return next claimed;
+end;
+$$;
+
+revoke all on function public.pro_claim_job(uuid) from public;
+revoke all on function public.pro_claim_job(uuid) from anon;
+grant execute on function public.pro_claim_job(uuid) to authenticated;
+
 -- ── Post-checks (inside the transaction; any failure rolls everything back)
 do $$
 declare
@@ -266,9 +405,13 @@ declare
 begin
   select relowner into jobs_owner from pg_class where oid = 'public.jobs'::regclass;
   foreach fn in array array[to_regprocedure('public.jobs_posted_within_radius()'),
-                            to_regprocedure('public.get_assigned_job_destination(uuid)')] loop
+                            to_regprocedure('public.get_assigned_job_destination(uuid)'),
+                            to_regprocedure('public.pro_claim_job(uuid)')] loop
     if not (select prosecdef from pg_proc where oid = fn) then
       raise exception '0030 post-check: % is not SECURITY DEFINER', fn::regprocedure;
+    end if;
+    if (select proconfig from pg_proc where oid = fn) is distinct from array['search_path=pg_catalog, public, pg_temp'] then
+      raise exception '0030 post-check: % search_path is not pg_catalog, public, pg_temp', fn::regprocedure;
     end if;
     if (select proowner from pg_proc where oid = fn) <> jobs_owner
        and not exists (select 1 from pg_roles r join pg_proc p on p.proowner = r.oid
@@ -293,14 +436,19 @@ commit;
 --        has_function_privilege('authenticated', p.oid, 'EXECUTE') as auth_exec
 --   from pg_proc p
 --  where p.oid in ('public.jobs_posted_within_radius()'::regprocedure,
---                  'public.get_assigned_job_destination(uuid)'::regprocedure);
--- Expect: both prosecdef = t, provolatile = s, proconfig = {search_path=public},
--- owner = owner of public.jobs, anon_exec = f, auth_exec = t.
+--                  'public.get_assigned_job_destination(uuid)'::regprocedure,
+--                  'public.pro_claim_job(uuid)'::regprocedure);
+-- Expect: all three prosecdef = t, proconfig = {"search_path=pg_catalog, public, pg_temp"},
+-- owner = owner of public.jobs, anon_exec = f, auth_exec = t; provolatile = s
+-- for the board and the RPC, v for pro_claim_job (unchanged from 0023).
+-- Body md5 (md5(prosrc)): board 52b6bff79c99a734c8da2521ce6cbbb8, pro_claim_job 789cb65e77775da031012f78227d76ad
+-- (0023: board a4c9a1460149dfc69884d29aee779999, pro_claim_job 4760bcab07cf0bf907addf67036f2da7).
 
 -- ── Rollback (only if this file must be undone; NOT AUTHORIZED) ─────────
 -- Identical to supabase/rollback/0030_assigned_job_destination_rollback.sql.
 -- Restores 0023's board exactly (exact lat/lng, exact distance and exact-point radius
--- filter; removes the grid-cell coarsening) and drops the RPC. Run the lines between begin and commit.
+-- filter; removes the grid-cell coarsening), restores 0023's pro_claim_job exactly
+-- (removes the C1 reordering) and drops the RPC. Run the lines between begin and commit.
 -- begin;
 --
 -- create or replace function public.jobs_posted_within_radius()
@@ -358,6 +506,66 @@ commit;
 -- revoke all on function public.jobs_posted_within_radius() from public;
 -- revoke all on function public.jobs_posted_within_radius() from anon;
 -- grant execute on function public.jobs_posted_within_radius() to authenticated;
+--
+-- -- pro_claim_job exactly as 0023 defined it (body md5 4760bcab07cf0bf907addf67036f2da7).
+-- -- Claim stays posted + unassigned to en_route with pro_id = auth.uid().
+-- -- Out of radius, or missing coordinates, raises and does not assign.
+-- create or replace function public.pro_claim_job(job_id uuid)
+-- returns setof public.jobs
+-- language plpgsql
+-- security definer
+-- set search_path = public
+-- as $$
+-- declare
+--   v_pro uuid := auth.uid();
+--   v_lat numeric;
+--   v_lng numeric;
+--   claimed public.jobs;
+-- begin
+--   if v_pro is null then
+--     raise exception 'claim requires auth.uid()'
+--       using errcode = '28000';
+--   end if;
+--
+--   select j.lat, j.lng
+--     into v_lat, v_lng
+--   from public.jobs j
+--   where j.id = job_id
+--     and j.status = 'posted'
+--     and j.pro_id is null;
+--
+--   if not found then
+--     raise exception 'job not claimable'
+--       using errcode = 'P0002';
+--   end if;
+--
+--   if not public.haven_caller_within_radius(v_lat, v_lng) then
+--     raise exception 'job outside operating radius'
+--       using errcode = 'P0001';
+--   end if;
+--
+--   update public.jobs j
+--   set
+--     status = 'en_route',
+--     pro_id = v_pro,
+--     accepted_at = timezone('utc', now())
+--   where j.id = job_id
+--     and j.status = 'posted'
+--     and j.pro_id is null
+--   returning j.* into claimed;
+--
+--   if claimed.id is null then
+--     raise exception 'job not claimable'
+--       using errcode = 'P0002';
+--   end if;
+--
+--   return next claimed;
+-- end;
+-- $$;
+--
+-- revoke all on function public.pro_claim_job(uuid) from public;
+-- revoke all on function public.pro_claim_job(uuid) from anon;
+-- grant execute on function public.pro_claim_job(uuid) to authenticated;
 --
 -- drop function if exists public.get_assigned_job_destination(uuid);
 --

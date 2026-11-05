@@ -320,8 +320,8 @@ def matrix(db, g):
                               "|| (select count(*) from aclexplode(p.proacl) a where a.grantee = 0) || '|' "
                               "|| (p.proowner = (select relowner from pg_class where oid = 'public.jobs'::regclass)) "
                               "from pg_proc p where p.oid = 'public.get_assigned_job_destination(uuid)'::regprocedure")
-    check(g, 'RPC: SECURITY DEFINER, STABLE, search_path=public, jsonb, anon no, authenticated yes, PUBLIC no, owner=jobs owner',
-          props, 'true|s|search_path=public|jsonb|false|true|0|true')
+    check(g, 'RPC: SECURITY DEFINER, STABLE, search_path=pg_catalog, public, pg_temp, jsonb, anon no, authenticated yes, PUBLIC no, owner=jobs owner',
+          props, 'true|s|search_path=pg_catalog, public, pg_temp|jsonb|false|true|0|true')
     check(g, 'RPC body has no INSERT/UPDATE/DELETE/PERFORM',
           q(db, 'postgres', "select prosrc !~* '\\m(insert|update|delete|perform|execute)\\M' from pg_proc "
                             "where oid = 'public.get_assigned_job_destination(uuid)'::regprocedure"), 't')
@@ -329,8 +329,8 @@ def matrix(db, g):
                                "|| has_function_privilege('anon', p.oid, 'EXECUTE') || '|' || has_function_privilege('authenticated', p.oid, 'EXECUTE') "
                                "|| '|' || (select count(*) from aclexplode(p.proacl) a where a.grantee = 0) "
                                "from pg_proc p where p.oid = 'public.jobs_posted_within_radius()'::regprocedure")
-    check(g, 'board: SECURITY DEFINER, STABLE, search_path=public, anon no, authenticated yes, PUBLIC no',
-          bprops, 'true|s|search_path=public|false|true|0')
+    check(g, 'board: SECURITY DEFINER, STABLE, search_path=pg_catalog, public, pg_temp, anon no, authenticated yes, PUBLIC no',
+          bprops, 'true|s|search_path=pg_catalog, public, pg_temp|false|true|0')
 
 
 # ── B1: board grid + triangulation attacks ────────────────────────────────
@@ -598,6 +598,206 @@ def grid_checks(db, g):
           isinstance(b, dict) and E['lat95'][0] in b, True)
 
 
+# ── C1: pro_claim_job busy-Pro oracle; H1: search_path ───────────────────
+SP_PINNED = 'search_path=pg_catalog, public, pg_temp'
+CLAIM_MD5_0030 = '789cb65e77775da031012f78227d76ad'   # md5(prosrc) of 0030's pro_claim_job
+RACE_LOSER = ['ERROR:  P0002: job not claimable']     # today's (0023) loser response
+J_RACE = 'e0300000-0000-4000-8000-0000000000b1'
+J_NOPT = 'e0300000-0000-4000-8000-0000000000b2'   # posted job without coordinates
+
+
+def qerr(db, who, sql, setup=''):
+    """Like q(), but returns the full error a client sees: sqlstate, message, detail, hint and the
+    schema/table/constraint fields (psql VERBOSITY verbose). CONTEXT / LOCATION are server-internal
+    (PostgREST does not send them) and are dropped. Success returns ('OK', rows)."""
+    r = psql(db, "\\set VERBOSITY verbose\nbegin;\n" + (owner_setup(setup) if setup else '') + as_actor(who) + sql + ";\nrollback;\n")
+    if r.returncode == 0 and 'ERROR:' not in r.stderr:
+        return ('OK', ','.join(l for l in r.stdout.splitlines() if l.strip()))
+    out, keep = [], False
+    for l in r.stderr.splitlines():
+        m = re.match(r'^psql:.*?ERROR:\s+(\w{5}): (.*)$', l) or re.match(r'^ERROR:\s+(\w{5}): (.*)$', l)
+        if m:
+            out = [('code', m.group(1)), ('message', m.group(2))]; keep = True; continue
+        if keep:
+            m = re.match(r'^(DETAIL|HINT|SCHEMA NAME|TABLE NAME|CONSTRAINT NAME|COLUMN NAME|DATATYPE NAME):\s+(.*)$', l)
+            if m:
+                out.append((m.group(1), m.group(2)))
+    return tuple(out) if out else ('ERR?', r.stderr.strip()[:300])
+
+
+def claim_sql(jid, pt=None, r=25):
+    return (set_own(pt, r) if pt else '') + f"select id || '|' || status || '|' || pro_id || '|' || (accepted_at is not null) from public.pro_claim_job('{jid}')"
+
+
+def claim_cases():
+    """(label, actor, sql, setup) cases whose client-visible response must be the same before and after 0030,
+    plus the busy-Pro cases that 0030 is meant to change."""
+    sec_in, sec_out = (round(T1[0] + 0.01, 6), round(T1[1], 6)), (40.712776, -74.005974)
+    nopt = job_insert(J_NOPT, None)
+    same = [
+        ('free Pro P2, job inside radius: claimed (row)', 'P2', claim_sql(J_SEC1, sec_in), SEC_SETUP),
+        ('free Pro P2, job outside radius: P0001', 'P2', claim_sql(J_SEC1, sec_out), SEC_SETUP),
+        ('free Pro P2, job without coordinates: P0001', 'P2', claim_sql(J_NOPT, sec_in), nopt),
+        ('free Pro P2, nonexistent job: P0002', 'P2', claim_sql(J_NONE, sec_in), ''),
+        ('free Pro P2, job already assigned (J1): P0002', 'P2', claim_sql(J1, sec_in), ''),
+        ('busy Pro P1, job already assigned (J_other): P0002 (not-claimable first, as today)', 'P1', claim_sql(J_OTHER), ''),
+        ('busy Pro P1, nonexistent job: P0002', 'P1', claim_sql(J_NONE), ''),
+        ('busy Pro P1, job inside radius: 23505 one_active_job_per_pro', 'P1', claim_sql(J_SEC1, sec_in), SEC_SETUP),
+        ('signed-in, no sub: 28000', 'nosub', claim_sql(J_SEC1), SEC_SETUP),
+        ('anon: permission denied', 'anon', claim_sql(J_SEC1), SEC_SETUP),
+        ('P1 no longer busy (J1 complete), job inside: claimed (row)', 'P1', claim_sql(J_SEC1, sec_in),
+         SEC_SETUP + f";\nupdate public.jobs set status = 'complete' where id = '{J1}'"),
+        ('P1 no longer busy (J1 complete), job outside: P0001', 'P1', claim_sql(J_SEC1, sec_out),
+         SEC_SETUP + f";\nupdate public.jobs set status = 'complete' where id = '{J1}'"),
+    ]
+    changed = [
+        ('busy Pro P1, job OUTSIDE radius', 'P1', claim_sql(J_SEC1, sec_out), SEC_SETUP),
+        ('busy Pro P1, job without coordinates', 'P1', claim_sql(J_NOPT, sec_in), nopt),
+        ('busy Pro P1, job inside but radius 5 from far away', 'P1', claim_sql(J_SEC1, sec_out, 5), SEC_SETUP),
+    ]
+    for st in ACTIVE:
+        changed.append((f'busy Pro P1 (J1 {st}), job outside radius', 'P1', claim_sql(J_SEC1, sec_out),
+                        SEC_SETUP + f";\nupdate public.jobs set status = '{st}' where id = '{J1}'"))
+    return same, changed
+
+
+def claim_baseline(db):
+    same, changed = claim_cases()
+    return {lbl: qerr(db, who, sql, st) for lbl, who, sql, st in same + changed}
+
+
+def c1_checks(db, g, base):
+    same, changed = claim_cases()
+    busy_ref = base['busy Pro P1, job inside radius: 23505 one_active_job_per_pro']
+    check(g, 'reference (before 0030): busy Pro, job inside -> 23505 from the unique index', busy_ref,
+          (('code', '23505'), ('message', 'duplicate key value violates unique constraint "one_active_job_per_pro"'),
+           ('DETAIL', f'Key (pro_id)=({P1}) already exists.'), ('SCHEMA NAME', 'public'), ('TABLE NAME', 'jobs'),
+           ('CONSTRAINT NAME', 'one_active_job_per_pro')))
+    for lbl, who, sql, st in same:
+        got = qerr(db, who, sql, st)
+        check(g, f'claim unchanged vs before 0030: {lbl}', got, base[lbl])
+    for lbl, who, sql, st in changed:
+        got = qerr(db, who, sql, st)
+        check(g, f'C1: {lbl} -> identical to busy+inside 23505 (before 0030: {base[lbl][0][1] if base[lbl][0][0] == "code" else base[lbl][0]})',
+              got, busy_ref)
+    # busy-Pro sweep: identical responses everywhere, and the attack learns nothing
+    import random
+    rnd = random.Random(31)
+    script = "\\set VERBOSITY verbose\n\\set ON_ERROR_STOP 0\nbegin;\n" + owner_setup(SEC_SETUP) + as_actor('P1')
+    pts = [(move(KC, rnd.uniform(0, 2 * math.pi), rnd.uniform(0, 60)), rnd.choice((5, 10, 15, 25, 50))) for _ in range(120)]
+    for pt, rr in pts:
+        script += "savepoint s;\n" + set_own(pt, rr) + f"select 1 from public.pro_claim_job('{J_SEC1}');\nrollback to savepoint s;\n"
+    script += "rollback;\n"
+    r = psql(db, script, stop=False)
+    errs = [l for l in r.stderr.splitlines() if 'ERROR:' in l]
+    kinds = sorted(set(re.sub(r'^psql:[^:]*:\d+: ', '', l) for l in errs))
+    inside = sum(1 for pt, rr in pts if hav((round(pt[0], 6), round(pt[1], 6)), T1) <= rr)
+    check(g, f'C1 sweep: busy Pro, 120 operating points/radii ({inside} inside, {120 - inside} outside): one identical error for all',
+          (len(errs), kinds), (120, ['ERROR:  23505: duplicate key value violates unique constraint "one_active_job_per_pro"']))
+
+
+def c1_attack_check(db, g, control=False):
+    class ClaimOracle:
+        def __init__(self):
+            self.calls = 0
+
+        def board(self, pt, rr):
+            self.calls += 1
+            got = q(db, 'P1', set_own(pt, rr) + f"select 1 from public.pro_claim_job('{J_SEC1}')", setup=SEC_SETUP)
+            if got.startswith('ERR:') and got not in ('ERR:job outside operating radius',
+                                                     'ERR:duplicate key value violates unique constraint "one_active_job_per_pro"'):
+                raise SystemExit('claim oracle: unexpected ' + got)
+            return None if got == 'ERR:job outside operating radius' else 1
+    o = ClaimOracle()
+    E = attack_radius(o)
+    e_true, e_cell = hav(E, T1) * 1609.344, hav(E, KC) * 1609.344
+    tag = (f'C1 attack replay (busy Pro P1 sweeps own point, radius 5, claim responses as oracle; {o.calls} claim calls): '
+           f'err_true {e_true:.2f} m')
+    if control:
+        check(g, f'[control, 0023 pro_claim_job] {tag}: recovers the true point (< 5 m)', e_true < 5, True)
+    else:
+        check(g, f'{tag}: no better than the grid cell (>= true-to-centre {hav(KC, T1) * 1609.344:.0f} m)',
+              e_true >= hav(KC, T1) * 1609.344 - 5, True)
+
+
+def race(db, g, label, expect_loser):
+    """Two free Pros claim one committed job at the same time. Winner holds its transaction 1.5 s."""
+    import time
+    setup = (f"insert into public.jobs(id, customer_id, pro_id, status, category, title, city_label, lat, lng, "
+             f"fixed_customer_labor_price_cents, fixed_pro_labor_payout_cents) values ('{J_RACE}', '{C2}', null, 'posted', "
+             f"'Plumbing', 'race', 'Orlando, FL', {NEAR[0]}, {NEAR[1]}, 8900, 7120);\n"
+             f"update public.jobs set status = 'complete' where id = '{J1}';\n")   # P1 free for the race
+    must(db, "set session_replication_role = replica;\n" + setup)
+    base = PSQL + ['-d', db]
+    win = subprocess.Popen(base + ['-v', 'ON_ERROR_STOP=1'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, text=True)
+    win_sql = ("begin;\n" + as_actor('P2') + f"select id || '|' || status || '|' || pro_id from public.pro_claim_job('{J_RACE}');\n"
+               "select pg_sleep(1.5);\ncommit;\n")
+    win.stdin.write(win_sql); win.stdin.close()
+    time.sleep(0.5)
+    loser = subprocess.run(base + ['-v', 'ON_ERROR_STOP=1'],
+                           input="\\set VERBOSITY verbose\nbegin;\n" + as_actor('P1') + f"select 1 from public.pro_claim_job('{J_RACE}');\ncommit;\n",
+                           capture_output=True, text=True)
+    wout = win.stdout.read(); win.wait()
+    lerr = [re.sub(r'^psql:[^:]*:\d+: ', '', l) for l in loser.stderr.splitlines() if 'ERROR:' in l]
+    final = must(db, f"select status || '|' || pro_id from public.jobs where id = '{J_RACE}'").strip()
+    must(db, f"set session_replication_role = replica;\ndelete from public.jobs where id = '{J_RACE}';\n"
+             f"update public.jobs set status = 'en_route' where id = '{J1}';\n")
+    check(g, f'{label}: winner P2 gets the claimed row, job en_route for P2', (f'{J_RACE}|en_route|{P2}' in wout, final),
+          (True, f'en_route|{P2}'))
+    check(g, f'{label}: loser P1 response', lerr, expect_loser)
+    return lerr
+
+
+def h1_checks(db, g):
+    rows = q(db, 'postgres', "select string_agg(p.proname || '=' || coalesce(array_to_string(p.proconfig, ';'), ''), ',' order by p.proname) "
+                             "from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in "
+                             "('jobs_posted_within_radius','get_assigned_job_destination','pro_claim_job',"
+                             "'haven_caller_within_radius','haven_profile_radius_miles','haven_distance_miles','jobs_enforce_claim_radius')")
+    got = dict(x.split('=', 1) for x in rows.split(','))
+    for fn in ('jobs_posted_within_radius', 'get_assigned_job_destination', 'pro_claim_job'):
+        check(g, f'H1: {fn} proconfig = {{"{SP_PINNED}"}}', got.get(fn), SP_PINNED)
+    for fn in ('haven_caller_within_radius', 'haven_profile_radius_miles', 'haven_distance_miles', 'jobs_enforce_claim_radius'):
+        check(g, f'H1: 0023 {fn} left alone (search_path=public)', got.get(fn), 'search_path=public')
+    for fn in ('jobs_posted_within_radius()', 'get_assigned_job_destination(uuid)', 'pro_claim_job(uuid)'):
+        check(g, f'H1: {fn} is SECURITY DEFINER, owner = jobs owner, anon no, authenticated yes',
+              q(db, 'postgres', f"select p.prosecdef || '|' || (p.proowner = (select relowner from pg_class where oid = 'public.jobs'::regclass)) "
+                                f"|| '|' || has_function_privilege('anon', p.oid, 'EXECUTE') || '|' || has_function_privilege('authenticated', p.oid, 'EXECUTE') "
+                                f"from pg_proc p where p.oid = 'public.{fn}'::regprocedure"), 'true|true|false|true')
+    # Quagon's pg_temp type-shadow probe (pg_temp.text domain whose CHECK runs the caller's function).
+    leak = ("create function pg_temp.leak(v varchar) returns boolean language plpgsql as $f$ declare r record; begin "
+            "for r in select lat, lng from public.jobs where lat is not null loop raise notice 'LEAK as % % %', current_user, r.lat, r.lng; end loop; "
+            "return true; end $f$;\ncreate domain pg_temp.text as varchar check (pg_temp.leak(value));\n")
+    r = psql(db, "begin;\n" + as_actor('P2') + leak + rpc(J1) + ";\nrollback;\n", stop=False)
+    check(g, 'H1: pg_temp.text shadow does not run inside get_assigned_job_destination (no LEAK, not_found)',
+          ('LEAK' in r.stderr, NOT_FOUND in r.stdout), (False, True))
+    r = psql(db, "begin;\n" + as_actor('P1') + leak + f"select 1 from public.pro_claim_job('{J_NONE}');\nrollback;\n", stop=False)
+    check(g, "H1: pg_temp.text shadow does not run inside pro_claim_job's own body (no LEAK)", 'LEAK' in r.stderr, False)
+    # Informational (not a check): the board and pro_claim_job still call 0023 helpers that pin
+    # search_path = public only (brief: leave them alone); report whether the shadow reaches them.
+    r = psql(db, "begin;\n" + as_actor('P2') + leak + "select count(*) from public.jobs_posted_within_radius();\nrollback;\n", stop=False)
+    ctx = sorted(set(m for m in re.findall(r'PL/pgSQL function (\w+)\(', r.stderr)))
+    print(f"INFO [{g}] board + pg_temp.text shadow: LEAK={'LEAK' in r.stderr} via {ctx or '-'} (0023 helper; residual, see report)")
+    num = ("create function pg_temp.leakn(v numeric) returns boolean language plpgsql as $f$ declare r record; begin "
+           "for r in select lat from public.jobs where lat is not null loop raise notice 'LEAK as % %', current_user, r.lat; end loop; "
+           "return true; end $f$;\ncreate domain pg_temp.numeric as pg_catalog.numeric check (pg_temp.leakn(value));\n")
+    r = psql(db, "begin;\n" + owner_setup(SEC_SETUP) + as_actor('P2') + num + f"select 1 from public.pro_claim_job('{J_SEC1}');\nrollback;\n", stop=False)
+    ctx = sorted(set(m for m in re.findall(r'PL/pgSQL function (\w+)\(', r.stderr)))
+    print(f"INFO [{g}] pro_claim_job + pg_temp.numeric shadow: LEAK={'LEAK' in r.stderr} via {ctx or '-'} (0023 helper; residual, see report)")
+
+
+def lat90_check(db, g):
+    """Quagon's survivor: lat clamp. A job at exactly +90 must land in row 17999 (cell_lat 89.995), not 90.005."""
+    j90 = 'e0300000-0000-4000-8000-0000000000c9'
+    got = q(db, 'P2', set_own((89.995, 0.0), 5) + f"select distance_mi::float8 from public.jobs_posted_within_radius() where id = '{j90}'",
+            setup=job_insert(j90, (90, 45)))
+    check(g, 'lat clamp: job at lat +90.000000 -> cell row 17999 (centre 89.995, 0): distance 0 from (89.995, 0)', got, '0')
+    jm = 'e0300000-0000-4000-8000-0000000000ca'
+    got = q(db, 'P2', set_own((-89.995, 0.0), 5) + f"select distance_mi::float8 from public.jobs_posted_within_radius() where id = '{jm}'",
+            setup=job_insert(jm, (-90, -45)))
+    check(g, 'lat clamp: job at lat -90.000000 -> row 0 (centre -89.995, 0): distance 0', got, '0')
+
+
 BOARD_COLS = ("id, category, title, fixed_pro_labor_payout_cents, requires_diagnosis, city_label, emergency, posted_at, "
               "status, pro_id, inspection_fee_cents")
 
@@ -628,8 +828,20 @@ def main():
     pre_sig = q(db, 'postgres', "select pg_get_function_result('public.jobs_posted_within_radius()'::regprocedure) || '|' || pg_get_function_identity_arguments('public.jobs_posted_within_radius()'::regprocedure)")
     pre_board = {w: q(db, w, f"select {BOARD_COLS} from public.jobs_posted_within_radius()") for w in ('P1', 'P2', 'P3', 'C1')}
 
+    claim_base = claim_baseline(db)
+    pre_claim_md5 = q(db, 'postgres', "select md5(prosrc) from pg_proc where oid = 'public.pro_claim_job(uuid)'::regprocedure")
+    check(G, 'before 0030: pro_claim_job body is 0023 (md5 4760bcab...)', pre_claim_md5, '4760bcab07cf0bf907addf67036f2da7')
+    c1_attack_check(db, 'c1-control', control=True)
+    race(db, 'c1-race', 'race before 0030 (0023 pro_claim_job)', RACE_LOSER)
     rc, err = apply_file(db, F30)
     check('apply', '0030 applies cleanly on master + 0027', rc, 0)
+    check('apply', 'pro_claim_job body md5 after 0030',
+          q(db, 'postgres', "select md5(prosrc) from pg_proc where oid = 'public.pro_claim_job(uuid)'::regprocedure"), CLAIM_MD5_0030)
+    c1_checks(db, 'c1', claim_base)
+    c1_attack_check(db, 'c1')
+    race(db, 'c1-race', 'race after 0030', RACE_LOSER)
+    h1_checks(db, 'h1')
+    lat90_check(db, 'grid')
     grid_checks(db, 'grid')
     triangulation(db, 'b1-triangulation')
     indistinguishable(db, 'b1-triangulation')
@@ -637,9 +849,9 @@ def main():
         print(err)
     post1 = state(db)
     d = diff(pre, post1)
-    allowed = [x for x in d if re.match(r'^[+-]fn\|(jobs_posted_within_radius\(\)|get_assigned_job_destination\(uuid\))\|', x)]
-    check('apply', '0030 changes only the board function + new RPC (policies, triggers, grants, tables, rows untouched)',
-          len(d) == len(allowed) and len(allowed) == 3, True)
+    allowed = [x for x in d if re.match(r'^[+-]fn\|(jobs_posted_within_radius\(\)|get_assigned_job_destination\(uuid\)|pro_claim_job\(uuid\))\|', x)]
+    check('apply', '0030 changes only the board, pro_claim_job + new RPC (policies, triggers, grants, tables, rows untouched)',
+          len(d) == len(allowed) and len(allowed) == 5, True)
     check('apply', 'board signature unchanged', q(db, 'postgres', "select pg_get_function_result('public.jobs_posted_within_radius()'::regprocedure) || '|' || pg_get_function_identity_arguments('public.jobs_posted_within_radius()'::regprocedure)"), pre_sig)
     for w, v in pre_board.items():
         check('apply', f'board {w}: every non-location column/row/order identical to before 0030',
@@ -654,6 +866,11 @@ def main():
     rc, err = apply_file(db, R30)
     check('rollback', 'rollback applies cleanly', rc, 0)
     check('rollback', 'state after rollback == state before 0030 (byte-for-byte defs, ACLs, policies, rows)', diff(pre, state(db)), [])
+    check('rollback', 'after rollback: pro_claim_job prosrc md5 == before 0030 (0023)',
+          q(db, 'postgres', "select md5(prosrc) || '|' || array_to_string(proconfig, ',') from pg_proc where oid = 'public.pro_claim_job(uuid)'::regprocedure"),
+          pre_claim_md5 + '|search_path=public')
+    check('rollback', 'after rollback: claim responses == before 0030 (busy Pro outside radius is P0001 again)',
+          claim_baseline(db) == claim_base, True)
     check('rollback', 'after rollback: RPC absent', q(db, 'postgres', "select coalesce(to_regprocedure('public.get_assigned_job_destination(uuid)')::text, 'absent')"), 'absent')
     check('rollback', 'after rollback: board back to 0023 behaviour (exact lat)',
           q(db, 'P2', "select lat || ',' || lng from public.jobs_posted_within_radius()"), f'{POST[0]},{POST[1]}')
