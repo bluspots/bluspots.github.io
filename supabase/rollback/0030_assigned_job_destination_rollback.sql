@@ -3,7 +3,8 @@
 -- single run, as the database owner. Wrapped in BEGIN/COMMIT.
 --
 -- Restores public.jobs_posted_within_radius() exactly as 0023 defined it
--- (exact lat/lng and full-precision distance_mi return; same signature,
+-- (exact lat/lng and full-precision distance_mi return, radius filter on the
+-- exact point; this removes 0030's grid-cell coarsening; same signature,
 -- SECURITY DEFINER, search_path, grants) and drops
 -- public.get_assigned_job_destination(uuid). Touches nothing else: no
 -- policy, table, row, trigger or other function. 0027 stays applied.

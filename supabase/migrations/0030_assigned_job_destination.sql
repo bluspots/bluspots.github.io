@@ -23,10 +23,37 @@
 -- What changes
 --   (a) jobs_posted_within_radius(): SAME signature and return columns
 --       (create or replace, no drop, so the deployed Pro build keeps working).
---       lat and lng are always null. distance_mi is rounded to the nearest
---       0.5 mi (round(d * 2) / 2). The radius filter
---       still uses the exact distance. Every other column, filter, order,
---       SECURITY DEFINER, search_path and grant is unchanged from 0023.
+--       lat and lng are always null. BOTH distance_mi AND the radius filter
+--       are computed from a coarse job point (the centre of the job's grid
+--       cell, see "Board grid" below), never from the exact jobs.lat/lng, so
+--       sweeping one's own operating point / travelRadius and watching jobs
+--       appear, disappear or change distance step reveals at most the cell
+--       (QA B1). distance_mi = round(d * 2) / 2 with d = distance from the
+--       caller's operating point to that cell centre. Every other column,
+--       filter, order, SECURITY DEFINER, search_path and grant is unchanged
+--       from 0023. No column, table or helper function is added.
+--       The exact point is still used by pro_claim_job /
+--       jobs_enforce_claim_radius (unchanged) and by (b).
+--
+-- Board grid (computed inline in the board's SQL, fixed per job: depends
+--   only on the job's stored lat/lng, never on the caller):
+--     row      = floor((lat + 90) / 0.01), clamped to 0 .. 17999
+--     cell_lat = -90 + (row + 0.5) * 0.01             (0.01 deg = 0.69 mi)
+--     n        = greatest(1, floor(36000 * cos(cell_lat)))  cells in that row
+--     col      = floor((lng + 180) * n / 360) mod n   (wraps at +/-180)
+--     cell_lng = -180 + (col + 0.5) * 360 / n
+--   So every cell is 0.01 deg of latitude by 0.01 deg / cos(cell_lat) of
+--   longitude: ~0.69 mi x ~0.69 mi at any latitude (Orlando 28.5 N: n = 31635,
+--   0.01138 deg lng). The integer n per row tiles 360 deg exactly, so the
+--   antimeridian is a normal cell edge (lng 180 and -180 land in the same
+--   cell). Near the poles n shrinks to 3 (lat 89.995) and never below 1;
+--   lat +/-90 are clamped into the last row. Null lat or lng: no cell, the
+--   job is not listed (as before). Worst case the true point is ~0.49 mi
+--   (half the cell diagonal) from the cell centre.
+--   Consequence: a job up to ~0.49 mi outside a Pro's radius can be listed
+--   and then refused by pro_claim_job ("job outside operating radius"), and
+--   a job up to ~0.49 mi inside can be unlisted; distance_mi can differ from
+--   the true distance by up to ~0.49 mi before the 0.5 mi rounding.
 --   (b) New public.get_assigned_job_destination(p_job_id uuid) returns jsonb.
 --       STABLE, SECURITY DEFINER, search_path pinned, read-only (one SELECT,
 --       no writes, no lifecycle change). EXECUTE: authenticated only.
@@ -104,7 +131,7 @@ begin
 end
 $$;
 
--- ── (a) Board: same signature, no exact point, rounded distance ──────────
+-- ── (a) Board: same signature, no exact point, grid-cell distance + filter ─
 create or replace function public.jobs_posted_within_radius()
 returns table (
   id uuid,
@@ -141,9 +168,19 @@ as $$
     j.status::text,
     j.pro_id,
     j.inspection_fee_cents,
-    round(public.haven_distance_miles(p.operating_lat, p.operating_lng, j.lat, j.lng) * 2) / 2
+    round(public.haven_distance_miles(p.operating_lat, p.operating_lng, g.cell_lat, g.cell_lng) * 2) / 2
   from public.jobs j
   join public.profiles p on p.id = auth.uid()
+  -- Coarse job point (B1): centre of the job's ~0.69 x 0.69 mi grid cell.
+  -- Fixed per job; the exact j.lat / j.lng never reach the output or the filter.
+  cross join lateral (
+    select c.cell_lat,
+           -180 + (mod(mod(floor((j.lng + 180) * c.n / 360), c.n) + c.n, c.n) + 0.5) * 360 / c.n as cell_lng
+      from (select r.cell_lat,
+                   greatest(1, floor(36000 * cos(radians(r.cell_lat::double precision))))::numeric as n
+              from (select -90 + (least(greatest(floor((j.lat + 90) / 0.01), 0), 17999) + 0.5) * 0.01 as cell_lat) r) c
+     where j.lat is not null and j.lng is not null
+  ) g
   where auth.uid() is not null
     and j.status = 'posted'
     and j.pro_id is null
@@ -152,7 +189,7 @@ as $$
     and p.operating_lat is not null
     and p.operating_lng is not null
     and public.haven_profile_radius_miles(p.pro_workspace) is not null
-    and public.haven_distance_miles(p.operating_lat, p.operating_lng, j.lat, j.lng)
+    and public.haven_distance_miles(p.operating_lat, p.operating_lng, g.cell_lat, g.cell_lng)
         <= public.haven_profile_radius_miles(p.pro_workspace)
   order by j.posted_at desc;
 $$;
@@ -262,7 +299,8 @@ commit;
 
 -- ── Rollback (only if this file must be undone; NOT AUTHORIZED) ─────────
 -- Identical to supabase/rollback/0030_assigned_job_destination_rollback.sql.
--- Restores 0023's board exactly and drops the RPC. Run the lines between begin and commit.
+-- Restores 0023's board exactly (exact lat/lng, exact distance and exact-point radius
+-- filter; removes the grid-cell coarsening) and drops the RPC. Run the lines between begin and commit.
 -- begin;
 --
 -- create or replace function public.jobs_posted_within_radius()
