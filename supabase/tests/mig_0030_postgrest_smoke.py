@@ -9,7 +9,7 @@ the PostgREST process it started.
 Usage:
   HAVEN_REST_DB=codey0030_rest_main HAVEN_PGRST=/path/postgrest \
     python3 supabase/tests/mig_0030_postgrest_smoke.py
-Env: HAVEN_PGRST_PORT (default 54391), HAVEN_PG_URI_BASE (default postgresql://postgres@/%s?host=/tmp&port=54329)
+Env: HAVEN_PGRST_PORT (default 54391; pick a free port), HAVEN_PG_URI_BASE (default postgresql://postgres@/%s?host=/tmp&port=54329)
 """
 import base64, hashlib, hmac, json, os, secrets, subprocess, sys, tempfile, time, urllib.request, urllib.error
 
@@ -55,6 +55,48 @@ def call(method, path, who=None, body=None):
 def check(label, got, ok):
     RES.append(ok)
     print(f"{'PASS' if ok else 'FAIL'} {label}: {json.dumps(got)[:200]}")
+
+
+def b1_http_attack():
+    """QA B1 over HTTP: an ordinary Pro (P2) PATCHes its own operating point and sweeps the board
+    (radius-edge oracle, radius 5, 3 bearings). After the fix the estimate is the grid-cell centre,
+    not the job's true point. The secret job is inserted by the DB owner on this throwaway DB and
+    removed afterwards; P2's profile is restored."""
+    import subprocess as sp
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mig_0030_assigned_destination_matrix as M
+    psql = ['psql', '-X', '-q', '-tA', '-v', 'ON_ERROR_STOP=1', URI]
+    sp.run(psql, input=M.job_insert(M.J_SEC1, M.T1) + ';', check=True, capture_output=True, text=True)
+    orig = sp.run(psql, input=f"select operating_lat || ',' || operating_lng || ',' || pro_workspace::text from public.profiles where id = '{P2}';",
+                  check=True, capture_output=True, text=True).stdout.strip()
+    calls = [0]
+    try:
+        def board(pt, r):
+            s, b = call('PATCH', f'/profiles?id=eq.{P2}', P2,
+                        {'operating_lat': round(pt[0], 6), 'operating_lng': round(pt[1], 6), 'pro_workspace': {'travelRadius': str(r)}})
+            assert s in (200, 204), (s, b)
+            calls[0] += 1
+            s, b = call('POST', '/rpc/jobs_posted_within_radius', P2, {})
+            assert s == 200, (s, b)
+            rows = [x for x in b if x['id'] == M.J_SEC1]
+            assert all(x['lat'] is None and x['lng'] is None for x in b)
+            return rows[0]['distance_mi'] if rows else None
+
+        class O:
+            pass
+        o = O(); o.board = board
+        E = M.attack_radius(o)
+        e_true, e_cell, floor_m = (M.hav(E, M.T1) * 1609.344, M.hav(E, M.KC) * 1609.344, M.hav(M.KC, M.T1) * 1609.344)
+        info = {'board_calls': calls[0], 'estimate': [round(E[0], 6), round(E[1], 6)], 'err_true_m': round(e_true, 1),
+                'err_cell_centre_m': round(e_cell, 2), 'true_to_centre_m': round(floor_m, 1)}
+        check('B1 HTTP radius-edge attack (PATCH own profile + board): estimate = cell centre (< 5 m)', info, e_cell < 5)
+        check('B1 HTTP radius-edge attack: error vs true point >= true-to-centre distance - 5 m (and >= 400 m)', info,
+              e_true >= floor_m - 5 and e_true >= 400)
+    finally:
+        sp.run(psql, input=f"delete from public.jobs where id = '{M.J_SEC1}';", check=True, capture_output=True, text=True)
+        lat, lng, ws = orig.split(',', 2)
+        sp.run(psql, input=f"update public.profiles set operating_lat = {lat}, operating_lng = {lng}, pro_workspace = '{ws}'::jsonb "
+                           f"where id = '{P2}';", check=True, capture_output=True, text=True)
 
 
 def main():
@@ -103,6 +145,7 @@ def main():
                   and (who not in (P2, P3) or len(b) == 1))
         s, b = call('POST', '/rpc/jobs_posted_within_radius', None, {})
         check('anon board -> 401', [s, b], s == 401)
+        b1_http_attack()
     finally:
         proc.terminate()
         proc.wait(timeout=10)

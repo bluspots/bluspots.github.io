@@ -668,8 +668,9 @@ def main():
     db3 = PREFIX + '_ctl'
     build(db3)
     ctl = open(F30).read().replace('g.cell_lat, g.cell_lng', 'j.lat, j.lng')
-    check('control', 'control board = 0030 with the exact point in distance + filter (2 replacements)',
-          open(F30).read().count('g.cell_lat, g.cell_lng'), 2)
+    check('control', 'control board = 0030 with the exact point in distance + filter (no cell point left)',
+          'g.cell_lat, g.cell_lng' not in ctl and ctl.count(
+              'public.haven_distance_miles(p.operating_lat, p.operating_lng, j.lat, j.lng)') == 2, True)
     r = psql(db3, ctl)
     check('control', 'control board applies', r.returncode, 0)
     triangulation(db3, 'control', coarse=False)
