@@ -750,11 +750,11 @@ def race(db, g, label, expect_loser):
 
 
 def h1_checks(db, g):
-    rows = q(db, 'postgres', "select string_agg(p.proname || '=' || coalesce(array_to_string(p.proconfig, ';'), ''), ',' order by p.proname) "
+    rows = q(db, 'postgres', "select string_agg(p.proname || '=' || coalesce(array_to_string(p.proconfig, ';'), ''), '#' order by p.proname) "
                              "from pg_proc p where p.pronamespace = 'public'::regnamespace and p.proname in "
                              "('jobs_posted_within_radius','get_assigned_job_destination','pro_claim_job',"
                              "'haven_caller_within_radius','haven_profile_radius_miles','haven_distance_miles','jobs_enforce_claim_radius')")
-    got = dict(x.split('=', 1) for x in rows.split(','))
+    got = dict(x.split('=', 1) for x in rows.split('#'))
     for fn in ('jobs_posted_within_radius', 'get_assigned_job_destination', 'pro_claim_job'):
         check(g, f'H1: {fn} proconfig = {{"{SP_PINNED}"}}', got.get(fn), SP_PINNED)
     for fn in ('haven_caller_within_radius', 'haven_profile_radius_miles', 'haven_distance_miles', 'jobs_enforce_claim_radius'):
@@ -775,16 +775,15 @@ def h1_checks(db, g):
     check(g, "H1: pg_temp.text shadow does not run inside pro_claim_job's own body (no LEAK)", 'LEAK' in r.stderr, False)
     # Informational (not a check): the board and pro_claim_job still call 0023 helpers that pin
     # search_path = public only (brief: leave them alone); report whether the shadow reaches them.
-    r = psql(db, "begin;\n" + as_actor('P2') + leak + "select count(*) from public.jobs_posted_within_radius();\nrollback;\n", stop=False)
-    ctx = sorted(set(m for m in re.findall(r'PL/pgSQL function (\w+)\(', r.stderr)))
-    print(f"INFO [{g}] board + pg_temp.text shadow: LEAK={'LEAK' in r.stderr} via {ctx or '-'} (0023 helper; residual, see report)")
-    num = ("create function pg_temp.leakn(v numeric) returns boolean language plpgsql as $f$ declare r record; begin "
-           "for r in select lat from public.jobs where lat is not null loop raise notice 'LEAK as % %', current_user, r.lat; end loop; "
-           "return true; end $f$;\ncreate domain pg_temp.numeric as pg_catalog.numeric check (pg_temp.leakn(value));\n")
-    r = psql(db, "begin;\n" + owner_setup(SEC_SETUP) + as_actor('P2') + num + f"select 1 from public.pro_claim_job('{J_SEC1}');\nrollback;\n", stop=False)
-    ctx = sorted(set(m for m in re.findall(r'PL/pgSQL function (\w+)\(', r.stderr)))
-    print(f"INFO [{g}] pro_claim_job + pg_temp.numeric shadow: LEAK={'LEAK' in r.stderr} via {ctx or '-'} (0023 helper; residual, see report)")
-
+    for label, who, setup, sql in (
+            ('board', 'P2', '', "select count(*) from public.jobs_posted_within_radius()"),
+            ('pro_claim_job (free Pro, claimable job)', 'P2', SEC_SETUP, f"select 1 from public.pro_claim_job('{J_SEC1}')")):
+        r = psql(db, "\\set VERBOSITY verbose\n\\set SHOW_CONTEXT always\nbegin;\n" + (owner_setup(setup) if setup else '')
+                 + as_actor(who) + leak + sql + ";\nrollback;\n", stop=False)
+        ctx = sorted(set(re.findall(r'PL/pgSQL function (haven_\w+|jobs_\w+|pro_\w+|get_\w+)\(', r.stderr)))
+        users = sorted(set(re.findall(r'LEAK as (\w+)', r.stderr)))
+        print(f"INFO [{g}] {label} + pg_temp.text shadow: LEAK={'LEAK' in r.stderr} as {users or '-'} inside {ctx or '-'} "
+              "(0023 helper with search_path=public; residual, see report)")
 
 def lat90_check(db, g):
     """Quagon's survivor: lat clamp. A job at exactly +90 must land in row 17999 (cell_lat 89.995), not 90.005."""

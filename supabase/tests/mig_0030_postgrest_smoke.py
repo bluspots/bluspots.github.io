@@ -100,6 +100,45 @@ def b1_http_attack():
                            f"where id = '{P2}';", check=True, capture_output=True, text=True)
 
 
+def c1_http():
+    """QA C1 over HTTP: a busy Pro (P1, assigned J1 en_route) gets the same 409 body for a posted job
+    inside or outside its radius; a free Pro (P2) still gets today's 400 P0001 outside / 200 row inside."""
+    import subprocess as sp
+    sys.dont_write_bytecode = True
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import mig_0030_assigned_destination_matrix as M
+    psql = ['psql', '-X', '-q', '-tA', '-v', 'ON_ERROR_STOP=1', URI]
+    sp.run(psql, input=M.job_insert(M.J_SEC1, M.T1) + ';', check=True, capture_output=True, text=True)
+    orig = {}
+    for who in (P1, P2):
+        orig[who] = sp.run(psql, input=f"select operating_lat || ',' || operating_lng || ',' || pro_workspace::text from public.profiles where id = '{who}';",
+                           check=True, capture_output=True, text=True).stdout.strip()
+    inside, outside = (round(M.T1[0] + 0.01, 6), round(M.T1[1], 6)), (40.712776, -74.005974)
+    try:
+        def at(who, pt, r=25):
+            s, b = call('PATCH', f'/profiles?id=eq.{who}', who,
+                        {'operating_lat': pt[0], 'operating_lng': pt[1], 'pro_workspace': {'travelRadius': str(r)}})
+            assert s in (200, 204), (s, b)
+            return call('POST', '/rpc/pro_claim_job', who, {'job_id': M.J_SEC1})
+        busy = [at(P1, inside), at(P1, outside), at(P1, outside, 5), at(P1, inside, 50)]
+        exp = [409, {'code': '23505', 'details': f'Key (pro_id)=({P1}) already exists.', 'hint': None,
+                     'message': 'duplicate key value violates unique constraint "one_active_job_per_pro"'}]
+        check('C1 HTTP: busy Pro claim inside / outside / r5 / r50 -> identical 409 23505 body', busy,
+              all(list(x) == exp for x in busy))
+        s, b = at(P2, outside)
+        check('C1 HTTP: free Pro outside radius -> 400 P0001 (unchanged)', [s, b],
+              s == 400 and b == {'code': 'P0001', 'details': None, 'hint': None, 'message': 'job outside operating radius'})
+        s, b = at(P2, inside)
+        check('C1 HTTP: free Pro inside radius -> 200 claimed row (unchanged)', [s, b],
+              s == 200 and len(b) == 1 and b[0]['status'] == 'en_route' and b[0]['pro_id'] == P2)
+    finally:
+        sp.run(psql, input=f"delete from public.jobs where id = '{M.J_SEC1}';", check=True, capture_output=True, text=True)
+        for who, o in orig.items():
+            lat, lng, ws = o.split(',', 2)
+            sp.run(psql, input=f"update public.profiles set operating_lat = {lat}, operating_lng = {lng}, pro_workspace = '{ws}'::jsonb "
+                               f"where id = '{who}';", check=True, capture_output=True, text=True)
+
+
 def main():
     conf = tempfile.NamedTemporaryFile('w', suffix='.conf', delete=False)
     os.chmod(conf.name, 0o600)
@@ -147,6 +186,7 @@ def main():
         s, b = call('POST', '/rpc/jobs_posted_within_radius', None, {})
         check('anon board -> 401', [s, b], s == 401)
         b1_http_attack()
+        c1_http()
     finally:
         proc.terminate()
         proc.wait(timeout=10)
