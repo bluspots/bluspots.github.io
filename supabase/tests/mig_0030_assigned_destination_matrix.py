@@ -797,6 +797,37 @@ def lat90_check(db, g):
     check(g, 'lat clamp: job at lat -90.000000 -> row 0 (centre -89.995, 0): distance 0', got, '0')
 
 
+def guard_checks(g):
+    """Version guard: 0030 refuses (nothing changed) unless the board and pro_claim_job bodies are 0023's
+    (or 0030's) and one_active_job_per_pro has the six active statuses."""
+    claim23 = re.search(r'(create or replace function public\.pro_claim_job\(job_id uuid\).*?\$\$;)',
+                        open(os.path.join(MIG, '0023_marketplace_radius.sql')).read(), re.S).group(1)
+    board23 = re.search(r'(create or replace function public\.jobs_posted_within_radius\(\).*?\$\$;)',
+                        open(os.path.join(MIG, '0023_marketplace_radius.sql')).read(), re.S).group(1)
+    cases = (
+        ('pro_claim_job body differs from 0023 (one comment line added)',
+         claim23.replace('begin\n', 'begin\n  -- drift\n', 1), 'pro_claim_job(uuid) body (md5'),
+        ('board body differs from 0023 (one comment line added)',
+         board23.replace('as $$\n', 'as $$\n  -- drift\n', 1), 'jobs_posted_within_radius() body (md5'),
+        ('one_active_job_per_pro index dropped', 'drop index public.one_active_job_per_pro', 'one_active_job_per_pro (six active statuses)'),
+        ('one_active_job_per_pro without in_progress',
+         "drop index public.one_active_job_per_pro;\ncreate unique index one_active_job_per_pro on public.jobs(pro_id) "
+         "where pro_id is not null and status in ('en_route','arrived','diagnosing','materials_requested','materials_approved')",
+         'one_active_job_per_pro (six active statuses)'),
+    )
+    dbs = []
+    for i, (label, sql, msg) in enumerate(cases):
+        dbg = PREFIX + f'_guard{i}'
+        dbs.append(dbg)
+        build(dbg)
+        must(dbg, sql + ';')
+        s0 = state(dbg)
+        rc, err = apply_file(dbg, F30)
+        check(g, f'version guard: {label} -> 0030 refused', (rc != 0, msg in err, 'Nothing was changed' in err), (True, True, True))
+        check(g, f'version guard: {label} -> nothing changed', diff(s0, state(dbg)), [])
+    return dbs
+
+
 BOARD_COLS = ("id, category, title, fixed_pro_labor_payout_cents, requires_diagnosis, city_label, emergency, posted_at, "
               "status, pro_id, inspection_fee_cents")
 
@@ -900,8 +931,10 @@ def main():
     check('no0027', '0030 refused without 0027', rc != 0 and 'Apply 0027 first' in err, True)
     check('no0027', 'refused run changed nothing', diff(s0, state(db2)), [])
 
+    gdbs = guard_checks('guard')
+
     if not os.environ.get('HAVEN_KEEP_DBS'):
-        for x in (db, db2, db3):
+        for x in (db, db2, db3, *gdbs):
             psql('postgres', f'drop database if exists {x};')
     npass = sum(1 for r in RESULTS if r[2])
     nfail = len(RESULTS) - npass
