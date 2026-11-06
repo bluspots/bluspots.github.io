@@ -390,6 +390,58 @@
     }
   };
 
+  // Live location while the Pro is Driving to Job (get_job_live_location,
+  // migration 0032). Only the job's Customer gets a useful read. Always POST,
+  // job id in the body. No session -> no call. Never logged, never stored:
+  // the app keeps the latest read in memory while the tracking screen is open.
+  // Result:
+  //   { state:"live", point:{lat,lng}, ageS }   show the Pro's current point
+  //   { state:"waiting" }                        no point yet
+  //   { state:"paused", lastReceivedAt }         no fresh point: no coordinates
+  //   { state:"ended" }                          tracking_not_active: stop polling
+  //   { state:"unavailable", error }             not_found / not_authenticated / 401 / 403: stop
+  //   { state:"network" }                        no connection or server error: try again later
+  const fetchJobLiveLocation=async(jobId)=>{
+    const cfg=getSupabaseConfig();
+    if(!cfg||!jobId) return {state:"unavailable",error:"not_found"};
+    const token=havenSignedInAccessToken();
+    if(!token) return {state:"unavailable",error:"not_authenticated"};
+    let res;
+    try{
+      res=await fetch(`${cfg.url}/rest/v1/rpc/get_job_live_location`,{
+        method:"POST",
+        headers:{
+          "Accept":"application/json",
+          "Content-Type":"application/json",
+          apikey:cfg.anonKey,
+          Authorization:`Bearer ${token}`,
+        },
+        body:JSON.stringify({p_job_id:String(jobId)}),
+      });
+    }catch(err){
+      return {state:"network"};
+    }
+    if(res.status===401||res.status===403) return {state:"unavailable",error:"not_authenticated"};
+    if(!res.ok) return res.status>=500||res.status===408||res.status===429?{state:"network"}:{state:"unavailable",error:"http_"+res.status};
+    let body=null;
+    try{ body=await res.json(); }catch{ body=null; }
+    if(!body||typeof body!=="object"||Array.isArray(body)) return {state:"network"};
+    if(body.ok===true){
+      if(body.available===true){
+        const p=body.point||{};
+        const lat=typeof p.lat==="number"?p.lat:(p.lat!=null&&p.lat!==""?Number(p.lat):NaN);
+        const lng=typeof p.lng==="number"?p.lng:(p.lng!=null&&p.lng!==""?Number(p.lng):NaN);
+        if(!Number.isFinite(lat)||!Number.isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180) return {state:"network"};
+        const age=Number(body.age_s);
+        return {state:"live",point:{lat,lng},ageS:Number.isFinite(age)&&age>=0?age:null};
+      }
+      if(body.reason==="paused") return {state:"paused",lastReceivedAt:typeof body.last_received_at==="string"?body.last_received_at:null};
+      return {state:"waiting"};
+    }
+    if(body.error==="tracking_not_active") return {state:"ended"};
+    return {state:"unavailable",error:typeof body.error==="string"?body.error:"refused"};
+  };
+
   const fetchAssignedProLabels=async(backendIds)=>{
     if(havenProLabelRpcUnavailable) return {};
     const cfg=getSupabaseConfig();
