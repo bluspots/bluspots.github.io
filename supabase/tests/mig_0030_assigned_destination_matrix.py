@@ -136,6 +136,8 @@ def build(db, with_0027=True):
             continue
         else:
             must(db, open(p).read())
+    if os.environ.get('HAVEN_CRLF_BASE'):
+        must(db, crlf_0023_sql())   # 0023 board + pro_claim_job stored with CRLF, as live
     must(db, fixture_sql())
 
 
@@ -181,7 +183,7 @@ def rpc(jid):
 def state(db):
     """Fingerprint of everything 0030 / rollback may touch, plus what they must not touch."""
     sql = r"""
-select 'fn|' || p.oid::regprocedure || '|' || md5(pg_get_functiondef(p.oid)) || '|' || coalesce(p.proacl::text, '')
+select 'fn|' || p.oid::regprocedure || '|' || md5(replace(pg_get_functiondef(p.oid), E'\r', '')) || '|' || coalesce(p.proacl::text, '')
        || '|' || pg_get_userbyid(p.proowner)
   from pg_proc p where p.pronamespace = 'public'::regnamespace
 union all
@@ -828,6 +830,110 @@ def guard_checks(g):
     return dbs
 
 
+# ── CRLF: live bodies were pasted with CRLF line endings ─────────────────
+CRLF_BASE = bool(os.environ.get('HAVEN_CRLF_BASE'))   # whole matrix on a CRLF 0023 base
+LIVE_RAW = {'board': '848a9fee867be8c430f580242822de71', 'claim': 'ce3860331faa94c71c05686e1a448347'}  # Alex, Nov 5
+LF_0023 = {'board': 'a4c9a1460149dfc69884d29aee779999', 'claim': '4760bcab07cf0bf907addf67036f2da7'}
+LF_0030 = {'board': '52b6bff79c99a734c8da2521ce6cbbb8', 'claim': '789cb65e77775da031012f78227d76ad'}
+FNS = {'board': 'public.jobs_posted_within_radius()', 'claim': 'public.pro_claim_job(uuid)'}
+
+
+def stmt_0023(name):
+    return re.search(r'(create or replace function public\.' + re.escape(name) + r'\(.*?\$\$;)',
+                     open(os.path.join(MIG, '0023_marketplace_radius.sql')).read(), re.S).group(1)
+
+
+def crlf(sql):
+    return sql.replace('\r\n', '\n').replace('\n', '\r\n')
+
+
+def crlf_0023_sql():
+    return crlf(stmt_0023('jobs_posted_within_radius') + '\n' + stmt_0023('pro_claim_job') + '\n')
+
+
+def body_md5s(db):
+    """{'board': (raw, normalised), 'claim': (raw, normalised)}"""
+    out = {}
+    for k, fn in FNS.items():
+        r = q(db, 'postgres', f"select md5(prosrc) || '|' || md5(replace(prosrc, E'\\r', '')) || '|' || length(prosrc) "
+                              f"from pg_proc where oid = '{fn}'::regprocedure")
+        out[k] = tuple(r.split('|'))
+    return out
+
+
+def crlf_checks(g):
+    dbs = []
+
+    def fresh(tag):
+        d = PREFIX + '_crlf' + tag
+        dbs.append(d)
+        build(d)
+        must(d, crlf_0023_sql())
+        return d
+    # 1. CRLF 0023 bodies reproduce the live raw md5s exactly
+    d = fresh('a')
+    m = body_md5s(d)
+    check(g, f'CRLF 0023 board body: raw md5 == live 848a9fee... (len {m["board"][2]}), normalised == LF a4c9a146...',
+          m['board'][:2], (LIVE_RAW['board'], LF_0023['board']))
+    check(g, f'CRLF 0023 pro_claim_job body: raw md5 == live ce386033... (len {m["claim"][2]}; live len 1019), normalised == LF 4760bcab...',
+          (m['claim'][0], m['claim'][1], m['claim'][2]), (LIVE_RAW['claim'], LF_0023['claim'], '1019'))
+    check(g, 'CRLF 0023 base: claim responses == LF 0023 base (CRs in the body change nothing)',
+          claim_baseline(d) == CLAIM_BASE_LF, True)
+    # 2. 0030 (LF file) applies on the CRLF base
+    rc, err = apply_file(d, F30)
+    m = body_md5s(d)
+    check(g, '0030 (LF) applies on the CRLF 0023 base', (rc, err.strip()[:200] if rc else ''), (0, ''))
+    check(g, 'after 0030 on CRLF base: board + pro_claim_job normalised md5 = 0030 (52b6bff7 / 789cb65e)',
+          (m['board'][1], m['claim'][1]), (LF_0030['board'], LF_0030['claim']))
+    # 3. re-apply 0030 over 0030 is a no-op, LF and CRLF
+    s1 = state(d)
+    rc, _ = apply_file(d, F30)
+    check(g, 're-apply 0030 (LF) over 0030: no error, state identical', (rc, diff(s1, state(d))), (0, []))
+    r = psql(d, crlf(open(F30).read()))
+    m = body_md5s(d)
+    check(g, 'apply 0030 pasted as CRLF over 0030: no error; raw md5 now differs, normalised still 0030',
+          (r.returncode, m['board'][0] != LF_0030['board'], m['board'][1], m['claim'][0] != LF_0030['claim'], m['claim'][1]),
+          (0, True, LF_0030['board'], True, LF_0030['claim']))
+    check(g, '... and state equal to the LF install (state hashes defs with CR removed)', diff(s1, state(d)), [])
+    r = psql(d, crlf(open(F30).read()))
+    check(g, 're-apply CRLF 0030 over CRLF 0030: no error, identical', (r.returncode, diff(s1, state(d))), (0, []))
+    rc, _ = apply_file(d, F30)
+    check(g, 're-apply LF 0030 over CRLF 0030: guard passes, no error, identical', (rc, diff(s1, state(d))), (0, []))
+    # 4. rollback when the starting bodies were CRLF
+    d2 = fresh('b')
+    pre = state(d2)
+    pre_raw = body_md5s(d2)
+    rc, _ = apply_file(d2, F30)
+    rc2, _ = apply_file(d2, R30)
+    m = body_md5s(d2)
+    check(g, 'CRLF base -> 0030 -> rollback (LF file): ok; normalised md5 back to 0023 (a4c9a146 / 4760bcab)',
+          (rc, rc2, m['board'][1], m['claim'][1]), (0, 0, LF_0023['board'], LF_0023['claim']))
+    check(g, f'... raw md5 after LF rollback = LF values (board {m["board"][0][:8]}, claim {m["claim"][0][:8]}), not the CRLF live '
+             f'{pre_raw["board"][0][:8]} / {pre_raw["claim"][0][:8]}: same text, line endings only',
+          (m['board'][0], m['claim'][0]), (LF_0023['board'], LF_0023['claim']))
+    check(g, '... state (defs with CR removed, ACLs, config, policies, rows) == the CRLF base before 0030', diff(pre, state(d2)), [])
+    check(g, '... claim responses == before 0030', claim_baseline(d2) == CLAIM_BASE_LF, True)
+    r = psql(d2, crlf(open(F30).read())); r2 = psql(d2, crlf(open(R30).read()))
+    m = body_md5s(d2)
+    check(g, 'rollback pasted as CRLF: raw md5 == the live CRLF values again (848a9fee / ce386033)',
+          (r.returncode, r2.returncode, m['board'][0], m['claim'][0]), (0, 0, LIVE_RAW['board'], LIVE_RAW['claim']))
+    # 5. drift still refuses, CRLF or LF
+    for tag, label, sql in (
+            ('c', 'CRLF drift: pro_claim_job 0023 + one comment line, CRLF', crlf(stmt_0023('pro_claim_job').replace('begin\n', 'begin\n  -- drift\n', 1))),
+            ('d', 'CRLF drift: board 0023 + one comment line, CRLF', crlf(stmt_0023('jobs_posted_within_radius').replace('as $$\n', 'as $$\n  -- drift\n', 1))),
+            ('e', 'drift: pro_claim_job body with trailing spaces on a line (not a line-ending change)',
+             stmt_0023('pro_claim_job').replace('  claimed public.jobs;\n', '  claimed public.jobs;  \n', 1)),
+            ('f', 'drift: board body with a trailing space on a line (LF)',
+             stmt_0023('jobs_posted_within_radius').replace('    j.id,\n', '    j.id, \n', 1))):
+        dd = fresh(tag)
+        must(dd, sql)
+        s0 = state(dd)
+        rc, err = apply_file(dd, F30)
+        check(g, f'{label} -> 0030 refused, nothing changed',
+              (rc != 0, 'neither 0023 nor 0030' in err, 'Nothing was changed' in err, diff(s0, state(dd))), (True, True, True, []))
+    return dbs
+
+
 BOARD_COLS = ("id, category, title, fixed_pro_labor_payout_cents, requires_diagnosis, city_label, emergency, posted_at, "
               "status, pro_id, inspection_fee_cents")
 
@@ -859,7 +965,12 @@ def main():
     pre_board = {w: q(db, w, f"select {BOARD_COLS} from public.jobs_posted_within_radius()") for w in ('P1', 'P2', 'P3', 'C1')}
 
     claim_base = claim_baseline(db)
-    pre_claim_md5 = q(db, 'postgres', "select md5(prosrc) from pg_proc where oid = 'public.pro_claim_job(uuid)'::regprocedure")
+    global CLAIM_BASE_LF
+    CLAIM_BASE_LF = claim_base
+    if CRLF_BASE:
+        check(G, 'CRLF base: board + pro_claim_job raw md5 == live (848a9fee / ce386033)',
+              tuple(v[0] for v in body_md5s(db).values()), (LIVE_RAW['board'], LIVE_RAW['claim']))
+    pre_claim_md5 = q(db, 'postgres', "select md5(replace(prosrc, E'\\r', '')) from pg_proc where oid = 'public.pro_claim_job(uuid)'::regprocedure")
     check(G, 'before 0030: pro_claim_job body is 0023 (md5 4760bcab...)', pre_claim_md5, '4760bcab07cf0bf907addf67036f2da7')
     c1_attack_check(db, 'c1-control', control=True)
     race(db, 'c1-race', 'race before 0030 (0023 pro_claim_job)', RACE_LOSER)
@@ -896,8 +1007,8 @@ def main():
     rc, err = apply_file(db, R30)
     check('rollback', 'rollback applies cleanly', rc, 0)
     check('rollback', 'state after rollback == state before 0030 (byte-for-byte defs, ACLs, policies, rows)', diff(pre, state(db)), [])
-    check('rollback', 'after rollback: pro_claim_job prosrc md5 == before 0030 (0023)',
-          q(db, 'postgres', "select md5(prosrc) || '|' || array_to_string(proconfig, ',') from pg_proc where oid = 'public.pro_claim_job(uuid)'::regprocedure"),
+    check('rollback', 'after rollback: pro_claim_job prosrc md5 (CR removed) == before 0030 (0023)',
+          q(db, 'postgres', "select md5(replace(prosrc, E'\\r', '')) || '|' || array_to_string(proconfig, ',') from pg_proc where oid = 'public.pro_claim_job(uuid)'::regprocedure"),
           pre_claim_md5 + '|search_path=public')
     check('rollback', 'after rollback: claim responses == before 0030 (busy Pro outside radius is P0001 again)',
           claim_baseline(db) == claim_base, True)
@@ -932,6 +1043,7 @@ def main():
     check('no0027', 'refused run changed nothing', diff(s0, state(db2)), [])
 
     gdbs = guard_checks('guard')
+    gdbs += crlf_checks('crlf')
 
     if not os.environ.get('HAVEN_KEEP_DBS'):
         for x in (db, db2, db3, *gdbs):
