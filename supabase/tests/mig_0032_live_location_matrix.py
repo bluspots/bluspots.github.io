@@ -727,14 +727,19 @@ def main():
     check('pre', 'base: 0030 live (three md5s)', md5s_0030(db), MD5_0030)
     rc, err = apply_file(db, F32)
     check('apply', '0032 applies on master + 0027 + 0030', (rc, redact(err.strip())[:300] if rc else ''), (0, ''))
-    matrix(db)
     dbs = [db]
-    if not QUICK:
-        dbs += g13_guard('g13-guard')
-    for x in dbs:
-        if x == db and os.environ.get('HAVEN_KEEP_DBS'):
-            continue
-        psql('postgres', f'drop database if exists {x};')
+    try:
+        matrix(db)
+        if not QUICK:
+            dbs += g13_guard('g13-guard')
+    finally:
+        for x in dbs:
+            if x == db and os.environ.get('HAVEN_KEEP_DBS'):
+                continue
+            psql('postgres', f'drop database if exists {x};')
+        if not QUICK:
+            for x in psql('postgres', f"select datname from pg_database where datname like '{PREFIX}_g%'").stdout.split():
+                psql('postgres', f'drop database if exists {x};')
     npass = sum(1 for r in RESULTS if r[2])
     nfail = len(RESULTS) - npass
     groups = {}
