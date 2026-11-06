@@ -41,16 +41,19 @@
 --                                            last_received_at }  (NO coordinates)
 --           otherwise                    -> { ok, available:true, point:{lat,lng},
 --                                            received_at, captured_at, age_s }
---   (d) Trigger jobs_discard_live_location: AFTER UPDATE OF status, pro_id ON
---       public.jobs, WHEN the row leaves en_route or pro_id changes. The function
+--   (d) Trigger jobs_discard_live_location: AFTER UPDATE OF status, pro_id,
+--       customer_id ON public.jobs, WHEN the row is en_route and leaves en_route,
+--       or its pro_id or customer_id changes (customer_id can only change through
+--       a privileged path; 0017 blocks the apps). The function
 --       body is one DELETE of that job's live row; it never raises, never reads or
 --       changes NEW, never touches jobs. Fires for every role (incl. service_role
 --       and the SQL editor), so Arrived, any cancel and every skip path discard.
 --   All three functions: search_path = pg_catalog, public, pg_temp; EXECUTE
---   revoked from public and anon; the two RPCs granted to authenticated; the
---   trigger function revoked from authenticated and service_role too.
---   service_role (F4): no table rights; the RPCs need auth.uid(), so a
---   service_role call gets not_authenticated.
+--   revoked from public, anon and service_role; the two RPCs granted to
+--   authenticated only; the trigger function revoked from authenticated too.
+--   service_role (F4): no table rights and no EXECUTE on the RPCs, so even a
+--   service_role session that carries a user's claims gets permission denied
+--   (post-check below refuses the file if a revoke did not stick).
 --
 -- Does not change: any jobs / profiles column, policy, grant or existing trigger;
 --   pro_claim_job, jobs_posted_within_radius, get_assigned_job_destination
@@ -215,6 +218,7 @@ $$;
 
 revoke all on function public.pro_update_live_location(uuid, double precision, double precision, timestamptz) from public;
 revoke all on function public.pro_update_live_location(uuid, double precision, double precision, timestamptz) from anon;
+revoke all on function public.pro_update_live_location(uuid, double precision, double precision, timestamptz) from service_role;
 grant execute on function public.pro_update_live_location(uuid, double precision, double precision, timestamptz) to authenticated;
 
 -- ── (c) Read: the job's Customer, en_route only ───────────────────────────
@@ -265,9 +269,10 @@ $$;
 
 revoke all on function public.get_job_live_location(uuid) from public;
 revoke all on function public.get_job_live_location(uuid) from anon;
+revoke all on function public.get_job_live_location(uuid) from service_role;
 grant execute on function public.get_job_live_location(uuid) to authenticated;
 
--- ── (d) Discard on any exit from en_route (or a pro_id change) ────────────
+-- ── (d) Discard on any exit from en_route, or a pro_id / customer_id change ─
 create or replace function public.jobs_discard_live_location()
 returns trigger
 language plpgsql
@@ -287,10 +292,12 @@ revoke all on function public.jobs_discard_live_location() from service_role;
 
 drop trigger if exists jobs_discard_live_location on public.jobs;
 create trigger jobs_discard_live_location
-  after update of status, pro_id on public.jobs
+  after update of status, pro_id, customer_id on public.jobs
   for each row
   when (old.status = 'en_route'
-        and (new.status is distinct from 'en_route' or new.pro_id is distinct from old.pro_id))
+        and (new.status is distinct from 'en_route'
+             or new.pro_id is distinct from old.pro_id
+             or new.customer_id is distinct from old.customer_id))
   execute function public.jobs_discard_live_location();
 
 -- ── Post-checks (any failure aborts the whole transaction) ────────────────
@@ -308,13 +315,24 @@ begin
      or has_table_privilege('service_role', 'public.job_live_locations', 'select, insert, update, delete') then
     raise exception '0032: a client role still has rights on job_live_locations. Nothing was changed.';
   end if;
+  -- F4: service_role has no EXECUTE on the RPCs (a service_role session carrying a
+  -- user's claims must not reach the point through them).
+  if has_function_privilege('service_role', 'public.pro_update_live_location(uuid, double precision, double precision, timestamptz)', 'execute')
+     or has_function_privilege('service_role', 'public.get_job_live_location(uuid)', 'execute')
+     or has_function_privilege('service_role', 'public.jobs_discard_live_location()', 'execute')
+     or has_function_privilege('anon', 'public.pro_update_live_location(uuid, double precision, double precision, timestamptz)', 'execute')
+     or has_function_privilege('anon', 'public.get_job_live_location(uuid)', 'execute') then
+    raise exception '0032: service_role / anon still has EXECUTE on a live-tracking function. Nothing was changed.';
+  end if;
 end $$;
 
 commit;
 
 -- ── Rollback (only if this file must be undone; discards every live point) ─
 -- Drops the trigger FIRST (so a status change never calls a missing
--- function), then the functions, then the table. Touches nothing else.
+-- function; this removes its status / pro_id / customer_id watch), then the
+-- functions (their grants and revokes go with them), then the table.
+-- Touches nothing else.
 -- begin;
 -- drop trigger if exists jobs_discard_live_location on public.jobs;
 -- drop function if exists public.jobs_discard_live_location();
