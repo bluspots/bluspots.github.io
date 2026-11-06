@@ -14,6 +14,11 @@
 -- points to every signed-in account in radius (Scope CRITICAL #2), and the
 -- Pro app's RPC call returns PostgREST 404 (PGRST202); the Pro app must show
 -- its no-location state. Safe to run twice (create or replace / drop if exists).
+-- After this rollback, check bodies with md5(replace(prosrc, E'\r', '')):
+-- board a4c9a1460149dfc69884d29aee779999, pro_claim_job 4760bcab07cf0bf907addf67036f2da7.
+-- The raw md5(prosrc) depends on the paste's line endings: LF gives the same
+-- values; a CRLF paste gives board 848a9fee867be8c430f580242822de71 and
+-- pro_claim_job ce3860331faa94c71c05686e1a448347 (same text, same behaviour).
 
 begin;
 
@@ -73,7 +78,7 @@ revoke all on function public.jobs_posted_within_radius() from public;
 revoke all on function public.jobs_posted_within_radius() from anon;
 grant execute on function public.jobs_posted_within_radius() to authenticated;
 
--- pro_claim_job exactly as 0023 defined it (body md5 4760bcab07cf0bf907addf67036f2da7).
+-- pro_claim_job exactly as 0023 defined it (body md5, CR removed: 4760bcab07cf0bf907addf67036f2da7).
 -- Claim stays posted + unassigned to en_route with pro_id = auth.uid().
 -- Out of radius, or missing coordinates, raises and does not assign.
 create or replace function public.pro_claim_job(job_id uuid)

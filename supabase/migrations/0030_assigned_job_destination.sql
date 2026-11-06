@@ -101,7 +101,9 @@
 --       temp-schema type / relation shadowing inside them). Other 0023
 --       functions are deliberately left as they are (see the PR notes).
 --   Version guard (section 0): the board's and pro_claim_job's bodies
---       (md5 of pg_proc.prosrc) must be 0023's or this file's, and the
+--       (md5 of pg_proc.prosrc with CR removed, i.e. md5(replace(prosrc,
+--       E'\r', '')), so CRLF and LF pastes of the same text match) must be
+--       0023's or this file's, and the
 --       one_active_job_per_pro index must exist with the six active
 --       statuses; otherwise the file refuses and changes nothing.
 --
@@ -145,19 +147,24 @@ begin
     raise exception '0030: 0027 policies jobs_select_assigned_pro / jobs_select_own_customer missing. Apply 0027 first. Nothing was changed.';
   end if;
   -- Version guard: only 0023's bodies (or this file's, for a re-run) are replaced.
-  if (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.jobs_posted_within_radius()'))
+  -- Line-ending-insensitive: CRs are removed before hashing (a body pasted with
+  -- CRLF, e.g. live 0023 board 848a9fee... / pro_claim_job ce386033..., hashes
+  -- the same as the LF text); the literals below are the LF hashes.
+  if (select md5(replace(prosrc, E'\r', '')) from pg_proc where oid = to_regprocedure('public.jobs_posted_within_radius()'))
      not in ('a4c9a1460149dfc69884d29aee779999',  -- 0023
              '52b6bff79c99a734c8da2521ce6cbbb8') then -- 0030 (this file)
-    raise exception '0030: jobs_posted_within_radius() body (md5 %) is neither 0023 nor 0030. Diff the live definition first. Nothing was changed.',
+    raise exception '0030: jobs_posted_within_radius() body (md5 % without CR, raw md5 %) is neither 0023 nor 0030. Diff the live definition first. Nothing was changed.',
+      (select md5(replace(prosrc, E'\r', '')) from pg_proc where oid = to_regprocedure('public.jobs_posted_within_radius()')),
       (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.jobs_posted_within_radius()'));
   end if;
   if to_regprocedure('public.pro_claim_job(uuid)') is null then
     raise exception '0030: public.pro_claim_job(uuid) missing. Nothing was changed.';
   end if;
-  if (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.pro_claim_job(uuid)'))
+  if (select md5(replace(prosrc, E'\r', '')) from pg_proc where oid = to_regprocedure('public.pro_claim_job(uuid)'))
      not in ('4760bcab07cf0bf907addf67036f2da7',  -- 0023
              '789cb65e77775da031012f78227d76ad') then -- 0030 (this file)
-    raise exception '0030: pro_claim_job(uuid) body (md5 %) is neither 0023 nor 0030. Diff the live definition first. Nothing was changed.',
+    raise exception '0030: pro_claim_job(uuid) body (md5 % without CR, raw md5 %) is neither 0023 nor 0030. Diff the live definition first. Nothing was changed.',
+      (select md5(replace(prosrc, E'\r', '')) from pg_proc where oid = to_regprocedure('public.pro_claim_job(uuid)')),
       (select md5(prosrc) from pg_proc where oid = to_regprocedure('public.pro_claim_job(uuid)'));
   end if;
   -- The busy-Pro refusal in (c) mirrors this index; it must exist with the six active statuses.
@@ -441,7 +448,7 @@ commit;
 -- Expect: all three prosecdef = t, proconfig = {"search_path=pg_catalog, public, pg_temp"},
 -- owner = owner of public.jobs, anon_exec = f, auth_exec = t; provolatile = s
 -- for the board and the RPC, v for pro_claim_job (unchanged from 0023).
--- Body md5 (md5(prosrc)): board 52b6bff79c99a734c8da2521ce6cbbb8, pro_claim_job 789cb65e77775da031012f78227d76ad
+-- Body md5, normalised (md5(replace(prosrc, E'\r', ''))): board 52b6bff79c99a734c8da2521ce6cbbb8, pro_claim_job 789cb65e77775da031012f78227d76ad
 -- (0023: board a4c9a1460149dfc69884d29aee779999, pro_claim_job 4760bcab07cf0bf907addf67036f2da7).
 
 -- ── Rollback (only if this file must be undone; NOT AUTHORIZED) ─────────
@@ -507,7 +514,7 @@ commit;
 -- revoke all on function public.jobs_posted_within_radius() from anon;
 -- grant execute on function public.jobs_posted_within_radius() to authenticated;
 --
--- -- pro_claim_job exactly as 0023 defined it (body md5 4760bcab07cf0bf907addf67036f2da7).
+-- -- pro_claim_job exactly as 0023 defined it (body md5, CR removed: 4760bcab07cf0bf907addf67036f2da7).
 -- -- Claim stays posted + unassigned to en_route with pro_id = auth.uid().
 -- -- Out of radius, or missing coordinates, raises and does not assign.
 -- create or replace function public.pro_claim_job(job_id uuid)
