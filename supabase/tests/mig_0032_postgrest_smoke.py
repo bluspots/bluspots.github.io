@@ -43,6 +43,8 @@ def call(method, path, who=None, body=None):
     req.add_header('Content-Type', 'application/json')
     if who == 'service_role':
         req.add_header('Authorization', 'Bearer ' + jwt({'role': 'service_role'}))
+    elif who and who.startswith('svc_'):   # service_role JWT that also carries a user's sub (Quagon X1b)
+        req.add_header('Authorization', 'Bearer ' + jwt({'role': 'service_role', 'sub': M.SUB[who[4:]]}))
     elif who:
         req.add_header('Authorization', 'Bearer ' + jwt({'sub': M.SUB[who], 'role': 'authenticated'}))
     try:
@@ -100,7 +102,13 @@ def run_checks():
         s, b = call('POST', path, None, body)
         check(f'anon POST {path} -> 401 42501', [s, b], denied(s, b))
         s, b = call('POST', path, 'service_role', body)
-        check(f'service_role POST {path} -> 200 not_authenticated', [s, b], s == 200 and b == {'ok': False, 'error': 'not_authenticated'})
+        check(f'service_role POST {path} -> permission denied (F4: no EXECUTE)', [s, b], denied(s, b))
+    s, b = call('POST', READ, 'svc_C1', {'p_job_id': M.J1})
+    check('service_role JWT carrying the owner C1 sub -> read permission denied, no point (X1b -> X2)', [s, b], denied(s, b))
+    s, b = call('POST', WRITE, 'svc_P1', wbody(M.J1))
+    check('service_role JWT carrying the assigned P1 sub -> write permission denied', [s, b], denied(s, b))
+    s, b = call('GET', '/job_live_locations?select=*', 'svc_C1')
+    check('service_role JWT carrying C1 sub -> GET /job_live_locations permission denied', [s, b], denied(s, b))
     for who in ('P1', 'C1', 'P2', 'service_role', None):
         s, b = call('GET', '/job_live_locations?select=*', who)
         check(f'{who or "anon"} GET /job_live_locations -> permission denied', [s, b], denied(s, b))
@@ -128,6 +136,20 @@ def run_checks():
     s, b = call('POST', READ, 'C1', {'p_job_id': M.J1})
     check('C1 read after 6 min without updates -> paused, no coordinates', [s, b],
           s == 200 and b.get('reason') == 'paused' and b.get('available') is False and 'point' not in b)
+    # customer_id reassignment by the DB owner (apps cannot change customer_id: 0017)
+    owner_sql(f"update public.job_live_locations set received_at = now() where job_id = '{M.J1}';")
+    s, b = call('PATCH', f'/jobs?id=eq.{M.J1}', 'C1', {'customer_id': M.C2})
+    check('C1 PATCH jobs customer_id -> refused by 0017 (apps cannot reassign)', [s, (b or {}).get('code') if isinstance(b, dict) else b],
+          s in (401, 403) or (s in (200, 204) and owner_sql(f"select customer_id from public.jobs where id = '{M.J1}';") == M.C1))
+    owner_sql(f"update public.jobs set customer_id = '{M.C2}' where id = '{M.J1}';")
+    n = owner_sql(f"select count(*) from public.job_live_locations where job_id = '{M.J1}';")
+    check('owner reassigns customer_id C1 -> C2 while en_route: live row discarded', n, n == '0')
+    s, b = call('POST', READ, 'C2', {'p_job_id': M.J1})
+    check('after reassignment: new customer C2 -> waiting (no leftover point)', [s, b],
+          s == 200 and b == {'ok': True, 'available': False, 'reason': 'waiting'})
+    s, b = call('POST', READ, 'C1', {'p_job_id': M.J1})
+    check('after reassignment: old customer C1 -> not_found', [s, b], s == 200 and b == NF)
+    owner_sql(f"update public.jobs set customer_id = '{M.C1}' where id = '{M.J1}';")
     s, b = call('PATCH', f'/jobs?id=eq.{M.J1}', 'P1', {'status': 'arrived'})
     check('P1 PATCH jobs status=arrived (existing path) -> 2xx', [s], s in (200, 204))
     n = owner_sql(f"select count(*) from public.job_live_locations where job_id = '{M.J1}';")

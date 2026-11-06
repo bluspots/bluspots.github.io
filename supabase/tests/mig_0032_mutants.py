@@ -28,7 +28,7 @@ MUTANTS = [
      'if not found or (v_customer is distinct from v_uid and v_pro is distinct from v_uid) then'),
     ('M4 write: no FOR SHARE lock on the job row', '   where j.id = p_job_id\n     for share;', '   where j.id = p_job_id;'),
     ('M5 trigger WHEN only on arrived',
-     "  when (old.status = 'en_route'\n        and (new.status is distinct from 'en_route' or new.pro_id is distinct from old.pro_id))",
+     "  when (old.status = 'en_route'\n        and (new.status is distinct from 'en_route'\n             or new.pro_id is distinct from old.pro_id\n             or new.customer_id is distinct from old.customer_id))",
      "  when (old.status = 'en_route' and new.status = 'arrived')"),
     ('M6 table granted to authenticated (after the post-checks)', '\ncommit;\n\n-- ── Rollback',
      '\ncommit;\ngrant select, insert, update, delete on public.job_live_locations to authenticated;\n\n-- ── Rollback'),
@@ -53,19 +53,38 @@ MUTANTS = [
     ('X7 write: lng range check removed',
      "     or not (p_lat >= -90 and p_lat <= 90)\n     or not (p_lng >= -180 and p_lng <= 180) then",
      "     or not (p_lat >= -90 and p_lat <= 90) then"),
+    ('X8 service_role EXECUTE revoke omitted (post-check must refuse)',
+     "revoke all on function public.pro_update_live_location(uuid, double precision, double precision, timestamptz) from service_role;\n"
+     "grant execute on function public.pro_update_live_location", "grant execute on function public.pro_update_live_location"),
+    ('X9 service_role EXECUTE revokes AND their post-check omitted (tests must catch)', None, None),
+    ('X10 trigger without customer_id in UPDATE OF', 'after update of status, pro_id, customer_id on public.jobs', 'after update of status, pro_id on public.jobs'),
+    ('X11 trigger without customer_id in WHEN',
+     "             or new.pro_id is distinct from old.pro_id\n             or new.customer_id is distinct from old.customer_id))",
+     "             or new.pro_id is distinct from old.pro_id))"),
 ]
+
+
+def x9(src):
+    out = src.replace("revoke all on function public.pro_update_live_location(uuid, double precision, double precision, timestamptz) from service_role;\n", '', 1)
+    out = out.replace("revoke all on function public.get_job_live_location(uuid) from service_role;\n", '', 1)
+    a = out.index('  -- F4: service_role has no EXECUTE on the RPCs')
+    b = out.index('  end if;', a) + len('  end if;\n')
+    return out[:a] + out[b:]
 
 
 def main():
     tmp = tempfile.mkdtemp(prefix='codey0032_mut_')
     killed = 0
     for i, (label, old, new) in enumerate(MUTANTS):
-        assert SRC.count(old) >= 1, f'{label}: anchor not found'
-        mut = SRC.replace(old, new, 1)
+        if old is None:
+            mut = x9(SRC)
+        else:
+            assert SRC.count(old) >= 1, f'{label}: anchor not found'
+            mut = SRC.replace(old, new, 1)
         assert mut != SRC
         p = os.path.join(tmp, f'm{i}.sql')
         open(p, 'w').write(mut)
-        env = dict(os.environ, HAVEN_0032=p, HAVEN_QUICK='1', HAVEN_DB_PREFIX=f'codey0032_mut{i}_{os.getpid()}')
+        env = dict(os.environ, HAVEN_0032=p, HAVEN_QUICK='1', HAVEN_DB_PREFIX=os.environ.get('HAVEN_MUT_PREFIX', 'codey0032_mut') + f'{i}_{os.getpid()}')
         r = subprocess.run([sys.executable, os.path.join(HERE, 'mig_0032_live_location_matrix.py')], env=env,
                            capture_output=True, text=True)
         fails = [l for l in r.stdout.splitlines() if l.startswith('FAIL')]

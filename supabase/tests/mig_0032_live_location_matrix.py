@@ -21,6 +21,7 @@ Env:
   HAVEN_DB_PREFIX  database name prefix (default codey0032_<pid>)
   HAVEN_KEEP_DBS=1 keep <prefix>_main (the PostgREST smoke uses it)
   HAVEN_QUICK=1    skip the version-guard / CRLF / rollback group (mutant runs)
+  HAVEN_0032_PREV  optional: the previous draft (#95 e0652ee9) to test upgrading over it
 Exit code 0 only if every expectation holds.
 """
 import hashlib, json, os, re, shlex, subprocess, sys, time
@@ -187,6 +188,10 @@ def as_actor(who):
         return "set local role authenticated;\nselect set_config('request.jwt.claims', '{\"role\":\"authenticated\"}', true) \\g /dev/null\n"
     if who == 'service_role':
         return "set local role service_role;\nselect set_config('request.jwt.claims', '{\"role\":\"service_role\"}', true) \\g /dev/null\n"
+    if who.startswith('svc_'):   # service_role session that ALSO carries a user's identity claim (Quagon X1b)
+        claims = json.dumps({'sub': SUB[who[4:]], 'role': 'service_role'})
+        return (f"set local role service_role;\nselect set_config('request.jwt.claims', '{claims}', true) \\g /dev/null\n"
+                f"select set_config('request.jwt.claim.sub', '{SUB[who[4:]]}', true) \\g /dev/null\n")
     claims = json.dumps({'sub': SUB[who], 'role': 'authenticated'})
     return f"set local role authenticated;\nselect set_config('request.jwt.claims', '{claims}', true) \\g /dev/null\n"
 
@@ -256,7 +261,7 @@ TABLE_OPS = {
     'update': "update public.job_live_locations set lat = 1",
     'delete': "delete from public.job_live_locations",
 }
-ACTORS = ['P1', 'C1', 'P2', 'P3', 'P5', 'C2', 'NP', 'nosub', 'anon', 'service_role']
+ACTORS = ['P1', 'C1', 'P2', 'P3', 'P5', 'C2', 'NP', 'nosub', 'anon', 'service_role', 'svc_C1', 'svc_P1']
 
 
 def state(db):
@@ -328,8 +333,13 @@ def g1_auth(db, g):
     for fn, sql in (('write', W(J1)), ('read', R(J1))):
         check(g, f'anon {fn}: permission denied (no EXECUTE)', q(db, 'anon', sql), denied)
         check(g, f'authenticated without sub {fn}: not_authenticated', q(db, 'nosub', sql, setup=seed()), NOT_AUTH)
-        check(g, f'service_role {fn}: not_authenticated (F4: no auth.uid(), no special path)', q(db, 'service_role', sql, setup=seed()), NOT_AUTH)
-    check(g, 'service_role write created no row', q(db, 'service_role', W(J1) + " \\g /dev/null\n" + OWNER + nrows()), '0')
+        check(g, f'service_role {fn}: permission denied (F4: no EXECUTE)', q(db, 'service_role', sql, setup=seed()), denied)
+    check(g, 'service_role session carrying the owner C1 claim (sub) reads: permission denied, no point (Quagon X1b -> X2)',
+          q(db, 'svc_C1', R(J1), setup=seed()), denied)
+    check(g, 'service_role session carrying the assigned Pro P1 claim writes: permission denied',
+          q(db, 'svc_P1', W(J1)), denied)
+    check(g, 'control: auth.uid() really resolves to C1 inside the svc_C1 session (so the denial is the revoke)',
+          q(db, 'svc_C1', "select auth.uid()"), C1)
     for who in ACTORS:
         for op, sql in TABLE_OPS.items():
             check(g, f'direct {op} on job_live_locations as {who}: permission denied', q(db, who, sql, setup=seed()), denied)
@@ -388,6 +398,18 @@ def g4_discard(db, g):
     check(g, 'service_role cancels en_route job: point discarded', transition(db, 'service_role', set_status('cancelled')), 'cancelled|0')
     check(g, 'DB owner changes pro_id (still en_route): point discarded',
           transition(db, 'postgres', f"update public.jobs set pro_id = '{P6}' where id = '{J1}'"), 'en_route|0')
+    check(g, 'DB owner reassigns customer_id C1 -> C2 while en_route: point discarded',
+          transition(db, 'postgres', f"update public.jobs set customer_id = '{C2}' where id = '{J1}'"), 'en_route|0')
+    reassign = f"update public.jobs set customer_id = '{C2}' where id = '{J1}';\n"
+    check(g, 'after customer_id reassignment: NEW customer C2 gets waiting (no leftover point)',
+          q(db, 'postgres', reassign + as_actor('C2') + R(J1), setup=seed()), WAITING)
+    check(g, 'after customer_id reassignment: OLD customer C1 gets not_found (no longer the owner)',
+          q(db, 'postgres', reassign + as_actor('C1') + R(J1), setup=seed()), NOT_FOUND)
+    check(g, 'after customer_id reassignment: P1 can write again and only C2 reads it',
+          q(db, 'postgres', reassign + as_actor('P1') + W(J1) + " \\g /dev/null\n" + as_actor('C2') +
+            f"select public.get_job_live_location('{J1}')->>'available';\n" + as_actor('C1') + R(J1), setup=seed()), f'true,{NOT_FOUND}')
+    check(g, 'customer_id set to the same value: point kept',
+          transition(db, 'postgres', f"update public.jobs set customer_id = '{C1}' where id = '{J1}'"), 'en_route|1')
     check(g, 'job deleted: live row removed by FK cascade',
           q(db, 'postgres', f"delete from public.jobs where id = '{J1}';\n" + nrows(), setup=seed()), '0')
     check(g, 'Arrived rolled back (savepoint): point kept',
@@ -582,8 +604,9 @@ def g12_guards(db, g):
         check(g, f'{fn}: SECURITY DEFINER, volatility {vol}, search_path pinned, owned by the jobs owner',
               got, f'true|{vol}|search_path=pg_catalog, public, pg_temp|true')
         acl = Q(f"select string_agg(r || '=' || has_function_privilege(r, 'public.{fn}'::regprocedure, 'execute'), ',' order by r) "
-                f"from unnest(array['anon','authenticated']) r")
-        check(g, f'{fn}: EXECUTE anon=false, authenticated={str(client).lower()}', acl, f'anon=false,authenticated={str(client).lower()}')
+                f"from unnest(array['anon','authenticated','service_role']) r")
+        check(g, f'{fn}: EXECUTE anon=false, authenticated={str(client).lower()}, service_role=false', acl,
+              f'anon=false,authenticated={str(client).lower()},service_role=false')
         check(g, f'{fn}: no PUBLIC EXECUTE',
               Q(f"select count(*) from pg_proc p, aclexplode(coalesce(p.proacl, acldefault('f', p.proowner))) a "
                 f"where p.oid = 'public.{fn}'::regprocedure and a.grantee = 0"), '0')
@@ -591,11 +614,12 @@ def g12_guards(db, g):
           Q("select has_function_privilege('service_role', 'public.jobs_discard_live_location()'::regprocedure, 'execute')"), 'f')
     check(g, 'authenticated calling the trigger function directly: permission denied',
           q(db, 'P1', "select public.jobs_discard_live_location()"), denied)
-    check(g, 'trigger definition: AFTER UPDATE OF status, pro_id, FOR EACH ROW, WHEN leaving en_route or pro_id change',
+    check(g, 'trigger definition: AFTER UPDATE OF status, pro_id, customer_id, FOR EACH ROW, WHEN en_route and (leaving en_route or pro_id / customer_id change)',
           Q("select pg_get_triggerdef(oid) from pg_trigger where tgname = 'jobs_discard_live_location'"),
-          lambda s: 'AFTER UPDATE OF status, pro_id ON public.jobs FOR EACH ROW WHEN' in s
+          lambda s: 'AFTER UPDATE OF status, pro_id, customer_id ON public.jobs FOR EACH ROW WHEN' in s
           and "(old.status = 'en_route'::job_status)" in s and "(new.status IS DISTINCT FROM 'en_route'::job_status)" in s
-          and '(new.pro_id IS DISTINCT FROM old.pro_id)' in s and 'jobs_discard_live_location()' in s)
+          and '(new.pro_id IS DISTINCT FROM old.pro_id)' in s and '(new.customer_id IS DISTINCT FROM old.customer_id)' in s
+          and 'jobs_discard_live_location()' in s)
     check(g, 'table columns exactly job_id, pro_id, lat, lng, received_at, captured_at',
           Q("select string_agg(attname || ':' || format_type(atttypid, atttypmod) || ':' || attnotnull, ',' order by attnum) "
             "from pg_attribute where attrelid = 'public.job_live_locations'::regclass and attnum > 0 and not attisdropped"),
@@ -673,6 +697,18 @@ def g13_guard(g):
     check(g, 'CRLF base: 0032 re-pasted as CRLF: no error, state identical (defs hashed CR-removed)', (rc, diff(s1, state(d))), (0, []))
     check(g, 'CRLF base: writer/reader work', q(d, 'P1', W(J1) + " \\g /dev/null\n" + as_actor('C1') +
                                                 f"select public.get_job_live_location('{J1}')->>'available'"), 'true')
+    prev = os.environ.get('HAVEN_0032_PREV')
+    if prev and os.path.exists(prev):
+        d = fresh('upgrade')
+        rc0, _ = apply_file(d, prev)
+        x1b = q(d, 'svc_C1', R(J1), setup=seed())
+        rc, err = apply_file(d, F32)
+        trg = q(d, 'postgres', "select pg_get_triggerdef(oid) from pg_trigger where tgname = 'jobs_discard_live_location'")
+        check(g, 'upgrade from the previous draft (e0652ee9): before, a service_role session with C1 claims reads (X1b); '
+                 'after re-applying this file: denied, trigger watches customer_id',
+              (rc0, x1b.startswith('{') and '"available": true' in x1b, rc, denied(q(d, 'svc_C1', R(J1), setup=seed())),
+               'UPDATE OF status, pro_id, customer_id' in trg),
+              (0, True, 0, True, True))
     d = fresh('cycle')
     pre = state(d)
     check(g, 'before 0032: the three 0030 md5s match check 5b (52b6bff7 / 789cb65e / de20ad54)', md5s_0030(d), MD5_0030)
