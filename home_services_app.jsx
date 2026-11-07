@@ -1098,6 +1098,16 @@ export default function App(){
     tick();
     return ()=>{ cancelled=true; if(timer) clearTimeout(timer); setLiveLoc(null); };
   },[liveTrackJobId]);
+  // While a point is on screen, re-check it every second: the "Updated … ago"
+  // text keeps counting and the pin goes at 5 minutes even if a read is pending.
+  const [liveClock,setLiveClock]=useState(()=>Date.now());
+  const liveShowing=!!(liveLoc&&liveLoc.state==="live");
+  useEffect(()=>{
+    if(!liveShowing) return;
+    setLiveClock(Date.now());
+    const id=setInterval(()=>setLiveClock(Date.now()),1000);
+    return ()=>clearInterval(id);
+  },[liveShowing]);
 
   // Map extended statuses to the nearest progress step for the tracker UI
   const progressStatus=vj?(
@@ -4645,17 +4655,19 @@ export default function App(){
   // No route, ETA, travel time or second marker.
   const liveTrackCard=()=>{
     const live=liveLoc&&liveLoc.jobId===String(vj.backendJobId)?liveLoc:null;
-    const point=live&&live.state==="live"?live.point:null;
+    const nowMs=Math.max(liveClock,Date.now());
+    const point=live&&live.state==="live"?havenLiveCurrentPoint(live,nowMs):null; // null at 5 min
     const src=point?havenLiveMapUrl(point,isDark):null;
-    const msg=point?"":havenLiveMessage(live,Date.now());
+    const msg=point?"":havenLiveMessage(live,nowMs);
+    const shownState=live?(live.state==="live"&&!point?"paused":live.state):"loading";
     return(
-      <div data-testid="live-track" data-live-state={live?live.state:"loading"} style={{margin:"12px 20px",background:W,borderRadius:20,padding:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+      <div data-testid="live-track" data-live-state={shownState} style={{margin:"12px 20px",background:W,borderRadius:20,padding:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
         {src?(
           <>
             <div style={{position:"relative",borderRadius:14,overflow:"hidden",border:`1px solid ${BD}`,background:BG,aspectRatio:"2 / 1"}}>
               <img key={src} src={src} alt="Map showing your Pro's current location" decoding="async" style={{display:"block",width:"100%",height:"100%",objectFit:"cover"}}/>
             </div>
-            <div style={{fontSize:12,color:TS,marginTop:8,lineHeight:1.5}}><span style={{fontWeight:700,color:TX}}>📍 Your Pro's live location</span>{havenLiveAgeText(live.ageS)?` · ${havenLiveAgeText(live.ageS)}`:""}</div>
+            <div style={{fontSize:12,color:TS,marginTop:8,lineHeight:1.5}}><span style={{fontWeight:700,color:TX}}>📍 Your Pro's live location</span>{havenLiveAgeText(havenLivePointTime(live),nowMs)?` · ${havenLiveAgeText(havenLivePointTime(live),nowMs)}`:""}</div>
           </>
         ):(
           <div role="status" aria-live="polite" style={{borderRadius:14,border:`1px solid ${BD}`,background:BG,aspectRatio:"2 / 1",display:"flex",alignItems:"center",justifyContent:"center",padding:16,textAlign:"center",fontSize:13,fontWeight:600,color:TS,lineHeight:1.5}}>{msg}</div>

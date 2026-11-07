@@ -14,7 +14,13 @@
  *     clear the point and stop polling.
  *  7. No simulated countdown or promised arrival time for a backend en_route job.
  *  8. No coordinates in localStorage; no GET to the live-location function; no
- *     coordinates on any request URL.
+ *     coordinates on any Supabase request URL (the Mapbox image URL carries the
+ *     point by design).
+ *  Fix (paper QA of fc9bb13):
+ *  9. A read (request or body) that never settles is aborted at 10 s and treated as a
+ *     network error: pin removed, network copy, next read at 30 s.
+ * 10. A shown point expires at 5 minutes (pin hidden, paused copy) even while a read is
+ *     still in flight; "Updated … ago" keeps counting instead of freezing at age_s.
  *
  * Coordinates are never printed. The live point is a fixture near a public landmark
  * (Orlando City Hall), never a real job's point. Mocked fetch is not certification.
@@ -54,9 +60,22 @@ Object.defineProperty(global.document, 'visibilityState', { configurable: true, 
 // The app's 10 s poll and 30 s retry run scaled down here; the delays the app
 // asked for are recorded so the cadence itself is still checked exactly.
 const realSetTimeout = global.setTimeout;
-const requestedDelays = [];
+const requestedDelays = [];      // poll delays the app asked for (10 s / 30 s)
+const timeoutDelays = [];        // read-timeout delays the adapter asked for
 const SCALE = { 10000: 160, 30000: 480 };
-global.setTimeout = (fn, ms, ...a) => { if (SCALE[ms]) { requestedDelays.push(ms); ms = SCALE[ms]; } return realSetTimeout(fn, ms, ...a); };
+let scaleReadTimeout = true;     // false: the 10 s read timeout runs in real time
+global.setTimeout = (fn, ms, ...a) => {
+  if (SCALE[ms]) {
+    const isReadTimeout = typeof fn === 'function' && /\.abort\(\)/.test(String(fn));
+    if (isReadTimeout) { timeoutDelays.push(ms); if (scaleReadTimeout) ms = SCALE[ms]; }
+    else { requestedDelays.push(ms); ms = SCALE[ms]; }
+  }
+  return realSetTimeout(fn, ms, ...a);
+};
+// Wall clock under test control (for ageing / 5-minute expiry).
+const realNow = Date.now.bind(Date);
+let clockOffset = 0;
+Date.now = () => realNow() + clockOffset;
 
 const { render, screen, fireEvent, cleanup } = require('@testing-library/react');
 const { act } = require('react-dom/test-utils');
@@ -95,7 +114,7 @@ let liveImpl = () => jsonRes(200, { ok: true, available: false, reason: 'waiting
 const calls = [];
 global.fetch = async (url, init) => {
   const u = String(url); init = init || {};
-  calls.push({ url: u, method: init.method || 'GET', body: init.body || null });
+  calls.push({ url: u, method: init.method || 'GET', body: init.body || null, signal: init.signal || null });
   const ok = (body) => jsonRes(200, body);
   if (u.endsWith('/auth/v1/health')) return ok({});
   if (u.includes('/rest/v1/rpc/is_qa_tester')) return ok(false);
@@ -147,7 +166,7 @@ async function mount(status) {
   storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
   storedData['haven_jobs'] = JSON.stringify({ __v: 1, data: [job(status)] });
   remoteStatus = status; visibility = 'visible';
-  calls.length = 0; requestedDelays.length = 0;
+  calls.length = 0; requestedDelays.length = 0; timeoutDelays.length = 0; clockOffset = 0; scaleReadTimeout = true;
   const container = document.createElement('div');
   document.body.appendChild(container);
   await act(async () => { render(React.createElement(App), container); });
@@ -206,7 +225,7 @@ const okLive = (p, age) => jsonRes(200, { ok: true, available: true, point: { la
   const src = liveImgs()[0] ? liveImgs()[0].getAttribute('src') : '';
   assert(src.includes(pinFor(LIVE2)), '3. the pin is the Pro\'s point exactly as received (not rounded)');
   assert(liveImgs().length === 1 && !/F59E0B/.test(src), 'one pin only (no second marker)');
-  assert(/Your Pro's live location/.test(bodyText()) && /Updated 3 sec ago/.test(bodyText()), 'the map is labelled as the Pro\'s live location with its age');
+  assert(/Your Pro's live location/.test(bodyText()) && /Updated [345] sec ago/.test(bodyText()), 'the map is labelled as the Pro\'s live location with its age');
   // (7) no simulated countdown, no promised arrival time
   assert(!/min away|miles away|mi away|Arriving in|arrival window/i.test(bodyText()), '7. no simulated minutes / miles / arrival window');
   assert(!/A live arrival time will show here/.test(bodyText()), '7. no promised arrival time for a backend en_route job');
@@ -289,12 +308,87 @@ const okLive = (p, age) => jsonRes(200, { ok: true, available: true, point: { la
   await openTracking();
   await waitFor(() => card() && card().getAttribute('data-live-state') === 'network', 'network state');
   assert(liveImgs().length === 0 && /Couldn't load your Pro's location/.test(bodyText()), '5. network error: no marker, honest line');
-  assert(requestedDelays.includes(30000) && !requestedDelays.includes(10000), '5. network error: backs off to 30 s');
+  assert(requestedDelays.includes(30000) && !requestedDelays.includes(10000), '5. network error: backs off to 30 s (no 10 s poll)');
+  assert(timeoutDelays.length >= 1 && timeoutDelays.every(d => d === 10000), '9. every read is bounded by a 10 s timeout');
   await settle(250);
   assert(liveCalls().length === 1, '5. network error: no read at the 10 s mark');
   liveImpl = () => okLive(LIVE);
   await waitFor(() => liveCalls().length === 2 && liveImgs().length === 1, 'retry after back-off');
   assert(true, '5. network error: tries again after the back-off and recovers');
+
+  // (5) settled errors after a live pin: 5xx / 408 / 429 / malformed clear it and back off
+  for (const [label, impl] of [
+    ['500', () => jsonRes(500, {})], ['408', () => jsonRes(408, {})], ['429', () => jsonRes(429, {})],
+    ['malformed JSON', () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError('bad'); } })],
+  ]) {
+    liveImpl = () => okLive(LIVE);
+    await mount('en_route');
+    await openTracking();
+    await waitFor(() => liveImgs().length === 1, label + ': live first');
+    liveImpl = impl;
+    await waitFor(() => card() && card().getAttribute('data-live-state') === 'network', label + ': network state');
+    assert(liveImgs().length === 0 && /Couldn't load your Pro's location/.test(bodyText()), '5. ' + label + ' after a live pin: pin removed, network copy');
+    assert(requestedDelays[requestedDelays.length - 1] === 30000, '5. ' + label + ': next read in 30 s');
+  }
+
+  // (9) a hung read after a live pin: aborted at 10 s → network, retry at 30 s
+  for (const [label, hang] of [
+    ['request never settles', () => new Promise(() => {})],
+    ['body never settles', () => ({ ok: true, status: 200, json: () => new Promise(() => {}) })],
+  ]) {
+    liveImpl = () => okLive(LIVE);
+    await mount('en_route');
+    await openTracking();
+    await waitFor(() => liveImgs().length === 1, label + ': live first');
+    liveImpl = n => (n === 2 ? hang() : okLive(LIVE2, 1));
+    await waitFor(() => liveCalls().length === 2, label + ': second read started');
+    const hungCall = liveCalls()[1];
+    await waitFor(() => card() && card().getAttribute('data-live-state') === 'network', label + ': timed out');
+    assert(liveImgs().length === 0 && /Couldn't load your Pro's location\. Trying again shortly\./.test(bodyText()), '9. ' + label + ': aborted after the 10 s timeout, pin removed, network copy');
+    assert(!!hungCall.signal && hungCall.signal.aborted === true, '9. ' + label + ': the request is aborted');
+    assert(requestedDelays[requestedDelays.length - 1] === 30000, '9. ' + label + ': next read scheduled at 30 s');
+    await waitFor(() => liveCalls().length === 3 && liveImgs().length === 1, label + ': recovers on the next read');
+    assert(liveImgs()[0].getAttribute('src').includes(pinFor(LIVE2)), '9. ' + label + ': a hung read does not block later polls');
+  }
+
+  // (10) ageing and 5-minute expiry while a read is in flight
+  liveImpl = () => okLive(LIVE, 3);
+  await mount('en_route');
+  scaleReadTimeout = false; // keep the next read pending (real 10 s timeout)
+  await openTracking();
+  await waitFor(() => liveImgs().length === 1, 'live');
+  let release = null;
+  liveImpl = () => new Promise(r => { release = () => r(jsonRes(200, { ok: true, available: false, reason: 'waiting' })); });
+  await waitFor(() => liveCalls().length === 2 && release, 'read in flight');
+  const ageText = () => (bodyText().match(/Updated (\d+) (sec|min) ago/) || []).slice(1).join(' ');
+  clockOffset = 40000; await settle(1150);
+  assert(/^4[3-5] sec$/.test(ageText()) && liveImgs().length === 1, '10. "Updated … ago" keeps counting (≈43 sec, not frozen at 3)');
+  clockOffset = 4 * 60000; await settle(1150);
+  assert(ageText() === '4 min' && liveImgs().length === 1, '10. at 4 minutes the pin still shows, "Updated 4 min ago"');
+  clockOffset = 5 * 60000; await settle(1150);
+  assert(liveCalls().length === 2 && !!release, '10. the read is still in flight');
+  assert(liveImgs().length === 0 && card().getAttribute('data-live-state') === 'paused', '10. at 5 minutes the pin is hidden even with a read in flight');
+  assert(/Location paused\. Last update 5 min ago\./.test(bodyText()) && !/Your Pro's live location/.test(bodyText()), '10. the locked paused copy replaces it');
+  assert(!hasCoord(Array.from(document.querySelectorAll('img')).map(i => i.getAttribute('src')).join(' ')), '10. the expired point is no longer on screen');
+  release(); await settle(100);
+  scaleReadTimeout = true;
+
+  // (10) timestamp fallbacks (no age_s): received_at, then captured_at
+  {
+    const vm = require('vm');
+    const sb = { Date, Math, Number, String, encodeURIComponent };
+    vm.createContext(sb);
+    vm.runInContext(fs.readFileSync('live_location_view.js', 'utf8') + '\n;globalThis.__v = { havenLivePointTime, havenLiveCurrentPoint, havenLiveAgeText };', sb);
+    const V = sb.__v;
+    const t0 = Date.parse('2026-11-06T20:00:00Z');
+    const base = { state: 'live', point: { lat: 1, lng: 2 }, readAt: t0 };
+    assert(V.havenLivePointTime({ ...base, ageS: 12, receivedAt: '2026-11-06T19:00:00Z' }) === t0 - 12000, 'point time = read time minus the server\'s age_s (immune to a wrong phone clock)');
+    assert(V.havenLivePointTime({ ...base, ageS: null, receivedAt: '2026-11-06T19:59:30Z', capturedAt: '2026-11-06T19:59:00Z' }) === t0 - 30000, 'no age_s: the server\'s received_at');
+    assert(V.havenLivePointTime({ ...base, ageS: null, receivedAt: null, capturedAt: '2026-11-06T19:59:00Z' }) === t0 - 60000, 'no received_at: captured_at');
+    assert(V.havenLiveCurrentPoint({ ...base, ageS: null, receivedAt: null, capturedAt: null }, t0) === null, 'no time at all: no pin (never shown as current)');
+    assert(V.havenLiveCurrentPoint({ ...base, ageS: 299 }, t0) !== null && V.havenLiveCurrentPoint({ ...base, ageS: 300 }, t0) === null, 'the pin expires at exactly 5 minutes');
+    assert(V.havenLiveAgeText(t0 - 75000, t0) === 'Updated 1 min ago' && V.havenLiveAgeText(t0 - 9000, t0) === 'Updated 9 sec ago', 'age copy from the timestamp');
+  }
 
   // (8) source: never a GET, never stored, never logged
   const src2 = fs.readFileSync('backend_adapter.js', 'utf8');
