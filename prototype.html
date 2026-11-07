@@ -1384,6 +1384,83 @@ const HAVEN_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
     }
   };
 
+  // Live location while the Pro is Driving to Job (get_job_live_location,
+  // migration 0032). Only the job's Customer gets a useful read. Always POST,
+  // job id in the body. No session -> no call. Never logged, never stored:
+  // the app keeps the latest read in memory while the tracking screen is open.
+  // Result:
+  //   { state:"live", point:{lat,lng}, ageS, receivedAt, capturedAt, readAt }
+  //                                              the Pro's point; readAt = this device's
+  //                                              clock when the read arrived (for ageing)
+  //   { state:"waiting" }                        no point yet
+  //   { state:"paused", lastReceivedAt }         no fresh point: no coordinates
+  //   { state:"ended" }                          tracking_not_active: stop polling
+  //   { state:"unavailable", error }             not_found / not_authenticated / 401 / 403: stop
+  //   { state:"network" }                        no connection, server error or a read that
+  //                                              took over 10 s (aborted): try again later
+  const fetchJobLiveLocation=async(jobId)=>{
+    const cfg=getSupabaseConfig();
+    if(!cfg||!jobId) return {state:"unavailable",error:"not_found"};
+    const token=havenSignedInAccessToken();
+    if(!token) return {state:"unavailable",error:"not_authenticated"};
+    // The whole read (request + body) is bounded: after 10 s it is aborted and
+    // treated as a network error, so a hung read never keeps a pin on screen.
+    const TIMED_OUT={};
+    const ctrl=typeof AbortController!=="undefined"?new AbortController():null;
+    let timer=null;
+    const timeout=new Promise(resolve=>{ timer=setTimeout(()=>{ try{ if(ctrl) ctrl.abort(); }catch{} resolve(TIMED_OUT); },HAVEN_LIVE_READ_TIMEOUT_MS); });
+    try{
+    let res;
+    try{
+      res=await Promise.race([timeout,fetch(`${cfg.url}/rest/v1/rpc/get_job_live_location`,{
+        method:"POST",
+        headers:{
+          "Accept":"application/json",
+          "Content-Type":"application/json",
+          apikey:cfg.anonKey,
+          Authorization:`Bearer ${token}`,
+        },
+        body:JSON.stringify({p_job_id:String(jobId)}),
+        ...(ctrl?{signal:ctrl.signal}:{}),
+      })]);
+    }catch(err){
+      return {state:"network"};
+    }
+    if(res===TIMED_OUT) return {state:"network"};
+    if(res.status===401||res.status===403) return {state:"unavailable",error:"not_authenticated"};
+    if(!res.ok) return res.status>=500||res.status===408||res.status===429?{state:"network"}:{state:"unavailable",error:"http_"+res.status};
+    let body=null;
+    try{ body=await Promise.race([timeout,res.json()]); }catch{ body=null; }
+    if(body===TIMED_OUT) return {state:"network"};
+    if(!body||typeof body!=="object"||Array.isArray(body)) return {state:"network"};
+    if(body.ok===true){
+      if(body.available===true){
+        // Strict numbers: only a finite number, or a non-empty numeric string.
+        // null, "", whitespace, booleans, arrays and objects are NOT 0 (a bare
+        // Number() would make them 0 and a missing age would look "just now").
+        const num=v=>{
+          if(typeof v==="number") return Number.isFinite(v)?v:NaN;
+          if(typeof v==="string"&&/^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(v)) return Number(v);
+          return NaN;
+        };
+        const p=body.point&&typeof body.point==="object"?body.point:{};
+        const lat=num(p.lat), lng=num(p.lng);
+        if(!Number.isFinite(lat)||!Number.isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180) return {state:"network"};
+        const age=num(body.age_s);
+        // ISO 8601 date-time with a zone, as the server sends; anything else is unusable.
+        const iso=v=>typeof v==="string"&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(v)&&Number.isFinite(Date.parse(v))?v:null;
+        // ageS null = unusable: the card then uses received_at, then captured_at,
+        // and with none of them shows no pin. A real 0 stays 0 (just received).
+        return {state:"live",point:{lat,lng},ageS:Number.isFinite(age)&&age>=0?age:null,receivedAt:iso(body.received_at),capturedAt:iso(body.captured_at),readAt:Date.now()};
+      }
+      if(body.reason==="paused") return {state:"paused",lastReceivedAt:typeof body.last_received_at==="string"?body.last_received_at:null};
+      return {state:"waiting"};
+    }
+    if(body.error==="tracking_not_active") return {state:"ended"};
+    return {state:"unavailable",error:typeof body.error==="string"?body.error:"refused"};
+    }finally{ clearTimeout(timer); }
+  };
+
   const fetchAssignedProLabels=async(backendIds)=>{
     if(havenProLabelRpcUnavailable) return {};
     const cfg=getSupabaseConfig();
@@ -1926,6 +2003,77 @@ function havenStaticMapUrl(lat, lng, opts) {
   const w = o.width || 600, h = o.height || 300;
   const ll = `${Number(lng).toFixed(6)},${Number(lat).toFixed(6)}`;
   return `https://api.mapbox.com/styles/v1/mapbox/${style}/static/pin-l+F59E0B(${ll})/${ll},16,0/${w}x${h}@2x?logo=true&attribution=true&access_token=${encodeURIComponent(HAVEN_MAPBOX_PUBLIC_TOKEN)}`;
+}
+// Customer tracking: the assigned Pro's live location while they are Driving to
+// Job. Founder approved 2026-11-06 (draft). Read path: fetchJobLiveLocation
+// (backend_adapter.js, get_job_live_location). This file is display only.
+//
+// - Only the job's Customer, only on the tracking screen, only while the app is
+//   in front and the job is en_route. Polled every 10 s; never at startup.
+// - The pin is the Pro's actual point, unrounded. No route, ETA, travel time,
+//   geocoding or second marker. A paused or ended read shows no point at all.
+// - Kept in memory only, never in localStorage, never logged.
+
+const HAVEN_LIVE_POLL_MS = 10000;
+const HAVEN_LIVE_RETRY_MS = 30000; // after a network or server error (or a read timeout)
+const HAVEN_LIVE_READ_TIMEOUT_MS = 10000; // a read (request + body) is aborted after 10 s
+const HAVEN_LIVE_MAX_AGE_MS = 5 * 60000; // a point this old is never shown as current
+const HAVEN_LIVE_WAITING = "Waiting for the Pro's location";
+
+// Mapbox Static Images, one pin at the exact point (numbers as received, not rounded).
+function havenLiveMapUrl(point, dark) {
+  if (!point || typeof HAVEN_MAPBOX_PUBLIC_TOKEN === "undefined" || !HAVEN_MAPBOX_PUBLIC_TOKEN) return null;
+  const ll = String(point.lng) + "," + String(point.lat);
+  const style = dark ? "dark-v11" : "streets-v12";
+  return "https://api.mapbox.com/styles/v1/mapbox/" + style + "/static/pin-l+0F6E4E(" + ll + ")/" + ll + ",15,0/600x300@2x?logo=true&attribution=true&access_token=" + encodeURIComponent(HAVEN_MAPBOX_PUBLIC_TOKEN);
+}
+
+// "Location paused. Last update X min ago." (no time known: no number).
+function havenLivePausedText(lastReceivedAt, nowMs) {
+  const t = lastReceivedAt ? Date.parse(lastReceivedAt) : NaN;
+  if (!Number.isFinite(t)) return "Location paused.";
+  const min = Math.max(1, Math.round((nowMs - t) / 60000));
+  return "Location paused. Last update " + min + " min ago.";
+}
+
+// When the shown point was received by the server, on this device's clock.
+// Preferred: this device's time of the read minus the server's age_s (immune to
+// a phone clock that is off). Else the server's received_at, else captured_at.
+function havenLivePointTime(live) {
+  if (!live || live.state !== "live") return null;
+  if (typeof live.readAt === "number" && typeof live.ageS === "number" && Number.isFinite(live.ageS)) return live.readAt - live.ageS * 1000;
+  // No usable age: the server's own times only. Never this device's clock alone.
+  const t = Date.parse(live.receivedAt || live.capturedAt || "");
+  return Number.isFinite(t) ? Math.min(t, typeof live.readAt === "number" ? live.readAt : t) : null;
+}
+
+// The point to show now, or null once it is 5 minutes old (or its time is unknown).
+function havenLiveCurrentPoint(live, nowMs) {
+  const t = havenLivePointTime(live);
+  if (t == null || !live.point || nowMs - t >= HAVEN_LIVE_MAX_AGE_MS) return null;
+  return live.point;
+}
+
+// "Updated X sec ago" from the point's time versus now, so it keeps counting.
+function havenLiveAgeText(pointTime, nowMs) {
+  if (typeof pointTime !== "number" || !Number.isFinite(pointTime)) return "";
+  const s = Math.max(0, Math.floor((nowMs - pointTime) / 1000));
+  if (s < 60) return "Updated " + s + " sec ago";
+  return "Updated " + Math.floor(s / 60) + " min ago";
+}
+
+// What the card says for a read without a point.
+function havenLiveMessage(live, nowMs) {
+  const s = live && live.state;
+  if (!s || s === "loading") return "Loading your Pro's location…";
+  if (s === "waiting") return HAVEN_LIVE_WAITING;
+  // A live point that has expired reads exactly like the server's paused state.
+  if (s === "live") { const t = havenLivePointTime(live); return havenLivePausedText(t == null ? null : new Date(t).toISOString(), nowMs); }
+  if (s === "paused") return havenLivePausedText(live.lastReceivedAt, nowMs);
+  if (s === "ended") return "Location sharing has ended for this job.";
+  if (s === "unavailable") return "Your Pro's location isn't available.";
+  if (s === "network") return "Couldn't load your Pro's location. Trying again shortly.";
+  return "";
 }
  
 // Recognized so a job write can refuse it. Signed-out job writes do not send it.
@@ -3003,6 +3151,40 @@ function App(){
   const vjPro = proShownForJob(vj);
   const vjPname=vjPro.n.split(" ")[0];
   const vjTotal=vjTask?(vj?.lockedPrice??vjTask.p)+(vj?.surge||0)+(vj?.emergencyFee||0):0;
+  // Live location while the Pro is Driving to Job (live_location_view.js).
+  // Polled only with the tracking screen open, the app in front, signed in, a
+  // real backend job that is en_route. Fetch on open, then every 10 s. Leaving
+  // the screen, the app going to the background, the job leaving en_route and
+  // sign-out all stop polling and drop the point (memory only, never stored).
+  const liveTrackJobId=(scr==="tracking"&&isAppVisible&&havenAuth&&vj&&vj.backendJobId&&vj.status==="en_route")?String(vj.backendJobId):null;
+  const [liveLoc,setLiveLoc]=useState(null);
+  useEffect(()=>{
+    setLiveLoc(null);
+    if(!liveTrackJobId) return;
+    let cancelled=false, timer=null;
+    setLiveLoc({jobId:liveTrackJobId,state:"loading"});
+    const tick=async()=>{
+      timer=null;
+      const r=await fetchJobLiveLocation(liveTrackJobId);
+      if(cancelled) return;
+      setLiveLoc({jobId:liveTrackJobId,...r});
+      if(r.state==="ended"||r.state==="unavailable") return; // tracking over or not allowed: stop
+      timer=setTimeout(tick,r.state==="network"?HAVEN_LIVE_RETRY_MS:HAVEN_LIVE_POLL_MS);
+    };
+    tick();
+    return ()=>{ cancelled=true; if(timer) clearTimeout(timer); setLiveLoc(null); };
+  },[liveTrackJobId]);
+  // While a point is on screen, re-check it every second: the "Updated … ago"
+  // text keeps counting and the pin goes at 5 minutes even if a read is pending.
+  const [liveClock,setLiveClock]=useState(()=>Date.now());
+  const liveShowing=!!(liveLoc&&liveLoc.state==="live");
+  useEffect(()=>{
+    if(!liveShowing) return;
+    setLiveClock(Date.now());
+    const id=setInterval(()=>setLiveClock(Date.now()),1000);
+    return ()=>clearInterval(id);
+  },[liveShowing]);
+
   // Map extended statuses to the nearest progress step for the tracker UI
   const progressStatus=vj?(
     vj.status==="diagnosing"||vj.status==="materials_requested" ? "arrived"
@@ -6544,6 +6726,32 @@ function App(){
     );
   };
 
+  // Live tracking card (backend job, en_route): the Pro's actual current point,
+  // or an honest state. Replaces the property map while the Pro is on the way.
+  // No route, ETA, travel time or second marker.
+  const liveTrackCard=()=>{
+    const live=liveLoc&&liveLoc.jobId===String(vj.backendJobId)?liveLoc:null;
+    const nowMs=Math.max(liveClock,Date.now());
+    const point=live&&live.state==="live"?havenLiveCurrentPoint(live,nowMs):null; // null at 5 min
+    const src=point?havenLiveMapUrl(point,isDark):null;
+    const msg=point?"":havenLiveMessage(live,nowMs);
+    const shownState=live?(live.state==="live"&&!point?"paused":live.state):"loading";
+    return(
+      <div data-testid="live-track" data-live-state={shownState} style={{margin:"12px 20px",background:W,borderRadius:20,padding:12,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
+        {src?(
+          <>
+            <div style={{position:"relative",borderRadius:14,overflow:"hidden",border:`1px solid ${BD}`,background:BG,aspectRatio:"2 / 1"}}>
+              <img key={src} src={src} alt="Map showing your Pro's current location" decoding="async" style={{display:"block",width:"100%",height:"100%",objectFit:"cover"}}/>
+            </div>
+            <div style={{fontSize:12,color:TS,marginTop:8,lineHeight:1.5}}><span style={{fontWeight:700,color:TX}}>📍 Your Pro's live location</span>{havenLiveAgeText(havenLivePointTime(live),nowMs)?` · ${havenLiveAgeText(havenLivePointTime(live),nowMs)}`:""}</div>
+          </>
+        ):(
+          <div role="status" aria-live="polite" style={{borderRadius:14,border:`1px solid ${BD}`,background:BG,aspectRatio:"2 / 1",display:"flex",alignItems:"center",justifyContent:"center",padding:16,textAlign:"center",fontSize:13,fontWeight:600,color:TS,lineHeight:1.5}}>{msg}</div>
+        )}
+      </div>
+    );
+  };
+
   // ── TRACKING ────────────────────────────────────────────────────────────────
   const trackingScreen=()=>{
     if(!vj) return unavailableScreen("Tracking",goBookings);
@@ -6603,7 +6811,7 @@ function App(){
               return <div><div aria-live="polite" style={{fontWeight:800,fontSize:17,color:TX,marginBottom:3}}>{label}</div><div style={{fontSize:13,color:TS}}>{sub}</div></div>;
             })()}
           </div>
-          {trackMap()}
+          {vj.backendJobId&&vj.status==="en_route"?liveTrackCard():trackMap()}
           {/* Materials approval card — shown only while awaiting customer decision */}
           {vj.status==="materials_requested"&&(()=>{
             const jt=vjTask?{n:vjTask.n,c: (TASKS.find(t=>t.id===vj.taskId)?.c)}:(vj.custom?{n:vj.custom.title,c:vj.custom.cat}:null);
@@ -6668,7 +6876,7 @@ function App(){
               <div style={{margin:"0 20px 12px",background:W,borderRadius:20,padding:18,boxShadow:"0 2px 10px rgba(28,43,58,.07)"}}>
                 <div style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase",marginBottom:4}}>Arrival</div>
                 <div aria-live="polite" style={{fontWeight:800,fontSize:18,color:TX}}>{vjPname} is on the way</div>
-                <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>{acceptedAt?`Accepted at ${acceptedAt}. `:""}A live arrival time will show here once location sharing is available.</div>
+                <div style={{fontSize:12,color:TS,marginTop:4,lineHeight:1.5}}>{acceptedAt?`Accepted at ${acceptedAt}.`:""}{vj.backendJobId?"":`${acceptedAt?" ":""}A live arrival time will show here once location sharing is available.`}</div>
                 {durOk&&(
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"baseline",marginTop:12,paddingTop:12,borderTop:`1px solid ${BD}`}}>
                     <span style={{fontSize:11,fontWeight:700,color:TM,letterSpacing:.6,textTransform:"uppercase"}}>Typical job length (estimate)</span>

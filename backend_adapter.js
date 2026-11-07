@@ -390,6 +390,83 @@
     }
   };
 
+  // Live location while the Pro is Driving to Job (get_job_live_location,
+  // migration 0032). Only the job's Customer gets a useful read. Always POST,
+  // job id in the body. No session -> no call. Never logged, never stored:
+  // the app keeps the latest read in memory while the tracking screen is open.
+  // Result:
+  //   { state:"live", point:{lat,lng}, ageS, receivedAt, capturedAt, readAt }
+  //                                              the Pro's point; readAt = this device's
+  //                                              clock when the read arrived (for ageing)
+  //   { state:"waiting" }                        no point yet
+  //   { state:"paused", lastReceivedAt }         no fresh point: no coordinates
+  //   { state:"ended" }                          tracking_not_active: stop polling
+  //   { state:"unavailable", error }             not_found / not_authenticated / 401 / 403: stop
+  //   { state:"network" }                        no connection, server error or a read that
+  //                                              took over 10 s (aborted): try again later
+  const fetchJobLiveLocation=async(jobId)=>{
+    const cfg=getSupabaseConfig();
+    if(!cfg||!jobId) return {state:"unavailable",error:"not_found"};
+    const token=havenSignedInAccessToken();
+    if(!token) return {state:"unavailable",error:"not_authenticated"};
+    // The whole read (request + body) is bounded: after 10 s it is aborted and
+    // treated as a network error, so a hung read never keeps a pin on screen.
+    const TIMED_OUT={};
+    const ctrl=typeof AbortController!=="undefined"?new AbortController():null;
+    let timer=null;
+    const timeout=new Promise(resolve=>{ timer=setTimeout(()=>{ try{ if(ctrl) ctrl.abort(); }catch{} resolve(TIMED_OUT); },HAVEN_LIVE_READ_TIMEOUT_MS); });
+    try{
+    let res;
+    try{
+      res=await Promise.race([timeout,fetch(`${cfg.url}/rest/v1/rpc/get_job_live_location`,{
+        method:"POST",
+        headers:{
+          "Accept":"application/json",
+          "Content-Type":"application/json",
+          apikey:cfg.anonKey,
+          Authorization:`Bearer ${token}`,
+        },
+        body:JSON.stringify({p_job_id:String(jobId)}),
+        ...(ctrl?{signal:ctrl.signal}:{}),
+      })]);
+    }catch(err){
+      return {state:"network"};
+    }
+    if(res===TIMED_OUT) return {state:"network"};
+    if(res.status===401||res.status===403) return {state:"unavailable",error:"not_authenticated"};
+    if(!res.ok) return res.status>=500||res.status===408||res.status===429?{state:"network"}:{state:"unavailable",error:"http_"+res.status};
+    let body=null;
+    try{ body=await Promise.race([timeout,res.json()]); }catch{ body=null; }
+    if(body===TIMED_OUT) return {state:"network"};
+    if(!body||typeof body!=="object"||Array.isArray(body)) return {state:"network"};
+    if(body.ok===true){
+      if(body.available===true){
+        // Strict numbers: only a finite number, or a non-empty numeric string.
+        // null, "", whitespace, booleans, arrays and objects are NOT 0 (a bare
+        // Number() would make them 0 and a missing age would look "just now").
+        const num=v=>{
+          if(typeof v==="number") return Number.isFinite(v)?v:NaN;
+          if(typeof v==="string"&&/^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(v)) return Number(v);
+          return NaN;
+        };
+        const p=body.point&&typeof body.point==="object"?body.point:{};
+        const lat=num(p.lat), lng=num(p.lng);
+        if(!Number.isFinite(lat)||!Number.isFinite(lng)||Math.abs(lat)>90||Math.abs(lng)>180) return {state:"network"};
+        const age=num(body.age_s);
+        // ISO 8601 date-time with a zone, as the server sends; anything else is unusable.
+        const iso=v=>typeof v==="string"&&/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(v)&&Number.isFinite(Date.parse(v))?v:null;
+        // ageS null = unusable: the card then uses received_at, then captured_at,
+        // and with none of them shows no pin. A real 0 stays 0 (just received).
+        return {state:"live",point:{lat,lng},ageS:Number.isFinite(age)&&age>=0?age:null,receivedAt:iso(body.received_at),capturedAt:iso(body.captured_at),readAt:Date.now()};
+      }
+      if(body.reason==="paused") return {state:"paused",lastReceivedAt:typeof body.last_received_at==="string"?body.last_received_at:null};
+      return {state:"waiting"};
+    }
+    if(body.error==="tracking_not_active") return {state:"ended"};
+    return {state:"unavailable",error:typeof body.error==="string"?body.error:"refused"};
+    }finally{ clearTimeout(timer); }
+  };
+
   const fetchAssignedProLabels=async(backendIds)=>{
     if(havenProLabelRpcUnavailable) return {};
     const cfg=getSupabaseConfig();
