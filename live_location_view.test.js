@@ -21,6 +21,11 @@
  *     network error: pin removed, network copy, next read at 30 s.
  * 10. A shown point expires at 5 minutes (pin hidden, paused copy) even while a read is
  *     still in flight; "Updated … ago" keeps counting instead of freezing at age_s.
+ *  Fix (paper QA of 5b9940f):
+ * 11. A missing or invalid age_s (null, "", whitespace, false, [], {}, text, negative) is
+ *     never "just now": received_at, then captured_at, are used; with no usable time there
+ *     is no pin. A real numeric age_s of 0 is just updated. Sent through
+ *     fetchJobLiveLocation and the tracking card, not only the helpers.
  *
  * Coordinates are never printed. The live point is a fixture near a public landmark
  * (Orlando City Hall), never a real job's point. Mocked fetch is not certification.
@@ -388,6 +393,46 @@ const okLive = (p, age) => jsonRes(200, { ok: true, available: true, point: { la
     assert(V.havenLiveCurrentPoint({ ...base, ageS: null, receivedAt: null, capturedAt: null }, t0) === null, 'no time at all: no pin (never shown as current)');
     assert(V.havenLiveCurrentPoint({ ...base, ageS: 299 }, t0) !== null && V.havenLiveCurrentPoint({ ...base, ageS: 300 }, t0) === null, 'the pin expires at exactly 5 minutes');
     assert(V.havenLiveAgeText(t0 - 75000, t0) === 'Updated 1 min ago' && V.havenLiveAgeText(t0 - 9000, t0) === 'Updated 9 sec ago', 'age copy from the timestamp');
+  }
+
+  // (11) age_s handling through fetchJobLiveLocation and the tracking card
+  // rawLive sends the body exactly as given (no default age).
+  const rawLive = fields => () => jsonRes(200, Object.assign({ ok: true, available: true, point: { lat: LIVE.lat, lng: LIVE.lng } }, fields));
+  const isoAgo = ms => new Date(realNow() - ms).toISOString();
+  const showsPin = () => liveImgs().length === 1;
+  const freshCopy = () => /Your Pro's live location/.test(bodyText()) || /Updated 0 sec ago/.test(bodyText());
+  async function openWith(impl, label) {
+    liveImpl = impl;
+    await mount('en_route');
+    await openTracking();
+    await waitFor(() => liveCalls().length >= 1 && card() && card().getAttribute('data-live-state') !== 'loading', label);
+    await settle(150);
+  }
+  for (const [label, ageVal] of [['null', null], ['""', ''], ['"  "', '  '], ['false', false], ['[]', []], ['{}', {}], ['"soon"', 'soon'], ['-5', -5], ['absent', undefined]]) {
+    const f = { received_at: null, captured_at: null };
+    if (ageVal !== undefined) f.age_s = ageVal;
+    await openWith(rawLive(f), 'age ' + label);
+    assert(!showsPin() && !freshCopy(), '11. age_s ' + label + ', no received_at / captured_at: no pin, no "live location" / "Updated 0 sec ago"');
+    assert(card().getAttribute('data-live-state') === 'paused' && /Location paused\./.test(bodyText()), '11. age_s ' + label + ': honest no-time copy');
+  }
+  await openWith(rawLive({ age_s: null, received_at: isoAgo(10 * 60000), captured_at: null }), 'old received_at');
+  assert(!showsPin() && !freshCopy() && /Location paused\. Last update 10 min ago\./.test(bodyText()), '11. age_s null + received_at 10 min ago: uses received_at, pin hidden, paused copy');
+  await openWith(rawLive({ age_s: '', received_at: isoAgo(30000), captured_at: null }), 'recent received_at');
+  assert(showsPin() && /Updated (29|3\d) sec ago/.test(bodyText()) && !/Updated [0-9] sec ago/.test(bodyText()), '11. age_s "" + received_at 30 s ago: pin with an honest ≈30 sec age, not "Updated 0 sec ago"');
+  await openWith(rawLive({ age_s: null, received_at: null, captured_at: isoAgo(45000) }), 'captured_at only');
+  assert(showsPin() && /Updated (4[4-9]|5\d) sec ago/.test(bodyText()), '11. no age, no received_at: captured_at gives the age (≈45 sec)');
+  await openWith(rawLive({ age_s: null, received_at: 'yesterday', captured_at: '1' }), 'garbage times');
+  assert(!showsPin() && !freshCopy(), '11. non-ISO received_at / captured_at are unusable: no pin');
+  // Parseable but not ISO (a recent time in another format): still unusable.
+  await openWith(rawLive({ age_s: null, received_at: new Date(realNow() - 20000).toUTCString(), captured_at: String(realNow() - 20000) }), 'non-ISO recent times');
+  assert(!showsPin() && !freshCopy(), '11. a recent time in a non-ISO format is not accepted: no pin');
+  await openWith(rawLive({ age_s: 0, received_at: isoAgo(10 * 60000), captured_at: null }), 'real zero');
+  assert(showsPin() && /Updated [0-2] sec ago/.test(bodyText()), '11. a real numeric age_s of 0 is just updated (the pin shows)');
+  await openWith(rawLive({ age_s: '42', received_at: null, captured_at: null }), 'numeric string');
+  assert(showsPin() && /Updated 4[2-4] sec ago/.test(bodyText()), '11. a numeric-string age_s ("42") is used');
+  for (const [label, pt] of [['blank lat', { lat: ' ', lng: LIVE.lng }], ['false lng', { lat: LIVE.lat, lng: false }], ['null lat', { lat: null, lng: LIVE.lng }], ['[] lng', { lat: LIVE.lat, lng: [] }]]) {
+    await openWith(() => jsonRes(200, { ok: true, available: true, point: pt, age_s: 1 }), label);
+    assert(!showsPin() && card().getAttribute('data-live-state') === 'network', '11. point with ' + label + ': not read as 0, no pin');
   }
 
   // (8) source: never a GET, never stored, never logged

@@ -1634,12 +1634,16 @@ const fetchJobLiveLocation = async (jobId) => {
     if (!body || typeof body !== "object" || Array.isArray(body)) return { state: "network" };
     if (body.ok === true) {
       if (body.available === true) {
-        const p = body.point || {};
-        const lat = typeof p.lat === "number" ? p.lat : p.lat != null && p.lat !== "" ? Number(p.lat) : NaN;
-        const lng = typeof p.lng === "number" ? p.lng : p.lng != null && p.lng !== "" ? Number(p.lng) : NaN;
+        const num = (v) => {
+          if (typeof v === "number") return Number.isFinite(v) ? v : NaN;
+          if (typeof v === "string" && /^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(v)) return Number(v);
+          return NaN;
+        };
+        const p = body.point && typeof body.point === "object" ? body.point : {};
+        const lat = num(p.lat), lng = num(p.lng);
         if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return { state: "network" };
-        const age = Number(body.age_s);
-        const iso = (v) => typeof v === "string" && Number.isFinite(Date.parse(v)) ? v : null;
+        const age = num(body.age_s);
+        const iso = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(v) && Number.isFinite(Date.parse(v)) ? v : null;
         return { state: "live", point: { lat, lng }, ageS: Number.isFinite(age) && age >= 0 ? age : null, receivedAt: iso(body.received_at), capturedAt: iso(body.captured_at), readAt: Date.now() };
       }
       if (body.reason === "paused") return { state: "paused", lastReceivedAt: typeof body.last_received_at === "string" ? body.last_received_at : null };

@@ -36,6 +36,7 @@ function havenLivePausedText(lastReceivedAt, nowMs) {
 function havenLivePointTime(live) {
   if (!live || live.state !== "live") return null;
   if (typeof live.readAt === "number" && typeof live.ageS === "number" && Number.isFinite(live.ageS)) return live.readAt - live.ageS * 1000;
+  // No usable age: the server's own times only. Never this device's clock alone.
   const t = Date.parse(live.receivedAt || live.capturedAt || "");
   return Number.isFinite(t) ? Math.min(t, typeof live.readAt === "number" ? live.readAt : t) : null;
 }
