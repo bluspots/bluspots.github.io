@@ -815,6 +815,24 @@ function havenMergeBackendRow(local, row, keepLocalStatus){
   }
   if(j.acceptedAt==null) j.acceptedAt = havenBackendTime(row.accepted_at);
   if(j.completedAt==null && j.status==="complete") j.completedAt = havenBackendTime(row.completed_at);
+  return havenApplyServerEndings(j, row);
+}
+// Live job updates: what the server says about who is on the job and whether
+// it is still open wins over this phone's copy.
+//   - cancelled or finished on the server: a local "Pending Cancellation"
+//     request (Customer app only, never sent) is dropped, so the card can't
+//     keep saying "Pending Cancellation" for a job that is already over;
+//   - released back to posted (or cancelled) with no Pro on the row: the
+//     previous Pro is no longer shown on this job.
+function havenApplyServerEndings(job, row){
+  let j = job;
+  const st = String(j.status||"");
+  if(j.cancelStatus==="requested" && (st==="cancelled" || TERMINAL_STATUSES.has(st))){
+    j = {...j, cancelStatus:null};
+  }
+  if(row && (row.pro_id==null || row.pro_id==="") && (st==="posted" || st==="cancelled") && (j.backendProId || j.pro)){
+    j = {...j, backendProId:null, backendProName:"", pro:null};
+  }
   return j;
 }
 // The account read applied to the cached list. rows: this account's jobs
@@ -1238,6 +1256,8 @@ export default function App(){
   // landed. Before that, or after a failed read, nothing cached is presented
   // as current; Bookings shows loading or the error with Retry.
   const [jobsVerifiedFor,setJobsVerifiedFor] = useState("");
+  const jobsVerifiedForRef = useRef("");
+  jobsVerifiedForRef.current = jobsVerifiedFor;
   const jobsVerified = !getSupabaseConfig() || (!!jobsVerifiedFor && havenSameCustomerId(jobsVerifiedFor, havenJobsAccountId()||""));
   // A job whose backend create landed in this tab is backend-confirmed even
   // before (or without) a successful account read.
@@ -2079,14 +2099,19 @@ export default function App(){
   // The last landed account read ({uid, rows by backend key}), so set-aside
   // master details are released only for jobs this account's read returned.
   const legacyReadRef=useRef(null);
-  const hydrateMyJobs=async()=>{
+  // opts.soft (live job updates: signal, foreground, online, safety poll):
+  // a re-read for an account whose bookings are already on screen. It never
+  // shows "Loading…", and a failed soft re-read keeps what is shown (the next
+  // signal or poll tries again) instead of hiding every booking.
+  const hydrateMyJobs=async(opts)=>{
     if(!getSupabaseConfig()) return;
     const uid=havenJobsAccountId();
     if(!uid) return;
+    const soft=!!(opts&&opts.soft) && havenSameCustomerId(jobsVerifiedForRef.current, uid);
     const seq=++hydrateSeqRef.current;
     const startStatus=new Map();
     (jobsCacheRef.current||[]).forEach(j=>{ if(j&&j.backendJobId) startStatus.set(havenBackendKey(j.backendJobId), j.status); });
-    setBookingsLoad("loading");
+    if(!soft) setBookingsLoad("loading");
     hydrateInFlightRef.current=true;
     let result;
     try{ result=await fetchMyCanonicalJobs(); }
@@ -2095,6 +2120,7 @@ export default function App(){
     const sameAccount=havenSameCustomerId(result.customerId, uid) && havenSameCustomerId(havenJobsAccountId(), uid);
     if(!sameAccount){ setBookingsLoad("idle"); return; } // the new account's read reports its own state
     if(!result.ok){
+      if(soft) return; // keep what is on screen; the next signal / poll re-reads
       // Nothing read: the cache stays in storage but is not shown. Bookings
       // shows only the error with Retry; no cached or local entries.
       setJobsVerifiedFor("");
@@ -2361,6 +2387,15 @@ export default function App(){
           const proNotes=typeof j.proNotes==="string"?j.proNotes:"";
           return {job:{...j,status:"complete",justAccepted:false,completedAt:Date.now(),workPerformed,materials,proNotes},accepted:null,arrived:null,track:j.id,completed:j.id,proName:j.pro?.n||"Your pro"};
         }
+        // Live job updates: a job cancelled on the server (Customer, Founder
+        // Control Center), or released back to posted (Pro unassigned), follows
+        // the server even though that is a step "back". No local Pro is kept.
+        if(remoteStatus==="cancelled" && j.status!=="cancelled"){
+          return {job:havenApplyServerEndings({...j,status:"cancelled",justAccepted:false}, row),accepted:null,arrived:null};
+        }
+        if(remoteStatus==="posted" && (j.status==="en_route"||j.status==="arrived") && (row.pro_id==null||row.pro_id==="")){
+          return {job:havenApplyServerEndings({...j,status:"posted",justAccepted:false}, row),accepted:null,arrived:null};
+        }
         // Map materials metadata if present
         const mappedRequest=havenMaterialsRequestFromRow(row);
         // Remote wins over local for these transitions
@@ -2428,6 +2463,104 @@ export default function App(){
     if (id && typeof id === "object" && typeof id.unref === "function") { try { id.unref(); } catch(_) {} }
     return ()=>{ cancelled=true; clearInterval(id); };
   },[scr,tab]);
+
+  // ── Live job updates (realtime job signal, MIG-0036 contract v1) ──────────
+  // A job_changed broadcast on jobs:user:<my id> is only a "refetch" signal.
+  // After a 400 ms debounce the app re-reads this account's jobs from the
+  // server (hydrateMyJobs); the payload is never used as data. The same
+  // re-read runs when the channel is SUBSCRIBED (also after a reconnect), when
+  // the app comes back to the foreground or online, and every 60 s while an
+  // active-job screen (Tracking, Posted) is open. Before 0036 is live the
+  // channel simply never delivers, and these re-reads keep the app current.
+  const jobSignalRefetchRef=useRef(null);
+  jobSignalRefetchRef.current=async()=>{ await hydrateMyJobs({soft:true}); };
+  const jobSignalRef=useRef(null);
+  if(!jobSignalRef.current){
+    jobSignalRef.current=havenCreateJobSignal({
+      getClient:()=>getHavenAuthClient(),
+      onRefetch:(batch)=>jobSignalRefetchRef.current ? jobSignalRefetchRef.current(batch) : null,
+      // In the background, signals and the safety poll wait; one re-read on foreground.
+      isHidden:()=>typeof window!=="undefined" && !havenPageVisible(window),
+    });
+  }
+  useEffect(()=>{
+    const sig=jobSignalRef.current;
+    if(!getSupabaseConfig()) return undefined;
+    // Subscribe only once the session is known; sign-out or another account
+    // removes the channel first (start() does that for a different user).
+    if(havenSessionLoaded && havenAccountId) sig.start(havenAccountId);
+    else if(havenSessionLoaded) sig.stop();
+    return undefined;
+  },[havenAccountId, havenSessionLoaded]);
+  useEffect(()=>{
+    const detach=havenAttachJobSignalWake(typeof window!=="undefined"?window:null, tag=>jobSignalRef.current.kick(tag));
+    return ()=>{ detach(); jobSignalRef.current.stop(); };
+  },[]);
+  useEffect(()=>{
+    if(scr!=="tracking" && scr!=="posted") return undefined;
+    const id=setInterval(()=>jobSignalRef.current.kick("poll"), HAVEN_JOB_SIGNAL_SAFETY_POLL_MS);
+    if (id && typeof id === "object" && typeof id.unref === "function") { try { id.unref(); } catch(_) {} }
+    return ()=>clearInterval(id);
+  },[scr]);
+
+  // What the server changed, shown plainly. Only server-driven changes:
+  // a cancel this tab sent itself (cancelJobDirect) shows nothing new.
+  //   cancelled on the server  -> "Your job was cancelled." (+ a notification)
+  //   released back to posted  -> "Your Pro is no longer on this job. It's waiting for a Pro again."
+  //   gone from this account   -> "This job is no longer available."
+  // If that job's Tracking or Posted screen is open, the app leaves it for
+  // Bookings (released: to the job's Posted screen).
+  const [jobChangeNotice,setJobChangeNotice]=useState("");
+  const jobNoticeTimerRef=useRef(null);
+  const showJobChangeNotice=(text)=>{
+    setJobChangeNotice(text);
+    if(jobNoticeTimerRef.current) clearTimeout(jobNoticeTimerRef.current);
+    jobNoticeTimerRef.current=setTimeout(()=>setJobChangeNotice(""),5000);
+  };
+  const selfCancelledRef=useRef(new Set());
+  const seenServerStatusRef=useRef({uid:"", map:new Map()});
+  useEffect(()=>{
+    const uid=havenAccountId||"";
+    if(!uid || !havenSameCustomerId(jobsVerifiedFor, uid)){
+      // Nothing confirmed by the server yet for this account: start fresh.
+      if(seenServerStatusRef.current.uid!==uid) seenServerStatusRef.current={uid, map:new Map()};
+      return;
+    }
+    const seen=seenServerStatusRef.current.uid===uid ? seenServerStatusRef.current.map : new Map();
+    const next=new Map();
+    (jobs||[]).forEach(j=>{ if(j&&j.backendJobId) next.set(havenBackendKey(j.backendJobId), {status:j.status, id:j.id}); });
+    // The job whose Tracking / Posted screen is open (by its local id, which
+    // still matches after the job has left the list).
+    const onJobScreen=(scr==="tracking"||scr==="posted");
+    const isOpen=(before, now)=> onJobScreen && vjid!=null && ((now && now.id===vjid) || before.id===vjid);
+    let leave=null;
+    seen.forEach((before,key)=>{
+      const now=next.get(key);
+      if(!now){
+        if(before.status!=="cancelled" && isOpen(before, null)) leave={text:"This job is no longer available.", to:"bookings"};
+        return;
+      }
+      if(now.status==="cancelled" && before.status!=="cancelled"){
+        if(selfCancelledRef.current.has(key)) return;
+        createNotification({type:NOTIF_TYPES.CANCELLATION,title:"Job cancelled",body:"Your job was cancelled.",jobId:now.id,destination:{screen:"bookings"}});
+        if(isOpen(before, now)) leave={text:"Your job was cancelled.", to:"bookings"};
+        else showJobChangeNotice("Your job was cancelled.");
+        return;
+      }
+      if(now.status==="posted" && (before.status==="en_route"||before.status==="arrived")){
+        const text="Your Pro is no longer on this job. It's waiting for a Pro again.";
+        if(isOpen(before, now) && scr==="tracking") leave={text, to:"posted"};
+        else showJobChangeNotice(text);
+      }
+    });
+    seenServerStatusRef.current={uid, map:next};
+    if(leave){
+      showJobChangeNotice(leave.text);
+      if(leave.to==="posted") goTo("posted");
+      else goBookings();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  },[jobs, jobsVerifiedFor, havenAccountId]);
 
   // Completed jobs are not in the active poll. Load pro_id for any backend
   // job that still has no real pro, including receipts and history.
@@ -3199,6 +3332,8 @@ export default function App(){
         return;
       }
     }
+    // Live job updates: this tab's own cancel is not announced back to it.
+    if(vj?.backendJobId) selfCancelledRef.current.add(havenBackendKey(vj.backendJobId));
     updateJob(vjid,{status:"cancelled"});
     setShowCancelConfirm(false);
     goHome();
@@ -3677,7 +3812,7 @@ export default function App(){
             : basePrice+(j.surge||0)+(j.emergencyFee||0);
           const isPending=j.status==="posted";
           const isDone=TERMINAL_STATUSES.has(j.status);
-          const isCancelPending=j.cancelStatus==="requested"&&!isDone;
+          const isCancelPending=j.cancelStatus==="requested"&&!isDone&&j.status!=="cancelled";
           const statusLabel=isCancelPending?"Pending Cancellation"
             : isPending?"Waiting for pro"
             : isDone?(j.status==="complete"?"Completed":(j.status==="inspection_completed"?"Inspection visit completed":"Job ended — materials declined"))
@@ -5989,7 +6124,7 @@ export default function App(){
             if(!isTerminal){
               return(
                 <>
-                  {vj.cancelStatus==="requested"?(
+                  {vj.cancelStatus==="requested"&&vj.status!=="cancelled"?(
                     <div style={{margin:"0 20px 24px",background:"#FEF2F2",border:"1px solid #FCA5A5",borderRadius:16,padding:16,textAlign:"center"}}>
                       <div style={{fontSize:13,fontWeight:700,color:"#DC2626",marginBottom:4}}>Pending Cancellation</div>
                     </div>
@@ -6521,6 +6656,11 @@ export default function App(){
           {writeSyncNotice?(
             <div style={{position:"absolute",left:16,right:16,bottom:96,background:"#DC2626",borderRadius:14,padding:"12px 16px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)",zIndex:21}}>
               <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>{writeSyncNotice}</span>
+            </div>
+          ):null}
+          {jobChangeNotice&&!writeSyncNotice?(
+            <div role="status" data-testid="job-change-notice" style={{position:"absolute",left:16,right:16,bottom:96,background:N,borderRadius:14,padding:"12px 16px",textAlign:"center",boxShadow:"0 8px 24px rgba(0,0,0,.25)",zIndex:21}}>
+              <span style={{color:"#FFFFFF",fontSize:13,fontWeight:600}}>{jobChangeNotice}</span>
             </div>
           ):null}
         </div>
