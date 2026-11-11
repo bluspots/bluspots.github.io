@@ -2479,6 +2479,8 @@ export default function App(){
     jobSignalRef.current=havenCreateJobSignal({
       getClient:()=>getHavenAuthClient(),
       onRefetch:(batch)=>jobSignalRefetchRef.current ? jobSignalRefetchRef.current(batch) : null,
+      // In the background, signals and the safety poll wait; one re-read on foreground.
+      isHidden:()=>typeof window!=="undefined" && !havenPageVisible(window),
     });
   }
   useEffect(()=>{

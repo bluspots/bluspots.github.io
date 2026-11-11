@@ -1955,6 +1955,7 @@ function havenCreateJobSignal(deps) {
   let tags = [];
   let refetching = false;
   let again = false;
+  let heldWhileHidden = false;
   function schedule() {
     if (debounceTimer != null) clearTimer(debounceTimer);
     const myGen = gen;
@@ -1968,6 +1969,11 @@ function havenCreateJobSignal(deps) {
       again = true;
       return;
     }
+    if (typeof d.isHidden === "function" && d.isHidden()) {
+      heldWhileHidden = true;
+      return;
+    }
+    heldWhileHidden = false;
     const batch = { signals: Array.from(pending.values()), wake, tags: tags.slice() };
     pending = /* @__PURE__ */ new Map();
     wake = false;
@@ -2009,17 +2015,18 @@ function havenCreateJobSignal(deps) {
     }, wait);
   }
   async function join(myGen) {
-    if (!client || !topic) return;
+    const c = client, t = topic;
+    if (!c || !t || myGen !== gen) return;
     status = "joining";
     try {
-      if (client.realtime && typeof client.realtime.setAuth === "function") await client.realtime.setAuth();
+      if (c.realtime && typeof c.realtime.setAuth === "function") await c.realtime.setAuth();
     } catch (e) {
       scheduleResubscribe(myGen);
       return;
     }
-    if (myGen !== gen) return;
+    if (myGen !== gen || channel) return;
     try {
-      const ch = client.channel(topic, { config: { private: true } });
+      const ch = c.channel(t, { config: { private: true } });
       channel = ch;
       ch.on("broadcast", { event: HAVEN_JOB_SIGNAL_EVENT }, (msg) => {
         if (myGen !== gen || channel !== ch) return;
@@ -2046,7 +2053,7 @@ function havenCreateJobSignal(deps) {
       scheduleResubscribe(myGen);
     }
   }
-  async function stop() {
+  function teardown() {
     gen++;
     if (debounceTimer != null) {
       clearTimer(debounceTimer);
@@ -2061,10 +2068,23 @@ function havenCreateJobSignal(deps) {
     tags = [];
     again = false;
     failures = 0;
+    heldWhileHidden = false;
     topic = null;
     status = "idle";
-    await removeCurrent();
+    const c = client, ch = channel;
+    channel = null;
     client = null;
+    return (async () => {
+      if (c && ch && typeof c.removeChannel === "function") {
+        try {
+          await c.removeChannel(ch);
+        } catch (e) {
+        }
+      }
+    })();
+  }
+  async function stop() {
+    await teardown();
   }
   return {
     // Join the signed-in user's topic. Same user again: nothing changes.
@@ -2072,9 +2092,12 @@ function havenCreateJobSignal(deps) {
     async start(userId) {
       const t = havenJobSignalTopic(userId);
       if (t && t === topic) return true;
-      await stop();
-      if (!t) return false;
+      const removed = teardown();
       const myGen = gen;
+      if (!t) {
+        await removed;
+        return false;
+      }
       topic = t;
       let c = null;
       try {
@@ -2082,12 +2105,14 @@ function havenCreateJobSignal(deps) {
       } catch (e) {
         c = null;
       }
-      if (myGen !== gen) return false;
       if (!c || typeof c.channel !== "function") {
         status = "unavailable";
+        await removed;
         return false;
       }
       client = c;
+      await removed;
+      if (myGen !== gen) return false;
       await join(myGen);
       return myGen === gen;
     },
@@ -2104,6 +2129,9 @@ function havenCreateJobSignal(deps) {
     },
     state() {
       return status;
+    },
+    held() {
+      return heldWhileHidden;
     }
   };
 }
@@ -4856,7 +4884,9 @@ function App() {
   if (!jobSignalRef.current) {
     jobSignalRef.current = havenCreateJobSignal({
       getClient: () => getHavenAuthClient(),
-      onRefetch: (batch) => jobSignalRefetchRef.current ? jobSignalRefetchRef.current(batch) : null
+      onRefetch: (batch) => jobSignalRefetchRef.current ? jobSignalRefetchRef.current(batch) : null,
+      // In the background, signals and the safety poll wait; one re-read on foreground.
+      isHidden: () => typeof window !== "undefined" && !havenPageVisible(window)
     });
   }
   useEffect(() => {
