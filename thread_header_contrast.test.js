@@ -79,6 +79,8 @@ global.fetch = async (url) => {
   const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
   if (u.endsWith('/auth/v1/health')) return ok({});
   if (u.includes('/rest/v1/rpc/is_qa_tester')) return ok(false);
+  // #87 integration: the account read (order=posted_at) is the source of truth, so it returns the seeded job's row.
+  if (u.includes('/rest/v1/jobs') && u.includes('order=posted_at')) return ok(remoteRows.map(r => ({ fixed_customer_labor_price_cents: 6500, emergency_fee_cents: 0, tip_amount_cents: 0, materials_items: [], materials_estimate_cents: 0, materials_approved_cents: null, address_snapshot: '1 Oak St, Orlando, FL 32801', ...r })));
   if (u.includes('/rest/v1/jobs?id=in.') && remoteRows.length) return ok(remoteRows);
   if (u.includes('/rest/v1/')) return ok([]);
   return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
@@ -117,6 +119,9 @@ function seedBase() {
   storedData['haven_auth_email'] = 'qa-customer@example.com';
   storedData['haven_auth_role'] = 'customer';
   storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });
+  // #87 integration: caches and saved addresses belong to the signed-in account.
+  storedData['haven_jobs_owner'] = CUSTOMER_ID;
+  storedData['haven_addresses_owner'] = CUSTOMER_ID;
 }
 async function delay(ms) { await new Promise(r => setTimeout(r, ms)); }
 async function settle(ms = 40) { await act(async () => { await delay(ms); }); }
