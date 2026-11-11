@@ -539,6 +539,7 @@ const SOURCE_FILES = [
   'supabase_public_config.js',
   'backend_adapter.js',
   'auth_session.js',
+  'job_signal.js',
   'job_factories.js',
   'geocode.js',
   'home_services_app.jsx',
