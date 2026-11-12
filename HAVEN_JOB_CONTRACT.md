@@ -22,6 +22,7 @@ posted → en_route → arrived → diagnosing? → (materials_requested → mat
                                  diagnosing → inspection_completed (Customer ends after diagnosis)   [founder decision 2026-10-23]
 any pre‑complete → cancelled
 ```
+*(founder decision 2026-10-23)* A materials request is never made from `en_route` or `arrived` (or `posted`): only from `diagnosing`, plus the assigned Pro's follow-up from `in_progress` (0029 IV.5).
 
 inspection_completed is reached ONLY by the Customer, from `diagnosing` or from `materials_requested` (diagnosis decline); never from `arrived`, never by the Pro; every other move into it is rejected. *(founder decision 2026-10-23)*
 
@@ -53,19 +54,27 @@ Naming principles:
 | en_route → arrived | Pro | Arrival confirmation |
 | arrived → diagnosing | Pro | Diagnosis categories only. The Customer can never move a job into diagnosing. *(founder decision 2026-10-23)* Only the job's **assigned** Pro, only from `arrived`, only when `requires_diagnosis` is true; every other move into diagnosing is rejected server-side (0029 III.1). *(founder decision 2026-10-23)* |
 | diagnosing → in_progress | Pro | Scope matched what was listed |
-| diagnosing → materials_requested | Pro | Scope exceeded what was listed |
+| diagnosing → materials_requested | Pro | Scope exceeded what was listed. A materials request is made from `diagnosing`, never from `posted`, `en_route` or `arrived`; enforced server-side on the status move and on job creation for every client (0029 IV.5). The assigned Pro's follow-up request from `in_progress` (after a receipt; the only request point on standard jobs) is unchanged pending founder confirmation. *(founder decision 2026-10-23)* |
+| in_progress → materials_requested | Pro (assigned) | Follow-up materials request (haven-pro "Need materials? Request them"); on standard (non-diagnosis) jobs this is the only request point. Kept server-side (0029 IV.5, the one authorized backward move in III.3) pending founder confirmation of how "only from Diagnosing" applies to it. Never from `en_route` or `arrived`. *(founder decision 2026-10-23)* |
 | materials_requested → materials_approved | Customer | Approves request; authorizes purchase only |
+| materials_requested → materials_declined | Customer | Standard (non-diagnosis) decline; the server sets the $30 convenience fee (0029 III.4). *(founder decision 2026-10-23)* |
 | materials_approved → in_progress | Pro | Submits receipt w/ actual materials cost + photo |
 | materials_requested → inspection_completed | Customer | Declines on diagnosis categories (requires_diagnosis, undecided request). *(founder decision 2026-10-23)* |
 | diagnosing → inspection_completed | Customer | Ends at the $45 inspection fee after diagnosis: requires_diagnosis and no undecided materials request. *(founder decision 2026-10-23)* |
-| in_progress → complete | Pro | Mark job complete |
+| in_progress → complete | Pro | Mark job complete. `complete` is reachable only from `in_progress`: no skipping from en_route, arrived, diagnosing or the materials statuses; enforced server-side for every client (0029 IV.1). *(founder decision 2026-10-23)* |
+| posted → en_route (claim) / any assignment | Pro | No account may claim or be assigned a job it posted (`pro_id` = `customer_id` is refused), whatever its current profile role; enforced server-side on every insert and every change of `pro_id`/`customer_id`, for every caller (0029 IV.2). *(founder decision 2026-10-23)* |
 | any pre‑complete → cancelled | Either | Different sub‑rules by phase; Customer after accept is “request cancel” |
-| complete / cancelled → anything | Nobody (client) | `complete` and `cancelled` are terminal: no move out of them, enforced server-side (0029 III.2). *(founder decision 2026-10-23)* |
+| complete / cancelled / inspection_completed / materials_declined → anything | Nobody (client) | `complete`, `cancelled`, `inspection_completed` and `materials_declined` are terminal: no move out of them (no reopen, no move to complete, no cancel), enforced server-side for the Customer, the Pro and direct API calls (0029 III.2). Same-status re-sends are not moves. *(founder decision 2026-10-23)* |
+| any → en_route / arrived / diagnosing / materials_requested / in_progress / complete | Never the Customer | The Customer never sets work statuses. The Customer's only status moves are approving or declining materials, the inspection endings above, and cancelling while the job is posted with no Pro; enforced server-side (0029 IV.3). *(founder decision 2026-10-23)* |
 | Rating / tip | Customer | Post‑complete only. Only the job's Customer may set the tip; the Pro and anyone else are rejected server-side (0029 III.5). *(founder decision 2026-10-23)* |
 
 Backend enforcement must reject out‑of‑turn and role‑unauthorized transitions.
 
 *(founder decision 2026-10-23)* No backward status moves: a move to an earlier status on the ladder posted → en_route → arrived → diagnosing → materials_requested → materials_approved → in_progress → (complete | materials_declined | inspection_completed) is rejected server-side (0029 III.3). The one authorized backward move is the assigned Pro's new materials request `in_progress → materials_requested` (after a receipt). A move into `cancelled` is not backward; who may cancel is unchanged.
+
+*(founder decision 2026-10-23)* The Customer approves materials only from `materials_requested` with an undecided (pending) request: a move to `materials_approved` from any other status (e.g. en_route, arrived or diagnosing), or with no undecided request, is rejected server-side (0029 IV.3 R3 fix).
+
+*(founder decision 2026-10-23)* Completion is refused while a materials request is pending (undecided): the Customer must approve or decline it first; enforced server-side (0029 IV.4).
 
 *(founder decision 2026-10-23)* Every other move into `inspection_completed` is rejected for every client, the Pro included (never from `arrived`; never the Pro). A re-send of the status the job already has is not a move.
 

@@ -25,14 +25,29 @@
 --     public.jobs_lock_materials_approved() does not carry all three 0028
 --     markers, or trigger jobs_lock_materials_approved on public.jobs is
 --     missing.
---   - NOT guarded otherwise. 0029 has no downgrade check: if any other
---     body of jobs_lock_pricing_and_inspection() is installed (an edited
---     or later version), a re-run silently replaces it. Section 0 matches
---     the 0028 function by text and does not read the trigger's function
---     (pg_trigger.tgfoid). Compare the installed body with this file before
---     any re-run.
+--   - refused with an error by the version guard (sections 0b / 0c; Hub
+--     decisions H, 2026-10-23: an older 0029 must not overwrite newer
+--     function behaviour; same pattern as the guarded 0025 / 0026), nothing
+--     applied, when: public.jobs_lock_pricing_and_inspection() carries a
+--     "haven-version:" line other than this file's ("haven-version:
+--     0029-v2") or the earlier guarded "0029-v1" (#90 9da3344a), i.e. a
+--     later 0029 is installed (0b); or trigger
+--     jobs_lock_pricing_and_inspection on public.jobs runs any function other
+--     than public.jobs_lock_pricing_and_inspection() (renamed, or moved to
+--     another schema), or that function's body (pg_proc.prosrc, by md5) is
+--     not this file's body or one of the earlier published #90 0029 bodies,
+--     e.g. a later body with its version line stripped (0c, which reads
+--     pg_trigger.tgfoid and pg_proc). Pasting this file over an earlier 0029
+--     body is the intended upgrade and is allowed; re-pasting it over itself
+--     is the no-op above. A later 0029 must carry a new "haven-version:" line
+--     and list this file's body md5 among its known bodies.
+--     Limit: the earlier 0029 files (c6e926e ... the R3-fix commit) carry no
+--     guard, so pasting one of THEM over this version would still replace
+--     it. The guarded 0029-v1 file (#90 9da3344a) is refused by its own 0b
+--     over this version. Use only this file; the read-only Verify query at
+--     the bottom shows which 0029 body is installed.
 --
--- What it adds: ONE new BEFORE UPDATE trigger on public.jobs,
+-- What it adds: ONE new BEFORE INSERT OR UPDATE trigger on public.jobs,
 -- jobs_lock_pricing_and_inspection, with its own function. The 0025-0028
 -- function jobs_lock_materials_approved and its trigger are NOT changed
 -- (byte-for-byte the 0028 text). BEFORE triggers on the same table fire in
@@ -104,7 +119,8 @@
 --     is exactly what the pro receives". Not locked by II (governed
 --     elsewhere): materials_* (0025-0028), materials_reimbursed_cents and
 --     tip_amount_cents (III.5), emergency (flag only), payment_snapshot (III.6).
---     INSERT (posting itself) is not checked by this trigger.
+--     On INSERT (posting itself) this trigger checks only IV.2 below
+--     (posting amounts are 0031's, deferred).
 --   III. Founder decisions 2026-10-23 18:50 ET, items 1-6 (CoS relay;
 --     decisions/FOUNDER_DECISIONS_2026-10-23.md B). Non-privileged callers
 --     only; each refusal is SQLSTATE 42501 and leaves the row unchanged.
@@ -115,9 +131,16 @@
 --        still gets rule D's message first. A same-status re-send is not a
 --        move. SHIP-BEFORE dependency (owner Claude, FE-04): the Pro app
 --        must offer Start Diagnosing only from arrived on diagnosis jobs.
---     2. complete and cancelled are terminal: any move OUT of them (to
---        any other status) is refused ("This job is finished; its status
---        cannot change"). Same-status updates (tip, re-sends) are not moves.
+--     2. complete, cancelled, inspection_completed and materials_declined
+--        are terminal: any move OUT of them (to complete, cancelled, any
+--        earlier status, or the other decline outcome) is refused ("This job
+--        is finished; its status cannot change"). Same-status updates (tip,
+--        the Pro app's identical terminal re-send) are not moves. The two
+--        decline outcomes were added after the Job Contract check (founder
+--        decision 2026-10-23 20:58 ET, item 4, cleared by CoS 21:11 ET):
+--        0012's any-assigned-status policy still lets a client move them to
+--        complete, and 0010 already refuses their cancel; 0029 now refuses
+--        both server-side for every client.
 --     3. No backward status move. Rank: posted < en_route < arrived <
 --        diagnosing < materials_requested < materials_approved <
 --        in_progress < complete = materials_declined = inspection_completed.
@@ -129,9 +152,8 @@
 --        diagnosing and the customer's complete -> arrived. Also refused
 --        now: the customer leaving a pending request backward (e.g.
 --        materials_requested -> arrived); 0028's ABANDON still closes a
---        request the customer leaves by cancelling. Not changed (open
---        question for the founder): materials_declined /
---        inspection_completed -> complete or cancelled stay as RLS allows.
+--        request the customer leaves by cancelling. materials_declined /
+--        inspection_completed -> complete or cancelled: refused by III.2.
 --     4. The $30 standard-decline convenience fee is REQUIRED (Quagon F1
 --        answered: always charged). On a move into materials_declined the
 --        server sets convenience_fee_cents = 3000 whether or not the client
@@ -159,10 +181,78 @@
 --        payment field; written at posting by the Customer app), is locked
 --        after posting ("The payment note is locked once the job is
 --        posted"); an identical re-send is not a change.
+--   IV. Founder decisions 2026-10-23 21:14 ET (CoS relay), rules 1-4.
+--     Each refusal is SQLSTATE 42501 and leaves the row unchanged.
+--     1. complete is reachable only from in_progress ("A job can only be
+--        completed from in_progress"): no skipping from en_route, arrived,
+--        diagnosing, materials_requested or materials_approved. The Pro
+--        app already PATCHes complete only with status=eq.in_progress.
+--        Non-privileged callers (privileged callers: see below).
+--     2. No account may claim or be assigned a job it posted ("A job cannot
+--        be claimed by or assigned to the account that posted it"):
+--        pro_id = customer_id is refused on INSERT and on any UPDATE that
+--        changes pro_id or customer_id, whatever either profile's role is
+--        (a customer who switched to Pro included; the check reads ids
+--        only). This one applies to EVERY caller, privileged included:
+--        pro_claim_job (0011/0023) is SECURITY DEFINER and runs as its
+--        owner, so a privileged exemption would skip the claim itself.
+--        Existing rows are not rewritten; an update that leaves both ids
+--        unchanged is not re-checked.
+--     3. The job's customer never sets work statuses ("The customer cannot
+--        set this job status"): no move into en_route, arrived, diagnosing,
+--        materials_requested, in_progress, complete or posted. The only
+--        status moves the customer may make are materials_approved and
+--        materials_declined (the materials decision), inspection_completed
+--        (the approved inspection endings, I above), and cancelled while
+--        the job is posted with no Pro (RLS 0010 already allows only that;
+--        0029 now refuses the rest even without RLS). The Customer app
+--        writes only cancelled, materials_approved, materials_declined and
+--        inspection_completed.
+--        R3 fix (founder decision 2026-10-23 11:14 PM ET, Hub decisions H,
+--        under rule 3; closes QA #90 R3 at a9d4682a): the customer may
+--        approve materials (move INTO materials_approved) ONLY from
+--        materials_requested with an undecided request
+--        (materials_request_seq > materials_decided_seq, read from OLD):
+--        "There is no pending materials request to approve". Before this,
+--        the customer (also after switching the profile to Pro) could move
+--        en_route, arrived or diagnosing straight to materials_approved with
+--        nothing to approve, a work-status jump that skipped arrived /
+--        diagnosing. Same check on the other customer decisions: the
+--        standard decline (III.4) is already only from materials_requested;
+--        the inspection endings (I) already check the request. NOT changed
+--        (outside decision H): a decline of a materials_requested row whose
+--        request is already decided, reachable only on rows a privileged
+--        caller or legacy data left that way. The Customer app shows Approve
+--        only on a pending request.
+--     4. Completion is refused while a materials request is pending
+--        (materials_request_seq > materials_decided_seq, read from OLD):
+--        "A materials request is still pending; decide it first". With rule
+--        1 this matters on in_progress rows that still carry an undecided
+--        request (e.g. a request left by a privileged move). Non-privileged
+--        callers. ON HOLD, not built: a customer lowering a reimbursement
+--        below the approved amount.
+--     5. Founder decision 2026-10-23 23:15 ET: a materials request is made
+--        from diagnosing, never from posted, en_route or arrived ("Materials
+--        can only be requested from diagnosing"). Enforced on both request
+--        paths for every non-privileged caller: the status move INTO
+--        materials_requested (the Pro app's bestEffortPatchMaterialsRequested
+--        PATCH; 0028 counts it as a new request), and a jobs INSERT that
+--        starts at materials_requested (RLS 0002 already allows only posted
+--        inserts; 0029 refuses it even without RLS). public.materials_requests
+--        (0001) is not a request path: no app writes it and 0027 revokes
+--        every client right on it. KEPT, pending founder confirmation: the
+--        assigned Pro's follow-up request from in_progress (0009 / 0026
+--        counting rule, III.3's one backward exception). haven-pro main
+--        offers Request Materials on diagnosing and "Need materials? Request
+--        them" on in_progress; on standard (non-diagnosis) jobs in_progress
+--        is the only place a request can be made (they never diagnose), so
+--        refusing it would break the standard materials flow and the $30
+--        standard decline. The Pro app never requests from en_route or
+--        arrived.
 --   PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
 --     database owner / SQL editor and service_role; the same check as
 --     public.haven_qa_privileged_caller() in 0024 and the inline check in
---     0025/0026/0028) skip this trigger entirely and keep their current
+--     0025/0026/0028) skip this trigger (except IV.2) and keep their current
 --     behaviour: any status move into inspection_completed or diagnosing
 --     and any fee or price correction. Manual corrections stay possible there.
 --
@@ -204,6 +294,96 @@ begin
   end if;
 end$$;
 
+-- ── 0b. Refuse to downgrade (version guard; Hub decisions H, 2026-10-23) ──
+-- This file's function body carries the line "haven-version: 0029-v2"; the
+-- earlier guarded 0029 (#90 9da3344a) carries "haven-version: 0029-v1", which
+-- this file upgrades. A later 0029 is expected to carry a different
+-- "haven-version:" line. If the installed
+-- public.jobs_lock_pricing_and_inspection() carries any other version line, re-running this file would undo it, so stop here: nothing
+-- in this file runs.
+do $$
+begin
+  if exists (select 1 from pg_proc
+              where pronamespace = 'public'::regnamespace
+                and proname = 'jobs_lock_pricing_and_inspection'
+                and prosrc like '%haven-version:%'
+                and prosrc not like '%haven-version: 0029-v2 %'
+                and prosrc not like '%haven-version: 0029-v1 %') then
+    raise exception '0029 refused: a later version of public.jobs_lock_pricing_and_inspection() is installed (haven-version line); re-running this 0029 would downgrade it. Nothing was changed.';
+  end if;
+end$$;
+
+-- ── 0c. Catalog + body check (version guard; Hub decisions H, 2026-10-23) ─
+-- 0b only reads the text. This check reads the catalog: if trigger
+-- jobs_lock_pricing_and_inspection exists on public.jobs, the function it
+-- runs (pg_trigger.tgfoid) must be exactly
+-- public.jobs_lock_pricing_and_inspection(); and that function, when it
+-- exists (with or without the trigger), must hold this file's body or an
+-- earlier published #90 0029 body, identified by md5(pg_proc.prosrc):
+--   99489fce15d494f2fd60e33369582d76  0029-v2, this file (section 1)
+--   2393909415ad489e6a8902cf97e6a2dd  #90 9da3344a (0029-v1, version guard)
+--   332ca406d006fa6b90772006ceff14b1  #90 b5275ab6 (IV.3 R3 fix)
+--   370deabf52b372d92007a3f21cf79d1e  #90 a9d4682a (IV.4)
+--   11151a78c19f2e29617206751292cc0f  #90 f35cc52d (IV.3)
+--   bf593ba828a666f76c6d4386bbe47d59  #90 c0d32a44 (IV.2)
+--   0dcde0f7d4bf21a2d9fc6300797d0a28  #90 41be34b0 (IV.1)
+--   13df9ffc104827369eb3ea30f0f88e69  #90 605e3543 (III.2 decision 4)
+--   ea2581327fd7a828aa01ad5af0a8118c  #90 08273ea / cf0af5fb (III.6)
+--   d5209e8891823ec6d7b421a8460b1e2c  #90 1688398 (III.5)
+--   b1d5237b56e1ea75d87d266f8baff17d  #90 4a71a8d (III.4)
+--   e7bfb778bbd04988f0a835b7b5ed3ff9  #90 acd9e56 (III.3)
+--   58a98626f598faa52e413df86e4c850c  #90 2b9e130 (III.2)
+--   46993bccf4158eaec9d30ade4170de67  #90 4eefc2b (III.1)
+--   52cd1e9aca2fc0d1cf582e5e51f1a3de  #90 cf84a18 / 022b30d (rule D)
+--   7bcbaeff971d7e349e87144d6b752e20  #90 c6e926e (first SQL draft)
+-- Anything else (function renamed, moved to another schema, or a later
+-- body without its version line) means re-running 0029 could downgrade or
+-- bypass it, so stop here: nothing in this file runs. No trigger and no
+-- function yet (first paste) is allowed.
+do $$
+declare
+  t record;
+  known text[] := array['99489fce15d494f2fd60e33369582d76',
+                        '2393909415ad489e6a8902cf97e6a2dd',
+                        '332ca406d006fa6b90772006ceff14b1',
+                        '370deabf52b372d92007a3f21cf79d1e',
+                        '11151a78c19f2e29617206751292cc0f',
+                        'bf593ba828a666f76c6d4386bbe47d59',
+                        '0dcde0f7d4bf21a2d9fc6300797d0a28',
+                        '13df9ffc104827369eb3ea30f0f88e69',
+                        'ea2581327fd7a828aa01ad5af0a8118c',
+                        'd5209e8891823ec6d7b421a8460b1e2c',
+                        'b1d5237b56e1ea75d87d266f8baff17d',
+                        'e7bfb778bbd04988f0a835b7b5ed3ff9',
+                        '58a98626f598faa52e413df86e4c850c',
+                        '46993bccf4158eaec9d30ade4170de67',
+                        '52cd1e9aca2fc0d1cf582e5e51f1a3de',
+                        '7bcbaeff971d7e349e87144d6b752e20'];
+begin
+  for t in
+    select tg.tgfoid, tg.tgfoid::regprocedure::text as fn, md5(p.prosrc) as body_md5
+      from pg_trigger tg
+      join pg_proc p on p.oid = tg.tgfoid
+     where tg.tgrelid = 'public.jobs'::regclass
+       and tg.tgname = 'jobs_lock_pricing_and_inspection'
+  loop
+    if to_regprocedure('public.jobs_lock_pricing_and_inspection()') is null
+       or t.tgfoid <> to_regprocedure('public.jobs_lock_pricing_and_inspection()')::oid
+       or not (t.body_md5 = any (known)) then
+      raise exception '0029 refused: trigger jobs_lock_pricing_and_inspection on public.jobs runs % (body md5 %), not a known 0029 public.jobs_lock_pricing_and_inspection(); re-running this 0029 could downgrade or bypass it. Nothing was changed.', t.fn, t.body_md5;
+    end if;
+  end loop;
+  for t in
+    select md5(p.prosrc) as body_md5
+      from pg_proc p
+     where p.oid = to_regprocedure('public.jobs_lock_pricing_and_inspection()')
+  loop
+    if not (t.body_md5 = any (known)) then
+      raise exception '0029 refused: public.jobs_lock_pricing_and_inspection() has an unknown body (md5 %), not this 0029 or an earlier published one; re-running this 0029 could downgrade it. Nothing was changed.', t.body_md5;
+    end if;
+  end loop;
+end$$;
+
 -- ── 1. Trigger function ───────────────────────────────────────────────────
 -- SECURITY INVOKER on purpose so current_user is the real caller role.
 create or replace function public.jobs_lock_pricing_and_inspection()
@@ -212,6 +392,8 @@ language plpgsql
 security invoker
 set search_path = public
 as $$
+-- haven-version: 0029-v2 (2026-10-23 decisions F + H: rules 1-4, R3 fix, IV.5 materials from diagnosing, version guard).
+-- Sections 0b / 0c of this file read this line and the body md5; a later 0029 must change both.
 declare
   privileged boolean := current_user not in ('anon', 'authenticated');
   is_customer boolean;
@@ -222,6 +404,27 @@ declare
   old_rank integer;
   new_rank integer;
 begin
+  -- IV.2 (founder 2026-10-23 21:14 ET, rule 2). Every caller, privileged too.
+  if new.pro_id is not null
+     and new.pro_id = new.customer_id
+     and (tg_op = 'INSERT'
+          or new.pro_id is distinct from old.pro_id
+          or new.customer_id is distinct from old.customer_id) then
+    raise exception 'A job cannot be claimed by or assigned to the account that posted it'
+      using errcode = '42501',
+            hint = 'pro_id must differ from customer_id.';
+  end if;
+  if tg_op = 'INSERT' then
+    -- IV.5 (founder 2026-10-23 23:15 ET), insert path: no client creates a
+    --    job that starts at materials_requested.
+    if not privileged and new.status = 'materials_requested' then
+      raise exception 'Materials can only be requested from diagnosing'
+        using errcode = '42501',
+              hint = 'A new job starts at posted; Request Materials is the assigned Pro''s step from diagnosing.';
+    end if;
+    return new;
+  end if;
+
   -- PRIVILEGED: owner / SQL editor / service_role keep their behaviour.
   if privileged then
     return new;
@@ -286,18 +489,19 @@ begin
             hint = 'arrived -> diagnosing is the assigned Pro''s step, only when requires_diagnosis is true.';
   end if;
 
-  -- III.2 (item 2). complete and cancelled are terminal: no move out of them.
-  if old.status in ('complete', 'cancelled')
+  -- III.2 (item 2; decline outcomes added 2026-10-23). complete, cancelled,
+  --    inspection_completed and materials_declined are terminal: no move out.
+  if old.status in ('complete', 'cancelled', 'inspection_completed', 'materials_declined')
      and new.status is distinct from old.status then
     raise exception 'This job is finished; its status cannot change'
       using errcode = '42501',
-            hint = 'complete and cancelled are terminal statuses.';
+            hint = 'complete, cancelled, inspection_completed and materials_declined are terminal statuses.';
   end if;
 
   -- III.3 (item 3). No backward status move. Ladder rank: posted 1 ..
   --    in_progress 7; complete, materials_declined, inspection_completed 8.
   --    A move into cancelled is never backward (who may cancel stays with
-  --    RLS); moves out of complete / cancelled are III.2. The one authorized
+  --    RLS); moves out of the four terminal statuses are III.2. The one authorized
   --    backward move: the assigned Pro's new materials request from
   --    in_progress (0009 / 0026 counting rule: receipt -> in_progress ->
   --    Request Materials).
@@ -334,6 +538,59 @@ begin
               hint = 'Send convenience_fee_cents 3000 or leave it out: the server sets it.';
     end if;
     new.convenience_fee_cents := 3000;
+  end if;
+
+  -- IV.5 (founder 2026-10-23 23:15 ET). A materials request (move INTO
+  --    materials_requested) only from diagnosing, never from posted, en_route
+  --    or arrived. The assigned Pro's follow-up request from in_progress is
+  --    kept (Pro app flow; standard jobs' only request point; see header).
+  if new.status = 'materials_requested'
+     and old.status is distinct from 'materials_requested'
+     and old.status not in ('diagnosing', 'in_progress') then
+    raise exception 'Materials can only be requested from diagnosing'
+      using errcode = '42501',
+            hint = 'Request Materials is the assigned Pro''s step from diagnosing (or a follow-up request from in_progress), never from en_route or arrived.';
+  end if;
+
+  -- IV.1 (founder 2026-10-23 21:14 ET, rule 1). complete only from in_progress.
+  if new.status = 'complete'
+     and old.status is distinct from 'complete'
+     and old.status <> 'in_progress' then
+    raise exception 'A job can only be completed from in_progress'
+      using errcode = '42501',
+            hint = 'Start the work (in_progress) before marking the job complete.';
+  end if;
+
+  -- IV.4 (founder 2026-10-23 21:14 ET, rule 4). No completion while a
+  --    materials request is pending.
+  if new.status = 'complete'
+     and old.status is distinct from 'complete'
+     and undecided then
+    raise exception 'A materials request is still pending; decide it first'
+      using errcode = '42501',
+            hint = 'The customer must approve or decline the pending materials request before the job can be completed.';
+  end if;
+
+  -- IV.3 R3 fix (founder 2026-10-23 11:14 PM ET, Hub H; rule 3). The customer
+  --    approves materials only from materials_requested with an undecided
+  --    request (read from OLD).
+  if is_customer
+     and new.status = 'materials_approved'
+     and old.status is distinct from 'materials_approved'
+     and not (old.status = 'materials_requested' and undecided) then
+    raise exception 'There is no pending materials request to approve'
+      using errcode = '42501',
+            hint = 'The customer approves materials only while a materials request is pending (materials_requested).';
+  end if;
+
+  -- IV.3 (founder 2026-10-23 21:14 ET, rule 3). The customer sets no work status.
+  if is_customer
+     and new.status is distinct from old.status
+     and not (new.status in ('materials_approved', 'materials_declined', 'inspection_completed')
+              or (new.status = 'cancelled' and old.status = 'posted' and old.pro_id is null)) then
+    raise exception 'The customer cannot set this job status'
+      using errcode = '42501',
+            hint = 'The customer may approve or decline materials, end at the inspection fee, or cancel while the job is posted with no Pro.';
   end if;
 
   -- II. Fee integrity: price, payout, margin and fees are fixed once posted.
@@ -392,12 +649,16 @@ revoke all on function public.jobs_lock_pricing_and_inspection() from public, an
 -- ── 2. Trigger (fires after jobs_lock_materials_approved: name order) ──────
 drop trigger if exists jobs_lock_pricing_and_inspection on public.jobs;
 create trigger jobs_lock_pricing_and_inspection
-  before update on public.jobs
+  before insert or update on public.jobs
   for each row execute function public.jobs_lock_pricing_and_inspection();
 
 commit;
 
 -- ── Verify (read-only) ────────────────────────────────────────────────────
+-- Which 0029 body is installed (this file: 2393909415ad489e6a8902cf97e6a2dd,
+-- "haven-version: 0029-v2"):
+-- select md5(prosrc), substring(prosrc from 'haven-version: [^ ]+')
+--   from pg_proc where oid = to_regprocedure('public.jobs_lock_pricing_and_inspection()');
 -- Trigger installed, 0028 function untouched:
 -- select tgname from pg_trigger
 --  where tgrelid = 'public.jobs'::regclass and not tgisinternal order by 1;
