@@ -1,6 +1,6 @@
 -- Haven shared backend: Customer cancel, including after a Pro has accepted (MIG-0038)
 -- DRAFT. NOT APPLIED. Do not paste until the founder authorizes it in his own words.
--- Number: 0038 (0033 retired, never written; 0034/0035/0035a Founder Control Center; 0036 realtime job
+-- Number: 0038 (0033 never written, retirement prepared, pending prod check; 0034/0035/0035a Founder Control Center; 0036 realtime job
 -- signal; 0037 live-location sessions). Starting point: Hub PR #3
 -- backend/contracts/customer-cancel-job-PROPOSED-2026-11-10.md, option 1 ("cancel allowed after accept").
 --
