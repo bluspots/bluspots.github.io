@@ -112,6 +112,8 @@ function seed() {
   Object.keys(storedData).forEach(k => delete storedData[k]);
   storedData['haven_auth_access_token'] = 'signed-in-access-token';
   storedData['haven_auth_user_id'] = CUSTOMER_ID;
+  // QA #87 v7 (a): saved addresses are per account; the seeded list is this customer's.
+  storedData['haven_addresses_owner'] = CUSTOMER_ID;
   storedData['haven_auth_email'] = 'qa-customer@example.com';
   storedData['haven_auth_role'] = 'customer';
   storedData['haven_notifications'] = JSON.stringify({ __v: 1, data: [] });

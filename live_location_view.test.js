@@ -125,6 +125,14 @@ global.fetch = async (url, init) => {
   if (u.includes('/rest/v1/rpc/is_qa_tester')) return ok(false);
   if (u.includes(LIVE_PATH)) return liveImpl(calls.filter(c => c.url.includes(LIVE_PATH)).length);
   if (u.includes('/rest/v1/jobs?id=in.')) return ok([{ id: JOB_UUID, status: remoteStatus, customer_id: CUSTOMER_ID, pro_id: remoteStatus === 'posted' ? null : PRO_UUID }]);
+  // Since #87 Bookings come from the server: the account read returns this job.
+  if (u.includes('/rest/v1/jobs') && u.includes('order=posted_at')) return ok([{
+    id: JOB_UUID, status: remoteStatus, customer_id: CUSTOMER_ID, pro_id: remoteStatus === 'posted' ? null : PRO_UUID,
+    category: 'Assembly', title: 'Assemble furniture', requires_diagnosis: false, city_label: 'Orlando, FL', address_snapshot: null, emergency: false,
+    posted_at: new Date(Date.now() - 900000).toISOString(), accepted_at: remoteStatus === 'posted' ? null : new Date(Date.now() - 600000).toISOString(),
+    completed_at: null, cancelled_at: null, customer_preferences_snapshot: [], fixed_customer_labor_price_cents: 6500, emergency_fee_cents: 0,
+    tip_amount_cents: 0, materials_items: [], materials_estimate_cents: 0, materials_approved_cents: null,
+  }]);
   if (u.includes('/rest/v1/')) return ok([]);
   return { ok: false, status: 404, json: async () => [], text: async () => 'not found' };
 };

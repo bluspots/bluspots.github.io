@@ -305,29 +305,30 @@
     return {paid, brand, last4, showCard:!!(paid && brand && last4)};
   };
 
-  // Poll/rehydrate of locally linked jobs. Not the whole table.
+  // One signed-in jobs read for this customer, shared by the poll/rehydrate
+  // of locally linked ids and the "my jobs" read below. Not the whole table.
   // Signed in: user access token and customer_id = that user. apikey stays the anon key.
   // Signed out: do not call /rest/v1/jobs. Anon SELECT on the base table is revoked;
   // a crafted anon poll must not pull private lifecycle rows. Local UI state stays.
-  // Never DEMO_CUSTOMER_ID. No Supabase config: no jobs request (returns []).
-  const fetchCanonicalJobsByIds=async(backendIds)=>{
+  // Never DEMO_CUSTOMER_ID. No Supabase config: no jobs request.
+  // Returns {ok, rows, customerId}. ok is false when nothing was read (no
+  // config, no session, network or HTTP error), so a caller can tell "this
+  // account has no jobs" apart from "the read did not happen".
+  const havenReadCustomerJobs=async(filterQuery, extraColumns)=>{
     const cfg=getSupabaseConfig();
-    if(!cfg) return [];
-    if(!backendIds||backendIds.length===0) return [];
-    const unique=[...new Set(backendIds.filter(Boolean))];
-    if(unique.length===0) return [];
+    if(!cfg) return {ok:false, rows:[], customerId:null};
     const token=havenSignedInAccessToken();
     if(!token){
       // Signed-out: stop. Do not browse private lifecycle through the anon key.
-      return [];
+      return {ok:false, rows:[], customerId:null};
     }
     const customerId=havenJobCustomerId();
-    if(!customerId) return [];
-    const inList=unique.map(id=>encodeURIComponent(id)).join(",");
+    if(!customerId) return {ok:false, rows:[], customerId:null};
     const headers={"Accept":"application/json", apikey:cfg.anonKey, Authorization:`Bearer ${token}`};
-    const jobsUrl=(withApproved)=>`${cfg.url}/rest/v1/jobs?id=in.(${inList})&customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,pro_id,materials_items,materials_estimate_cents,${HAVEN_RECEIPT_JOB_COLUMNS}${withApproved?`,${HAVEN_MATERIALS_APPROVED_COLUMN}`:""}`;
+    const extra=extraColumns ? `,${extraColumns}` : "";
+    const jobsUrl=(withApproved)=>`${cfg.url}/rest/v1/jobs?${filterQuery?`${filterQuery}&`:""}customer_id=eq.${encodeURIComponent(customerId)}&select=id,status,customer_id,pro_id,materials_items,materials_estimate_cents,${HAVEN_RECEIPT_JOB_COLUMNS}${extra}${withApproved?`,${HAVEN_MATERIALS_APPROVED_COLUMN}`:""}`;
     const url=jobsUrl(!havenMaterialsApprovedColumnUnavailable);
-    if(String(url).includes("11111111-1111-4111-8111-111111111111")) return [];
+    if(String(url).includes("11111111-1111-4111-8111-111111111111")) return {ok:false, rows:[], customerId};
     try{
       let res=await fetch(url,{
         headers,
@@ -342,22 +343,46 @@
           });
         }else{
           console.warn("Haven CHUNK4 fetch failed:", res.status, text);
-          return [];
+          return {ok:false, rows:[], customerId};
         }
       }
       if(!res.ok){
         const text=await res.text().catch(()=>"(no body)");
         console.warn("Haven CHUNK4 fetch failed:", res.status, text);
-        return [];
+        return {ok:false, rows:[], customerId};
       }
       let rows=await res.json();
-      if(!Array.isArray(rows)) return [];
-      rows=rows.filter(r=>r && havenSameCustomerId(r.customer_id, customerId));
-      return rows;
+      if(!Array.isArray(rows)) return {ok:false, rows:[], customerId};
+      rows=rows.filter(r=>r && r.id && havenSameCustomerId(r.customer_id, customerId));
+      return {ok:true, rows, customerId};
     }catch(err){
       console.warn("Haven CHUNK4 fetch error:", err);
-      return [];
+      return {ok:false, rows:[], customerId};
     }
+  };
+  // Poll/rehydrate of locally linked jobs (by id). Returns rows ([] on any failure).
+  const fetchCanonicalJobsByIds=async(backendIds)=>{
+    if(!getSupabaseConfig()) return [];
+    if(!backendIds||backendIds.length===0) return [];
+    const unique=[...new Set(backendIds.filter(Boolean))];
+    if(unique.length===0) return [];
+    const inList=unique.map(id=>encodeURIComponent(id)).join(",");
+    const result=await havenReadCustomerJobs(`id=in.(${inList})`, "");
+    return result.rows;
+  };
+  // Phase 1B B4: cross-device bookings. "My jobs": every jobs row whose
+  // customer_id is the signed-in user, under the existing RLS (no new policy).
+  // A signed-in customer can already SELECT their own posted rows
+  // (jobs_select_own_posted, 0023) and assigned or later rows
+  // (jobs_select_assigned_or_active, 0007). The customer_id filter keeps the
+  // read to this account; rows for anyone else are dropped above.
+  // Adds the columns the Customer app needs to build a job it has never seen
+  // (fresh browser, another device). Read-only. No payment_snapshot.
+  const HAVEN_MY_JOBS_COLUMNS="category,title,requires_diagnosis,city_label,address_snapshot,emergency,posted_at,accepted_at,completed_at,cancelled_at,customer_preferences_snapshot";
+  const HAVEN_MY_JOBS_LIMIT=500;
+  // Newest first so the limit keeps the most recent jobs; the app sorts by posted_at.
+  const fetchMyCanonicalJobs=async()=>{
+    return havenReadCustomerJobs(`order=posted_at.desc&limit=${HAVEN_MY_JOBS_LIMIT}`, HAVEN_MY_JOBS_COLUMNS);
   };
 
   // Display name for the pro on jobs this customer owns. Not a profile directory.
