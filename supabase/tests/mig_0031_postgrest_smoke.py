@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """MIG-0031 HTTP smoke through a LOCAL PostgREST (never Supabase): POST /jobs exactly as the Customer app posts,
-off-contract amounts refused (403 / 42501, nothing written), anon refused, service_role documented bypass, and
+off-contract amounts refused (403 / 42501, nothing written), anon refused, service_role refused under the production grants, and
 0029 still locking amounts after posting. Own throwaway DB, own PostgREST, own random JWT secret; stops only what
 it started.  Usage: HAVEN_PGRST=/path/postgrest HAVEN_DEPS=... HAVEN_0036_TESTS=<#97 tests dir> \
        python3 -B supabase/tests/mig_0031_postgrest_smoke.py
@@ -49,8 +49,9 @@ def run_checks():
         check(f'C1 POST {label} -> 403 42501, nothing written', s == 403 and isinstance(b, dict) and b.get('code') == '42501' and not exists(n), [s, b])
     s, b = call('POST', '/jobs', None, body(37))
     check('anon POST /jobs -> refused, nothing written', s in (401, 403) and not exists(37), [s])
+    owner_sql('revoke delete on table public.jobs from anon, authenticated; revoke select, insert, update, delete on table public.jobs from service_role;')   # production jobs grants (CoS probe 2026-11-12)
     s, b = call('POST', '/jobs', 'service_role', body(41, margin_rate_bps=1500))
-    check('service_role POST off-contract -> 201 (documented privileged bypass)', s == 201 and exists(41), [s, b])
+    check('service_role POST under the production grants -> 403 permission denied, nothing written', s == 403 and isinstance(b, dict) and b.get('code') == '42501' and not exists(41), [s, b])
     s, b = call('PATCH', f'/jobs?id=eq.{X.NEW}01', 'C1', {'fixed_pro_labor_payout_cents': 1})
     po = owner_sql(f"select fixed_pro_labor_payout_cents from public.jobs where id = '{X.NEW}01';")
     check('C1 PATCH payout after posting -> refused (0029 unchanged), stored 7120', s >= 400 and po == '7120', [s, po])

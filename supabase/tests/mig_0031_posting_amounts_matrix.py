@@ -117,8 +117,10 @@ def g_rules(db):
     check('anon post -> refused (unchanged)', 'inserted' not in r.stdout and stored(db, 37) is None)
     r = post(db, 'owner', 40, margin_rate_bps=1500, fixed_pro_labor_payout_cents=1)
     check('owner / SQL editor (privileged) may insert any amounts (admin repair)', 'inserted' in r.stdout and stored(db, 40) is not None, r.stderr[-160:])
+    must(db, 'revoke delete on table public.jobs from anon, authenticated; revoke select, insert, update, delete on table public.jobs from service_role;')   # production jobs grants (CoS probe 2026-11-12): service_role has no INSERT on jobs
     r = post(db, 'service_role', 41, margin_rate_bps=1500)
-    check('service_role (privileged, server key) skips the checks (documented)', 'inserted' in r.stdout, r.stderr[-160:])
+    check('service_role under the production grants: permission denied for table jobs, nothing written (no bypass path)',
+          'inserted' not in r.stdout and 'permission denied for table jobs' in r.stderr and stored(db, 41) is None, r.stderr[-160:])
     # after posting: 0029 still locks the amounts (F1), and the live job features still work
     _, r = None, psql(db, 'begin;\n' + b.as_actor('C1') + f"update public.jobs set fixed_pro_labor_payout_cents = 1 where id = '{NEW}01';\ncommit;\n", stop=False)
     check('F1 regression: Customer PATCH of a posted amount still refused (0029)', 'ERROR' in r.stderr and stored(db, 1)['po'] == 7120, b.redact(r.stderr)[-160:])

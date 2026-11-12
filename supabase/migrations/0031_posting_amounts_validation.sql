@@ -70,9 +70,11 @@
 -- the $45 fee to that flag. status = 'posted' and pro_id is null at posting are
 -- already enforced by RLS (jobs_insert_posted_only).
 --
--- PRIVILEGED callers (current_user not in ('anon', 'authenticated'): the
--- SQL editor / postgres, service_role, Edge Functions with the service key)
--- skip every check, for admin repair and imports.
+-- PRIVILEGED callers (current_user not in ('anon', 'authenticated'), in practice
+-- the SQL editor / postgres owner) skip every check, for admin repair and imports.
+-- service_role can't use this path on production: it has no INSERT on public.jobs
+-- (CoS read-only probe 2026-11-12 4:31 PM ET), so a service-key insert fails with
+-- "permission denied for table jobs" before this trigger runs.
 --
 -- EXISTING ROWS. 0031 checks INSERT only. It does not read, count or
 -- rewrite any existing job. Legacy diagnosis jobs posted with a $0

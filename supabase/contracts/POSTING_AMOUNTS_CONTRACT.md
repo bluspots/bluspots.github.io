@@ -21,8 +21,10 @@ names the rule, for example "The Pro payout must be 80% of the labor price". The
 payload (`home_services_app.jsx` postJob) already sends exactly these values, so it needs no change. On a
 403, show "Couldn't post the job — try again" (as today) and don't retry automatically.
 
-Nothing is rewritten: the server checks the values the client sent. Privileged callers (SQL editor /
-owner, `service_role`, Edge Functions with the service key) skip the checks, for admin repair and imports.
+Nothing is rewritten: the server checks the values the client sent. The SQL editor / database owner skips
+the checks, for admin repair and imports. There is **no** `service_role` path: on production `service_role`
+has no INSERT on `public.jobs` (CoS read-only probe 2026-11-12 4:31 PM ET), so a service-key insert is
+refused with `permission denied for table jobs` (HTTP 403) before 0031 runs.
 
 ## Not enforced (OPEN for the founder; no amount is invented here)
 
@@ -44,12 +46,12 @@ owner, `service_role`, Edge Functions with the service key) skip the checks, for
 
 ## Tests (local Postgres 17 + local PostgREST only)
 
-- `tests/mig_0031_posting_amounts_matrix.py`: 49 checks. Covers:
+- `tests/mig_0031_posting_amounts_matrix.py`: 49 checks (49/49 PASS, t676). Covers:
   - app-shaped posts are accepted;
   - every off-contract amount is refused with 42501 and nothing is written;
-  - privileged bypass;
+  - the owner (SQL editor) bypass, and `service_role` refused under the production grants;
   - 0029 still locks amounts after posting;
   - the board and claim still work;
   - catalog, guards, CRLF, rollback and re-apply.
-- `tests/mig_0031_mutants.py`: 13 of 13 killed.
-- `tests/mig_0031_postgrest_smoke.py`: 10 of 10 over HTTP POST /jobs.
+- `tests/mig_0031_mutants.py`: 13/13 mutants killed (t676).
+- `tests/mig_0031_postgrest_smoke.py`: 10/10 PASS (t676) over HTTP POST /jobs.
