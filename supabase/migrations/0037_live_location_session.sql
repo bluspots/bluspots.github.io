@@ -1,6 +1,6 @@
 -- Haven shared backend: live-location sessions + immediate stop (MIG-0037)
 -- DRAFT. NOT APPLIED. Do not paste until the founder authorizes it in his own words.
--- Number: 0037 (0033 stays reserved for the earlier c-min proposal, which this file replaces;
+-- Number: 0037 (0033 was never written and is RETIRED: read-only probe 7392f0d2 on production 2026-11-12. 0037 replaces the c-min proposal;
 -- 0034/0035/0035a are the Founder Control Center files; 0036 is the realtime job signal).
 --
 -- HOW TO RUN: paste the whole file into the Supabase SQL editor and run it as ONE run, as the
@@ -26,12 +26,20 @@
 --      en_route, Pro change, Customer change) deletes the session too, so a Pro who is released and
 --      re-claims, or reaches Arrived, needs a new session.
 --   7. One-time: deletes live points that have no session (all points written before 0037).
---   8. public.job_live_session_stops (founder rule 2026-11-12, t674): a deliberate stop (stop(job), or
---      stop(null) at sign-out) is final for that en_route leg. pro_start_live_location then refuses with
---      session_stopped, so sign-in, reopening Haven Pro, a token refresh or a late/duplicate start can never
---      restart sharing. Only a new Driving to Job (the job leaves en_route or changes Pro; the
---      jobs_end_live_session trigger clears the marker) allows a new session. A blip or an app kill without
---      stop keeps the same session (the Pro app may keep using its session_id).
+--   8. public.job_live_session_stops (founder rules 2026-11-12, t674 + t675u): a deliberate stop (stop(job),
+--      or stop(null) at sign-out) or a server expiry writes a stop marker. pro_start_live_location (the
+--      automatic Driving to Job call) refuses with session_stopped while it exists, so sign-in, reopening
+--      Haven Pro, permission returning, a token refresh or a late/duplicate start can never restart sharing.
+--      The marker is cleared when the job leaves en_route or changes Pro (jobs_end_live_session), or by:
+--   9. pro_resume_live_location(job) -> {ok, session_id, started_at} (t675u): the explicit "Resume location
+--      sharing" tap. Assigned Pro, en_route job only; clears the marker and opens a NEW session (new id;
+--      any old id stays dead). A distinct RPC so the resume path is separate and visible in the API logs.
+--  10. Expiry (t675u): a session with no accepted write for 30 minutes (since its start or its last
+--      accepted point) is ended by the server on its next use: session + point deleted, stop marker
+--      written, the Customer signalled, and the caller gets {ok:false, error:session_stopped,
+--      reason:expired}. Only Resume reopens it. The 5-minute 'paused' rule for the Customer is unchanged.
+--      A blip or an app kill without stop keeps the same session (the Pro app may keep its session_id in
+--      Keychain/Keystore and continue with it after a relaunch).
 --
 -- 0032 is NOT changed: pro_update_live_location(uuid,float8,float8,timestamptz), get_job_live_location,
 -- jobs_discard_live_location and its trigger keep their exact bodies and grants (the 0035 baseline
@@ -39,10 +47,11 @@
 -- SQLSTATE P0001, message 'session_required' (PostgREST HTTP 400).
 --
 -- Races. Every path locks the jobs row first; that row lock serialises everything after it:
---   writer : jobs FOR SHARE, session row FOR SHARE, upsert point (guard re-checks the session).
+--   writer : jobs FOR SHARE, session row FOR UPDATE (writers on one job queue; expiry may delete it), upsert point (guard re-checks the session).
 --   stop(job)  : jobs FOR NO KEY UPDATE, upsert stop marker, DELETE session row, DELETE point.
 --   stop(null) : the caller's jobs FOR NO KEY UPDATE in id order, then the same (sign-out; Quagon LOW-1).
---   start  : jobs FOR NO KEY UPDATE, refuse if stop marker, upsert session row. start and stop take the
+--   start  : jobs FOR NO KEY UPDATE, refuse if stop marker, upsert session row (resume: the same lock,
+--            delete the marker, upsert a new session row). start and stop take the
 --            same lock, so a start in flight at the moment of a stop either finishes first (and its session
 --            is then deleted by the stop) or runs after it and is refused (Quagon LOW-3 closed).
 --   jobs UPDATE: row lock (conflicts with FOR SHARE), then AFTER triggers delete point, then session.
@@ -111,11 +120,12 @@ begin
   select string_agg(p.oid::regprocedure::text || '=' || md5(replace(p.prosrc, E'\r', '')), ' ' order by p.oid::regprocedure::text collate "C") into v
     from pg_proc p
    where p.oid in (to_regprocedure('public.pro_start_live_location(uuid)'),
+                   to_regprocedure('public.pro_resume_live_location(uuid)'),
                    to_regprocedure('public.pro_stop_live_location(uuid)'),
                    to_regprocedure('public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz)'),
                    to_regprocedure('public.job_live_locations_require_session()'),
                    to_regprocedure('public.jobs_end_live_session()'));
-  if v is not null and v is distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=09bd8cfc7b46d23178e9de798bd4c8fe pro_start_live_location(uuid)=9c01f0af764fa06fa4ec37b532de2439 pro_stop_live_location(uuid)=23d3bb76ec6483cae0ff7f685c7ece73 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2' then
+  if v is not null and v is distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=09bd8cfc7b46d23178e9de798bd4c8fe pro_resume_live_location(uuid)=a7ec633349d8a4cdcb2703d93884ade4 pro_start_live_location(uuid)=9c01f0af764fa06fa4ec37b532de2439 pro_stop_live_location(uuid)=23d3bb76ec6483cae0ff7f685c7ece73 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=3effd2b1d0394cf4ba3064781b363900' then
     raise exception '0037: 0037 functions already exist with other bodies (%). Send this to Codey. Nothing was changed.', v;
   end if;
   if exists (select 1 from pg_trigger t where t.tgname = 'jobs_end_live_session' and t.tgrelid = 'public.jobs'::regclass
@@ -145,7 +155,7 @@ create table if not exists public.job_live_session_stops (
   stopped_at timestamptz not null default now()
 );
 comment on table public.job_live_session_stops is
-  'Live tracking (0037): the Pro deliberately stopped sharing on this en_route leg; pro_start_live_location refuses (session_stopped) until the job leaves en_route or changes Pro (jobs_end_live_session clears it). No location data. RLS on, no policies, no client grants.';
+  'Live tracking (0037): sharing on this en_route leg was stopped (by the Pro, at sign-out, or by the 30-minute expiry); pro_start_live_location refuses (session_stopped) until pro_resume_live_location (explicit tap) or the job leaves en_route or changes Pro (jobs_end_live_session clears it). No location data. RLS on, no policies, no client grants.';
 alter table public.job_live_session_stops enable row level security;
 revoke all on table public.job_live_session_stops from public, anon, authenticated, service_role;
 
@@ -190,6 +200,43 @@ begin
 end;
 $$;
 
+-- ---------------------------------------------------------------- 2b. resume (explicit "Resume location sharing" tap only; t675u)
+create or replace function public.pro_resume_live_location(p_job_id uuid)
+returns jsonb
+language plpgsql
+volatile
+security definer
+set search_path = pg_catalog, public, pg_temp
+as $$
+declare
+  v_uid uuid := auth.uid();
+  v_status public.job_status;
+  v_pro uuid;
+  v_sid uuid := gen_random_uuid();
+  v_at timestamptz := now();
+begin
+  if v_uid is null then
+    return jsonb_build_object('ok', false, 'error', 'not_authenticated');
+  end if;
+  -- same lock as start / stop: a resume and a stop on one job never interleave
+  select j.status, j.pro_id into v_status, v_pro from public.jobs j where j.id = p_job_id for no key update;
+  if not found or v_pro is distinct from v_uid then
+    return jsonb_build_object('ok', false, 'error', 'not_found');
+  end if;
+  if v_status <> 'en_route' then
+    return jsonb_build_object('ok', false, 'error', 'tracking_not_active');
+  end if;
+  -- founder rule 2026-11-12 (t675u): only this explicit path reopens sharing after a stop or an expiry.
+  delete from public.job_live_session_stops x where x.job_id = p_job_id;
+  insert into public.job_live_sessions as s (job_id, pro_id, session_id, started_at)
+  values (p_job_id, v_uid, v_sid, v_at)
+  on conflict (job_id) do update
+     set pro_id = excluded.pro_id, session_id = excluded.session_id, started_at = excluded.started_at;
+  return jsonb_build_object('ok', true, 'session_id', v_sid,
+    'started_at', to_char(v_at at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'));
+end;
+$$;
+
 -- ---------------------------------------------------------------- 3. writer with a session (0032 body + session rule)
 create or replace function public.pro_update_live_location(
   p_job_id uuid,
@@ -213,6 +260,10 @@ declare
   v_cap timestamptz;
   v_written timestamptz;
   v_last timestamptz;
+  v_started timestamptz;
+  v_idle_from timestamptz;
+  v_cust uuid;
+  v_lt text;
 begin
   if v_uid is null then
     return jsonb_build_object('ok', false, 'error', 'not_authenticated');
@@ -227,11 +278,33 @@ begin
   if p_session_id is null then
     return jsonb_build_object('ok', false, 'error', 'session_required');
   end if;
-  perform 1 from public.job_live_sessions s
+  select s.started_at into v_started from public.job_live_sessions s
    where s.job_id = p_job_id and s.pro_id = v_uid and s.session_id = p_session_id
-     for share;
+     for update;
   if not found then
     return jsonb_build_object('ok', false, 'error', 'session_stopped');
+  end if;
+  -- expiry (t675u): no accepted write for 30 minutes since the start or the last accepted point
+  select greatest(v_started, coalesce(max(l.received_at), v_started)) into v_idle_from
+    from public.job_live_locations l where l.job_id = p_job_id and l.pro_id = v_uid;
+  if now() - v_idle_from > interval '30 minutes' then
+    insert into public.job_live_session_stops as x (job_id, pro_id, stopped_at)
+    values (p_job_id, v_uid, now())
+    on conflict (job_id) do update set pro_id = excluded.pro_id, stopped_at = excluded.stopped_at;
+    delete from public.job_live_sessions s where s.job_id = p_job_id;
+    delete from public.job_live_locations l where l.job_id = p_job_id;
+    select j.customer_id into v_cust from public.jobs j where j.id = p_job_id;
+    begin
+      v_lt := current_setting('lock_timeout');
+      perform set_config('lock_timeout', '1s', true);
+      perform realtime.send(jsonb_build_object('v', 1, 'job_id', p_job_id, 'status', v_status::text, 'reason', 'updated',
+                              'at', to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')),
+                            'job_changed', 'jobs:user:' || v_cust::text, true);
+      perform set_config('lock_timeout', v_lt, true);
+    exception when others then
+      raise warning '0037 pro_update_live_location: expiry signal skipped (SQLSTATE %)', sqlstate;
+    end;
+    return jsonb_build_object('ok', false, 'error', 'session_stopped', 'reason', 'expired');
   end if;
   if p_lat is null or p_lng is null
      or not (p_lat >= -90 and p_lat <= 90)
@@ -370,9 +443,11 @@ end;
 $$;
 
 revoke all on function public.pro_start_live_location(uuid) from public, anon, service_role;
+revoke all on function public.pro_resume_live_location(uuid) from public, anon, service_role;
 revoke all on function public.pro_stop_live_location(uuid) from public, anon, service_role;
 revoke all on function public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz) from public, anon, service_role;
 grant execute on function public.pro_start_live_location(uuid) to authenticated;
+grant execute on function public.pro_resume_live_location(uuid) to authenticated;
 grant execute on function public.pro_stop_live_location(uuid) to authenticated;
 grant execute on function public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz) to authenticated;
 revoke all on function public.job_live_locations_require_session() from public, anon, authenticated, service_role;
@@ -416,15 +491,17 @@ begin
   select string_agg(p.oid::regprocedure::text || '=' || md5(replace(p.prosrc, E'\r', '')), ' ' order by p.oid::regprocedure::text collate "C") into v
     from pg_proc p
    where p.oid in (to_regprocedure('public.pro_start_live_location(uuid)'),
+                   to_regprocedure('public.pro_resume_live_location(uuid)'),
                    to_regprocedure('public.pro_stop_live_location(uuid)'),
                    to_regprocedure('public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz)'),
                    to_regprocedure('public.job_live_locations_require_session()'),
                    to_regprocedure('public.jobs_end_live_session()'));
-  if v is distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=09bd8cfc7b46d23178e9de798bd4c8fe pro_start_live_location(uuid)=9c01f0af764fa06fa4ec37b532de2439 pro_stop_live_location(uuid)=23d3bb76ec6483cae0ff7f685c7ece73 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2' then
+  if v is distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=09bd8cfc7b46d23178e9de798bd4c8fe pro_resume_live_location(uuid)=a7ec633349d8a4cdcb2703d93884ade4 pro_start_live_location(uuid)=9c01f0af764fa06fa4ec37b532de2439 pro_stop_live_location(uuid)=23d3bb76ec6483cae0ff7f685c7ece73 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=3effd2b1d0394cf4ba3064781b363900' then
     raise exception '0037 post-check: function bodies differ (%). Rolled back.', v;
   end if;
   if exists (select 1 from pg_proc p
               where p.oid in (to_regprocedure('public.pro_start_live_location(uuid)'), to_regprocedure('public.pro_stop_live_location(uuid)'),
+                              to_regprocedure('public.pro_resume_live_location(uuid)'),
                               to_regprocedure('public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz)'),
                               to_regprocedure('public.job_live_locations_require_session()'), to_regprocedure('public.jobs_end_live_session()'))
                 and (not p.prosecdef or p.proconfig is distinct from array['search_path=pg_catalog, public, pg_temp']

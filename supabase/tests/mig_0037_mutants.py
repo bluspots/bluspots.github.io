@@ -51,9 +51,21 @@ MUTANTS = [
     ('M33 sign-out marks only jobs it wiped', "   where j.pro_id = v_uid and j.status = 'en_route' and (p_job_id is null or j.id = p_job_id)", "   where j.pro_id = v_uid and j.status = 'en_route' and (p_job_id is null or j.id = p_job_id)\n     and exists (select 1 from public.job_live_sessions z where z.job_id = j.id)"),
     ('M34 stop marker even off en_route', "   where j.pro_id = v_uid and j.status = 'en_route' and (p_job_id", "   where j.pro_id = v_uid and (p_job_id"),
     ('M35 stops table readable by authenticated', "revoke all on table public.job_live_session_stops from public, anon, authenticated, service_role;", "revoke all on table public.job_live_session_stops from public, anon, service_role;\ngrant select on table public.job_live_session_stops to authenticated;"),
+    ('M36 resume keeps the stop marker', "  delete from public.job_live_session_stops x where x.job_id = p_job_id;\n", ""),
+    ('M37 resume skips the ownership check', "  -- same lock as start / stop: a resume and a stop on one job never interleave\n  select j.status, j.pro_id into v_status, v_pro from public.jobs j where j.id = p_job_id for no key update;\n  if not found or v_pro is distinct from v_uid then\n    return jsonb_build_object('ok', false, 'error', 'not_found');\n  end if;\n", "  select j.status, j.pro_id into v_status, v_pro from public.jobs j where j.id = p_job_id for no key update;\n"),
+    ('M38 resume on any status (after Arrived / cancel)', "  if v_status <> 'en_route' then\n    return jsonb_build_object('ok', false, 'error', 'tracking_not_active');\n  end if;\n  -- founder rule 2026-11-12 (t675u)", "  -- founder rule 2026-11-12 (t675u)"),
+    ('M39 resume keeps the old session id', "     set pro_id = excluded.pro_id, session_id = excluded.session_id, started_at = excluded.started_at;\n  return jsonb_build_object('ok', true, 'session_id', v_sid,", "     set pro_id = excluded.pro_id, session_id = s.session_id, started_at = excluded.started_at;\n  return jsonb_build_object('ok', true, 'session_id', v_sid,", 2),
+    ('M40 no expiry', "  if now() - v_idle_from > interval '30 minutes' then", "  if false then"),
+    ('M41 expiry counts from the start only (ignores later points)', "greatest(v_started, coalesce(max(l.received_at), v_started))", "coalesce(min(v_started), v_started)"),
+    ('M42 expiry writes no stop marker', "    insert into public.job_live_session_stops as x (job_id, pro_id, stopped_at)\n    values (p_job_id, v_uid, now())\n    on conflict (job_id) do update set pro_id = excluded.pro_id, stopped_at = excluded.stopped_at;\n", ""),
+    ('M43 expiry keeps the point', "    delete from public.job_live_locations l where l.job_id = p_job_id;\n", ""),
+    ('M44 writer takes the session row only FOR SHARE', "   where s.job_id = p_job_id and s.pro_id = v_uid and s.session_id = p_session_id\n     for update;", "   where s.job_id = p_job_id and s.pro_id = v_uid and s.session_id = p_session_id\n     for share;"),
+    ('M45 resume granted to anon', "grant execute on function public.pro_resume_live_location(uuid) to authenticated;", "grant execute on function public.pro_resume_live_location(uuid) to authenticated, anon;"),
+    ('M46 expiry limit 30 min -> 30 h', "  if now() - v_idle_from > interval '30 minutes' then", "  if now() - v_idle_from > interval '30 hours' then"),
     ('M26 writer forgets to set the session GUC', "  perform set_config('haven.live_session_id', p_session_id::text, true);\n", ""),
 ]
 FULL = {'M15', 'M23', 'M24'}
+NTH = {'M06': 1, 'M07': 1, 'M21': 1, 'M31': 1}   # start's copy (resume repeats these lines)
 
 
 def bodies(text):
@@ -64,13 +76,25 @@ def bodies(text):
 def main():
     base = bodies(SRC)
     killed = 0
-    for name, old, new in MUTANTS:
+    only = [x for x in os.environ.get('HAVEN_MUTANTS', '').split(',') if x]
+    sel = [m for m in MUTANTS if not only or m[0].split()[0] in only]
+    for mt in sel:
+        name, old, new = mt[0], mt[1], mt[2]
         pairs = old if isinstance(old, list) else [(old, new)]
         text = SRC
         for o, n in pairs:
-            if text.count(o) != 1:
-                print(f'BROKEN {name}: anchor found {text.count(o)} times'); sys.exit(2)
-            text = text.replace(o, n)
+            # anchors shared by start and resume (t675u) are taken at their Nth occurrence (default 1 = start)
+            nth = mt[3] if len(mt) > 3 else NTH.get(name.split()[0], 0)
+            c = text.count(o)
+            if (nth == 0 and c != 1) or (nth and c < nth):
+                print(f'BROKEN {name}: anchor found {c} times'); sys.exit(2)
+            if nth:
+                i = -1
+                for _ in range(nth):
+                    i = text.index(o, i + 1)
+                text = text[:i] + n + text[i + len(o):]
+            else:
+                text = text.replace(o, n)
         for fn, m in bodies(text).items():
             if m != base[fn]:
                 text = text.replace(base[fn], m)
@@ -87,8 +111,8 @@ def main():
         ok = r.returncode != 0
         killed += ok
         print(f"{'KILLED' if ok else 'SURVIVED'} {name} -> {how}", flush=True)
-    print(f'\nMUTANTS killed {killed}/{len(MUTANTS)}')
-    sys.exit(0 if killed == len(MUTANTS) else 1)
+    print(f'\nMUTANTS killed {killed}/{len(sel)}')
+    sys.exit(0 if killed == len(sel) else 1)
 
 
 if __name__ == '__main__':

@@ -23,6 +23,7 @@ f37 as (
          string_agg(p.oid::regprocedure::text || '=' || md5(replace(p.prosrc, E'\r', '')), ' ' order by p.oid::regprocedure::text collate "C") as v
     from pg_proc p
    where p.oid in (to_regprocedure('public.pro_start_live_location(uuid)'), to_regprocedure('public.pro_stop_live_location(uuid)'),
+                   to_regprocedure('public.pro_resume_live_location(uuid)'),
                    to_regprocedure('public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz)'),
                    to_regprocedure('public.job_live_locations_require_session()'), to_regprocedure('public.jobs_end_live_session()'))
 ),
@@ -67,9 +68,9 @@ hard(n, label, ok, detail) as (
          'current_user=' || current_user),
   ('05', '0037 objects all absent or all exact',
          (select (f37.n = 0 and t37.n = 0 and not s37.present and not s37.k_present)
-              or (s37.exact and s37.k_exact and t37.n = 2 and t37.ok = 2 and f37.v = 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=09bd8cfc7b46d23178e9de798bd4c8fe pro_start_live_location(uuid)=9c01f0af764fa06fa4ec37b532de2439 pro_stop_live_location(uuid)=23d3bb76ec6483cae0ff7f685c7ece73 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2')
+              or (s37.exact and s37.k_exact and t37.n = 2 and t37.ok = 2 and f37.v = 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=09bd8cfc7b46d23178e9de798bd4c8fe pro_resume_live_location(uuid)=a7ec633349d8a4cdcb2703d93884ade4 pro_start_live_location(uuid)=9c01f0af764fa06fa4ec37b532de2439 pro_stop_live_location(uuid)=23d3bb76ec6483cae0ff7f685c7ece73 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=3effd2b1d0394cf4ba3064781b363900')
             from f37, t37, s37),
-         (select 'functions=' || f37.n || '/5 triggers=' || t37.n || '/2 table=' || case when s37.exact then 'exact' when s37.present then 'DIFFERENT' else 'absent' end
+         (select 'functions=' || f37.n || '/6 triggers=' || t37.n || '/2 table=' || case when s37.exact then 'exact' when s37.present then 'DIFFERENT' else 'absent' end
             || ' stops_table=' || case when s37.k_exact then 'exact' when s37.k_present then 'DIFFERENT' else 'absent' end
             || coalesce(' bodies: ' || f37.v, '') from f37, t37, s37))
 ),

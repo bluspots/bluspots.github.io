@@ -349,6 +349,180 @@ def g_stopfinal(db):
     reset(db)
 
 
+def resume(db, who, job):
+    out, r = q(db, who, f"select public.pro_resume_live_location('{job}');", stop=False)
+    try:
+        return json.loads(out)
+    except Exception:
+        return {'raw': out, 'err': r.stderr[-200:]}
+
+
+def backdate(db, job=J1, start_min=None, point_min=None):
+    """Owner-side test shortcut: age the session start and/or the stored point (triggers off for this txn)."""
+    sql = b.OWNER + "begin;\nset local session_replication_role = replica;\n"
+    if start_min is not None:
+        sql += f"update public.job_live_sessions set started_at = now() - interval '{start_min} minutes' where job_id = '{job}';\n"
+    if point_min is not None:
+        sql += f"update public.job_live_locations set received_at = now() - interval '{point_min} minutes' where job_id = '{job}';\n"
+    must(db, sql + "commit;\n")
+
+
+def g_t675(db):
+    print('\n## T. Founder decisions t675u (Quagon scenarios): stored-session persistence, explicit resume, expiry')
+    STOPPED = {'ok': False, 'error': 'session_stopped'}
+    EXPIRED = {'ok': False, 'error': 'session_stopped', 'reason': 'expired'}
+    # T01 in-flight write vs stop: the stop waits for the writer, then wipes its point; nothing survives
+    reset(db)
+    sid, _ = live(db)
+    age_point(db, J1)
+    w = subprocess.Popen(b.PSQL + ['-d', db, '-v', 'ON_ERROR_STOP=1'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                         stderr=subprocess.PIPE, text=True)
+    w.stdin.write('begin;\n' + b.as_actor('P1') + f"select public.pro_update_live_location('{J1}', '{sid}'::uuid, {PT[0]}, {PT[1]}, now());\n"
+                  "select pg_sleep(1.5);\ncommit;\n")
+    w.stdin.close()
+    time.sleep(0.5)
+    st = stop(db, 'P1', J1)
+    w.wait(timeout=30)
+    wout = w.stdout.read()
+    check('T01 in-flight write vs stop: write ok, stop waits then wipes -> no session, no point, later write refused',
+          '"ok": true' in wout and st.get('ok') is True and state(db, J1) == (0, 0) and upd(db, 'P1', J1, sid) == STOPPED, [st, state(db, J1)])
+    # T02 kill + relaunch with a stored valid session keeps working (no start, no new session)
+    reset(db)
+    sid, _ = live(db)
+    age_point(db, J1)
+    u = upd(db, 'P1', J1, sid)
+    check('T02 kill + relaunch: stored session id keeps working, same session, no new one', u.get('ok') is True and state(db, J1) == (1, 1)
+          and q(db, 'owner', f"select session_id from public.job_live_sessions where job_id = '{J1}';")[0] == sid)
+    # T03 restoring a valid stored session after a long gap that is still inside the idle limit
+    backdate(db, start_min=120, point_min=29)
+    check('T03 restore a stored session 29 min after its last point (started 2 h ago) -> ok (idle counts from the last point)',
+          upd(db, 'P1', J1, sid).get('ok') is True and state(db, J1) == (1, 1))
+    # T04 a stopped session is refused everywhere; the automatic start cannot revive it
+    stop(db, 'P1', J1)
+    check('T04 stopped session: stored id -> session_stopped, nothing written', upd(db, 'P1', J1, sid) == STOPPED and state(db, J1) == (0, 0))
+    check('T04 stopped session: automatic start (launch / sign-in / refresh / permission back) -> session_stopped',
+          start(db, 'P1', J1) == STOPPED and state(db, J1) == (0, 0) and marker(db) == P1)
+    # T05 revoke + explicit resume: new id; the old id stays dead
+    r1 = resume(db, 'P1', J1)
+    s2 = r1.get('session_id')
+    check('T05 resume tap after a revoke/stop -> ok, NEW session id, marker cleared',
+          r1.get('ok') is True and s2 and s2 != sid and 'started_at' in r1 and marker(db) == '-' and state(db, J1) == (0, 1), r1)
+    check('T05 the old (stopped) id stays dead after resume', upd(db, 'P1', J1, sid) == STOPPED and state(db, J1) == (0, 1))
+    check('T05 the resumed id writes', upd(db, 'P1', J1, s2).get('ok') is True and state(db, J1) == (1, 1))
+    s3 = start(db, 'P1', J1).get('session_id')
+    check('T05 after a resume the leg is normal again (a Driving to Job retry may start)', bool(s3) and s3 != s2)
+    # T06 resume while a session is active rotates it (one writer)
+    age_point(db, J1)
+    r2 = resume(db, 'P1', J1)
+    check('T06 resume while active -> new id; the previous id is refused', r2.get('ok') is True and r2.get('session_id') not in (s3, None)
+          and upd(db, 'P1', J1, s3) == STOPPED, r2)
+    # T07 sign-out, then sign-in: no automatic restart; only resume
+    reset(db)
+    sid, _ = live(db)
+    check('T07 sign-out stop(null) -> session + point gone, marker written', stop(db, 'P1', None).get('ok') is True and state(db, J1) == (0, 0) and marker(db) == P1)
+    check('T07 after sign-in: stored id refused, automatic start refused', upd(db, 'P1', J1, sid) == STOPPED and start(db, 'P1', J1) == STOPPED)
+    r3 = resume(db, 'P1', J1)
+    check('T07 after sign-in the resume tap -> new session that writes', r3.get('ok') is True and r3['session_id'] != sid
+          and upd(db, 'P1', J1, r3['session_id']).get('ok') is True)
+    # T08 account switch: Pro B can never use Pro A's session, even with the id
+    reset(db)
+    sid, _ = live(db)
+    age_point(db, J1)
+    check('T08 account switch: P2 with P1\'s session id -> not_found, nothing written',
+          upd(db, 'P2', J1, sid) == {'ok': False, 'error': 'not_found'} and state(db, J1) == (1, 1))
+    check('T08 account switch: P2 resume / start / stop on P1\'s job -> not_found',
+          resume(db, 'P2', J1) == {'ok': False, 'error': 'not_found'} and start(db, 'P2', J1) == {'ok': False, 'error': 'not_found'}
+          and stop(db, 'P2', J1) == {'ok': False, 'error': 'not_found'} and state(db, J1) == (1, 1))
+    check('T08 C1 (the Customer) resume -> not_found', resume(db, 'C1', J1) == {'ok': False, 'error': 'not_found'})
+    check('T08 P1 session intact after the attempts', upd(db, 'P1', J1, sid).get('ok') is True)
+    # T09 cancel, T10 Arrived, T11 reassignment: the server ends the session; no resume
+    for label, sql, who_after, res_expect in (
+        ('T09 cancel', f"update public.jobs set status = 'cancelled' where id = '{J1}';", 'P1', 'tracking_not_active'),
+        ('T10 Arrived', None, 'P1', 'tracking_not_active'),
+        ('T11 reassignment P1 -> P2', f"update public.jobs set pro_id = '{P2}' where id = '{J1}';", 'P1', 'not_found')):
+        reset(db)
+        sid, _ = live(db)
+        if sql is None:
+            q(db, 'P1', f"update public.jobs set status = 'arrived' where id = '{J1}';")
+        else:
+            must(db, b.OWNER + sql)
+        check(f'{label}: session + point ended by the server', state(db, J1) == (0, 0))
+        check(f'{label}: resume by the old Pro -> {res_expect}', resume(db, who_after, J1) == {'ok': False, 'error': res_expect})
+        check(f'{label}: the stored id -> refused', upd(db, 'P1', J1, sid).get('ok') is False and state(db, J1) == (0, 0))
+    check('T11 reassignment: the new Pro cannot use the old Pro\'s id (session ended)', upd(db, 'P2', J1, sid) == STOPPED and state(db, J1) == (0, 0))
+    s4 = start(db, 'P2', J1)
+    check('T11 reassignment: the new Pro\'s own Driving to Job starts a fresh session', s4.get('ok') is True and s4['session_id'] != sid)
+    # T12-T14 expiry (30 min without an accepted write)
+    reset(db)
+    s5 = start(db, 'P1', J1)['session_id']
+    backdate(db, start_min=31)
+    check('T12 expiry: started 31 min ago, never wrote -> session_stopped (reason expired), session gone, marker written',
+          upd(db, 'P1', J1, s5) == EXPIRED and state(db, J1) == (0, 0) and marker(db) == P1)
+    check('T12 after expiry: the same id stays dead, automatic start refused', upd(db, 'P1', J1, s5) == STOPPED and start(db, 'P1', J1) == STOPPED)
+    r5 = resume(db, 'P1', J1)
+    check('T12 after expiry: resume tap -> new session that writes', r5.get('ok') is True and upd(db, 'P1', J1, r5['session_id']).get('ok') is True)
+    reset(db)
+    s6, _ = live(db)
+    backdate(db, start_min=60, point_min=31)
+    must(db, b.OWNER + "delete from realtime.messages;")
+    check('T13 expiry from the last point: point 31 min old -> expired, point wiped', upd(db, 'P1', J1, s6) == EXPIRED and state(db, J1) == (0, 0))
+    check('T13 expiry signals the Customer only (refetch)', q(db, 'owner', "select string_agg(topic, ',') from realtime.messages where event = 'job_changed';")[0] == f'jobs:user:{C1}')
+    check('T13 Customer view after expiry -> waiting', view(db, 'C1', J1) == {'ok': True, 'available': False, 'reason': 'waiting'}, view(db, 'C1', J1))
+    reset(db)
+    s7, _ = live(db)
+    backdate(db, start_min=30, point_min=29)
+    check('T14 idle 29 min (under the limit) -> ok, not expired', upd(db, 'P1', J1, s7).get('ok') is True and state(db, J1) == (1, 1))
+    # T15 parallel writes on an expired session: all refused, no deadlock, nothing left
+    backdate(db, start_min=90, point_min=45)
+    outs = []
+
+    def w1():
+        o, r = q(db, 'P1', f"select public.pro_update_live_location('{J1}', '{s7}'::uuid, {PT[0]}, {PT[1]}, now());", stop=False)
+        outs.append((o, r.stderr))
+    th = [threading.Thread(target=w1) for _ in range(8)]
+    [t.start() for t in th]
+    [t.join() for t in th]
+    check('T15 8 parallel writes on an expired session -> all session_stopped, no ERROR / deadlock, nothing left',
+          len(outs) == 8 and all('session_stopped' in o and 'ERROR' not in e for o, e in outs) and state(db, J1) == (0, 0),
+          [e[-120:] for o, e in outs if 'ERROR' in e][:2])
+    # T15b deterministic version: two writers reach the expiry together (held behind an uncommitted marker)
+    reset(db)
+    s8, _ = live(db)
+    backdate(db, start_min=90, point_min=45)
+    x = subprocess.Popen(b.PSQL + ['-d', db, '-v', 'ON_ERROR_STOP=1'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    x.stdin.write(b.OWNER + f"begin;\ninsert into public.job_live_session_stops (job_id, pro_id) values ('{J1}', '{P1}');\nselect pg_sleep(2);\nrollback;\n")
+    x.stdin.close()
+    time.sleep(0.4)
+    outs2 = []
+
+    def w2():
+        o, r = q(db, 'P1', f"select public.pro_update_live_location('{J1}', '{s8}'::uuid, {PT[0]}, {PT[1]}, now());", stop=False)
+        outs2.append((o, r.stderr))
+    th = [threading.Thread(target=w2) for _ in range(2)]
+    for t in th:
+        t.start()
+        time.sleep(0.2)
+    [t.join() for t in th]
+    x.wait(timeout=30)
+    check('T15b two writers expiring together -> both session_stopped, no 40P01 (writer locks the session row FOR UPDATE)',
+          len(outs2) == 2 and all('session_stopped' in o and 'ERROR' not in e for o, e in outs2) and state(db, J1) == (0, 0),
+          [(o[:60], e[-100:]) for o, e in outs2])
+    # T16 R8-style: sign-out vs Arrived after a resume still never deadlocks (lock order unchanged)
+    reset(db)
+    stop(db, 'P1', J1)
+    r6 = resume(db, 'P1', J1)
+    upd(db, 'P1', J1, r6['session_id'])
+    p = subprocess.Popen(b.PSQL + ['-d', db, '-v', 'ON_ERROR_STOP=1'], stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    p.stdin.write('begin;\n' + b.as_actor('P1') + f"update public.jobs set status = 'arrived' where id = '{J1}';\nselect pg_sleep(1);\ncommit;\n")
+    p.stdin.close()
+    time.sleep(0.3)
+    so = stop(db, 'P1', None)
+    p.wait(timeout=30)
+    check('T16 after resume: sign-out vs Arrived -> both succeed, no 40P01, nothing left', so.get('ok') is True and p.returncode == 0
+          and '40P01' not in p.stderr.read() and state(db, J1) == (0, 0), so)
+    reset(db)
+
+
 def g_coverage(db):
     print('\n## B. Server-side wipe on status / assignment changes (0032 trigger) + session end (0037 trigger)')
     cases = [
@@ -549,7 +723,7 @@ def g_races(db):
 def g_catalog(db):
     print('\n## E. Catalog, grants, direct access')
     for who in ('anon', 'service_role'):
-        for sql in (f"select public.pro_start_live_location('{J1}');", f"select public.pro_stop_live_location('{J1}');",
+        for sql in (f"select public.pro_start_live_location('{J1}');", f"select public.pro_resume_live_location('{J1}');", f"select public.pro_stop_live_location('{J1}');",
                     f"select public.pro_update_live_location('{J1}', gen_random_uuid(), 1, 1, now());"):
             out, r = q(db, who, sql, stop=False)
             check(f'{who} cannot EXECUTE {sql.split("(")[0][7:]}', 'permission denied' in r.stderr, r.stderr[-120:])
@@ -561,9 +735,9 @@ def g_catalog(db):
     out, r = q(db, 'P1', f"select set_config('haven.live_session_id', 'x', true);\ninsert into public.job_live_locations values ('{J1}', '{P1}', 1, 1, now(), null);", stop=False)
     check('P1 cannot write job_live_locations directly even with the GUC set', 'permission denied' in r.stderr)
     out = must(db, "select string_agg(p.proname || ':' || p.prosecdef || ':' || array_to_string(p.proconfig, ';'), ' ' order by p.proname) from pg_proc p "
-                   "where p.proname in ('pro_start_live_location','pro_stop_live_location','job_live_locations_require_session','jobs_end_live_session') "
+                   "where p.proname in ('pro_start_live_location','pro_resume_live_location','pro_stop_live_location','job_live_locations_require_session','jobs_end_live_session') "
                    "or p.oid = 'public.pro_update_live_location(uuid,uuid,double precision,double precision,timestamptz)'::regprocedure;").strip()
-    check('all 5 functions SECURITY DEFINER with pinned search_path', out.count(':true:search_path=pg_catalog, public, pg_temp') == 5, out)
+    check('all 6 functions SECURITY DEFINER with pinned search_path', out.count(':true:search_path=pg_catalog, public, pg_temp') == 6, out)
     out = must(db, "select relrowsecurity::text || (select count(*) from pg_policies where tablename = 'job_live_sessions')::text from pg_class where oid = 'public.job_live_sessions'::regclass;").strip()
     check('job_live_sessions RLS on, 0 policies', out == 'true0', out)
     out = must(db, "select count(*) from pg_attribute where attrelid = 'public.job_live_sessions'::regclass and attname ~ 'lat|lng|point|loc';").strip()
@@ -586,6 +760,7 @@ def g_guards_rerun(prefix):
     r = psql(db, f'set role {O};\n' + open(R37).read())
     check('rollback runs', r.returncode == 0, r.stderr[-200:])
     out = must(db, "select to_regclass('public.job_live_sessions') is null and to_regprocedure('public.pro_start_live_location(uuid)') is null "
+                   "and to_regprocedure('public.pro_resume_live_location(uuid)') is null "
                    "and to_regprocedure('public.pro_update_live_location(uuid,double precision,double precision,timestamptz)') is not null "
                    "and not exists (select 1 from pg_trigger where tgname in ('jobs_end_live_session','job_live_locations_require_session'));").strip()
     check('rollback removed only 0037 objects', out == 't')
@@ -686,6 +861,7 @@ def main():
         build(main_db)
         g_api(main_db)
         g_stopfinal(main_db)
+        g_t675(main_db)
         g_coverage(main_db)
         g_signal(main_db)
         g_races(main_db)

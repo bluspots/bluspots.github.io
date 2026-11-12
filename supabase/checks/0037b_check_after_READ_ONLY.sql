@@ -8,6 +8,7 @@ fns as (
          p.prorettype = 'jsonb'::regtype as is_rpc, pg_get_userbyid(p.proowner) as owner
     from pg_proc p
    where p.oid in (to_regprocedure('public.pro_start_live_location(uuid)'), to_regprocedure('public.pro_stop_live_location(uuid)'),
+                   to_regprocedure('public.pro_resume_live_location(uuid)'),
                    to_regprocedure('public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz)'),
                    to_regprocedure('public.job_live_locations_require_session()'), to_regprocedure('public.jobs_end_live_session()'))
 ),
@@ -23,11 +24,11 @@ hard(n, label, ok, detail) as (
   values
   ('001', '0037 function bodies (md5, CR-insensitive)',
          (select string_agg(sig || '=' || m, ' ' order by sig collate "C") from fns)
-           is not distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=09bd8cfc7b46d23178e9de798bd4c8fe pro_start_live_location(uuid)=9c01f0af764fa06fa4ec37b532de2439 pro_stop_live_location(uuid)=23d3bb76ec6483cae0ff7f685c7ece73 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2',
+           is not distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=09bd8cfc7b46d23178e9de798bd4c8fe pro_resume_live_location(uuid)=a7ec633349d8a4cdcb2703d93884ade4 pro_start_live_location(uuid)=9c01f0af764fa06fa4ec37b532de2439 pro_stop_live_location(uuid)=23d3bb76ec6483cae0ff7f685c7ece73 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=3effd2b1d0394cf4ba3064781b363900',
          coalesce((select string_agg(sig || '=' || m, ' ' order by sig collate "C") from fns), 'missing')),
   ('002', 'all SECURITY DEFINER, search_path = pg_catalog, public, pg_temp',
-         (select count(*) = 5 and bool_and(prosecdef and proconfig = array['search_path=pg_catalog, public, pg_temp']) from fns), ''),
-  ('003', 'EXECUTE: start/stop/update to authenticated only; trigger functions to no client role',
+         (select count(*) = 6 and bool_and(prosecdef and proconfig = array['search_path=pg_catalog, public, pg_temp']) from fns), ''),
+  ('003', 'EXECUTE: start/resume/stop/update to authenticated only; trigger functions to no client role',
          (select bool_and(not has_function_privilege('public', oid, 'execute')) and bool_and(not has_function_privilege('anon', oid, 'execute'))
                  and bool_and(not has_function_privilege('service_role', oid, 'execute'))
                  and bool_and(has_function_privilege('authenticated', oid, 'execute') = is_rpc) from fns), ''),
@@ -59,7 +60,7 @@ hard(n, label, ok, detail) as (
               else (xpath('/row/c/text()', query_to_xml('select count(*) as c from public.job_live_locations l where not exists (select 1 from public.job_live_sessions s where s.job_id = l.job_id and s.pro_id = l.pro_id)', false, true, '')))[1]::text = '0' end, ''),
   ('010', 'old 4-argument writer still exists (refused by the guard, not 404)',
          to_regprocedure('public.pro_update_live_location(uuid, double precision, double precision, timestamptz)') is not null, ''),
-  ('011', 'job_live_session_stops (stop is final per en_route leg) owner-only, exact columns',
+  ('011', 'job_live_session_stops (stop marker: automatic start refused until an explicit resume) owner-only, exact columns',
          coalesce((select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull, ',' order by a.attnum)
                      from pg_attribute a where a.attrelid = to_regclass('public.job_live_session_stops') and a.attnum > 0 and not a.attisdropped)
                   = 'job_id:uuid:true,pro_id:uuid:true,stopped_at:timestamp with time zone:true'

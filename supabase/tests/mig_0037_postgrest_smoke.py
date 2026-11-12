@@ -59,7 +59,7 @@ def run_checks():
     s, b = call('POST', '/rpc/pro_stop_live_location', 'C1', {'p_job_id': J1})
     check('Customer stop -> not_found', s == 200 and b == {'ok': False, 'error': 'not_found'}, [s, b])
     for who in (None, 'service_role'):
-        for fn in ('pro_start_live_location', 'pro_stop_live_location'):
+        for fn in ('pro_start_live_location', 'pro_resume_live_location', 'pro_stop_live_location'):
             s, b = call('POST', f'/rpc/{fn}', who, {'p_job_id': J1})
             check(f'{who or "anon"} /rpc/{fn} -> refused', s in (401, 403), [s])
     for who in ('P1', None, 'service_role'):
@@ -71,6 +71,26 @@ def run_checks():
     s, b = call('POST', '/rpc/pro_start_live_location', 'P1', {'p_job_id': J1})
     check('start after the stop on the same drive (relaunch / sign-in) -> 200 session_stopped, nothing created',
           s == 200 and b == {'ok': False, 'error': 'session_stopped'} and counts() == '0,0', [s, b])
+    # t675u: explicit resume tap, account switch, expiry
+    s, b = call('POST', '/rpc/pro_resume_live_location', 'P1', {'p_job_id': J1})
+    sid3 = (b or {}).get('session_id')
+    check('resume tap: POST /rpc/pro_resume_live_location -> 200 {ok, session_id (new), started_at}',
+          s == 200 and b.get('ok') is True and sid3 and sid3 != sid and 'started_at' in b, [s, sorted(b or {})])
+    s, b = call('POST', '/rpc/pro_update_live_location', 'P1', {'p_job_id': J1, 'p_session_id': sid, 'p_lat': LAT, 'p_lng': LNG})
+    check('after resume the old (stopped) id stays dead -> 200 session_stopped', s == 200 and b == {'ok': False, 'error': 'session_stopped'}, [s, b])
+    s, b = call('POST', '/rpc/pro_update_live_location', 'P1', {'p_job_id': J1, 'p_session_id': sid3, 'p_lat': LAT, 'p_lng': LNG})
+    check('the resumed id writes -> 200 ok', s == 200 and b.get('ok') is True and counts() == '1,1', [s, b, counts()])
+    s, b = call('POST', '/rpc/pro_update_live_location', 'P2', {'p_job_id': J1, 'p_session_id': sid3, 'p_lat': LAT, 'p_lng': LNG})
+    check("account switch: P2 with P1's session id -> 200 not_found", s == 200 and b == {'ok': False, 'error': 'not_found'}, [s, b])
+    s, b = call('POST', '/rpc/pro_resume_live_location', 'P2', {'p_job_id': J1})
+    check("P2 resume on P1's job -> 200 not_found", s == 200 and b == {'ok': False, 'error': 'not_found'}, [s, b])
+    owner_sql(f"begin; set local session_replication_role = replica; update public.job_live_sessions set started_at = now() - interval '2 hours'; "
+              f"update public.job_live_locations set received_at = now() - interval '31 minutes'; commit;")
+    s, b = call('POST', '/rpc/pro_update_live_location', 'P1', {'p_job_id': J1, 'p_session_id': sid3, 'p_lat': LAT, 'p_lng': LNG})
+    check('expiry: no accepted write for 31 min -> 200 {ok:false, error:session_stopped, reason:expired}, wiped',
+          s == 200 and b == {'ok': False, 'error': 'session_stopped', 'reason': 'expired'} and counts() == '0,0', [s, b, counts()])
+    s, b = call('POST', '/rpc/pro_start_live_location', 'P1', {'p_job_id': J1})
+    check('after expiry the automatic start -> 200 session_stopped (only Resume reopens)', s == 200 and b == {'ok': False, 'error': 'session_stopped'}, [s, b])
     owner_sql(f"update public.jobs set status = 'posted', pro_id = null, accepted_at = null where id = '{J1}';")
     s, b = call('POST', '/rpc/pro_claim_job', 'P1', {'job_id': J1})
     check('released, then Driving to Job again (POST /rpc/pro_claim_job) -> 200', s == 200, [s])
