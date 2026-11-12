@@ -8,7 +8,7 @@
 --   02 trigger jobs_discard_live_location (0032) present, enabled, runs jobs_discard_live_location()
 --   03 public.job_live_locations = the 0032 table (columns, RLS on, no policies)
 --   04 the SQL editor role (postgres) bypasses RLS, has TRIGGER on jobs + job_live_locations, CREATE on public
---   05 0037 objects ALL absent (first paste) or ALL exact (already applied)
+--   05 0037 objects ALL absent (first paste) or ALL exact (already applied), incl. job_live_session_stops (t674)
 -- INFO rows (never block): 90 live points stored now (a first paste deletes every one of them: none has a
 --   session yet), 91 sessions, 92 triggers on jobs, 93 realtime.send present (the stop's Customer signal), 94 0036 present.
 with
@@ -38,7 +38,12 @@ s37 as (
          (select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull, ',' order by a.attnum)
             from pg_attribute a where a.attrelid = to_regclass('public.job_live_sessions') and a.attnum > 0 and not a.attisdropped)
            = 'job_id:uuid:true,pro_id:uuid:true,session_id:uuid:true,started_at:timestamp with time zone:true'
-         and not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'job_live_sessions') as exact
+         and not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'job_live_sessions') as exact,
+         to_regclass('public.job_live_session_stops') is not null as k_present,
+         coalesce((select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull, ',' order by a.attnum)
+            from pg_attribute a where a.attrelid = to_regclass('public.job_live_session_stops') and a.attnum > 0 and not a.attisdropped)
+           = 'job_id:uuid:true,pro_id:uuid:true,stopped_at:timestamp with time zone:true', false)
+         and not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'job_live_session_stops') as k_exact
 ),
 hard(n, label, ok, detail) as (
   values
@@ -61,10 +66,11 @@ hard(n, label, ok, detail) as (
                   and has_schema_privilege(current_user, 'public', 'create'), false),
          'current_user=' || current_user),
   ('05', '0037 objects all absent or all exact',
-         (select (f37.n = 0 and t37.n = 0 and not s37.present)
-              or (s37.exact and t37.n = 2 and t37.ok = 2 and f37.v = 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=38c673cf65f1d25fee0e57fbc390a8fe pro_start_live_location(uuid)=472f5c3d071b5426db4760594864cb47 pro_stop_live_location(uuid)=a7aa831b7c59e08cf795d40c16c076f9 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2')
+         (select (f37.n = 0 and t37.n = 0 and not s37.present and not s37.k_present)
+              or (s37.exact and s37.k_exact and t37.n = 2 and t37.ok = 2 and f37.v = 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=09bd8cfc7b46d23178e9de798bd4c8fe pro_start_live_location(uuid)=9c01f0af764fa06fa4ec37b532de2439 pro_stop_live_location(uuid)=23d3bb76ec6483cae0ff7f685c7ece73 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2')
             from f37, t37, s37),
          (select 'functions=' || f37.n || '/5 triggers=' || t37.n || '/2 table=' || case when s37.exact then 'exact' when s37.present then 'DIFFERENT' else 'absent' end
+            || ' stops_table=' || case when s37.k_exact then 'exact' when s37.k_present then 'DIFFERENT' else 'absent' end
             || coalesce(' bodies: ' || f37.v, '') from f37, t37, s37))
 ),
 info(n, label, detail) as (

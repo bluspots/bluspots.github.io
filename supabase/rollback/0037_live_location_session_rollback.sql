@@ -12,4 +12,5 @@ drop function if exists public.pro_start_live_location(uuid);
 drop function if exists public.pro_stop_live_location(uuid);
 drop function if exists public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz);
 drop table if exists public.job_live_sessions;
+drop table if exists public.job_live_session_stops;
 commit;

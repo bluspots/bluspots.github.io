@@ -114,6 +114,7 @@ def state(db, job):
 def reset(db):
     must(db, b.OWNER + "begin;\nset local session_replication_role = replica;\n"
                        f"delete from public.job_live_sessions; delete from public.job_live_locations;\n"
+                       "do $x$ begin if to_regclass('public.job_live_session_stops') is not null then delete from public.job_live_session_stops; end if; end $x$;\n"
                        f"update public.jobs set status = 'en_route', pro_id = '{P1}', customer_id = '{C1}' where id = '{J1}';\ncommit;\n")
 
 
@@ -121,6 +122,17 @@ def age_point(db, job):
     must(db, f"alter table public.job_live_locations disable trigger job_live_locations_require_session;\n"
              f"update public.job_live_locations set received_at = now() - interval '10 seconds' where job_id = '{job}';\n"
              f"alter table public.job_live_locations enable trigger job_live_locations_require_session;\n")
+
+
+def new_leg(db, job=J1):
+    """Test shortcut for 'a new Driving to Job' on the same job: clear the 0037 stop marker.
+    (In the app this happens only when the job leaves en_route or changes Pro; group S tests that path.)"""
+    must(db, b.OWNER + f"delete from public.job_live_session_stops where job_id = '{job}';")
+
+
+def marker(db, job=J1):
+    out, _ = q(db, 'owner', f"select coalesce((select pro_id::text from public.job_live_session_stops where job_id = '{job}'), '-');")
+    return out
 
 
 def live(db, job=J1, who='P1'):
@@ -182,16 +194,21 @@ def g_api(db):
         check(f'{who} stop on J1 -> not_found', stop(db, who, J1) == {'ok': False, 'error': 'not_found'})
     check('stop on missing job -> not_found', stop(db, 'P1', 'e0370000-0000-4000-8000-000000000000') == {'ok': False, 'error': 'not_found'})
     check('nosub stop -> not_authenticated', stop(db, 'nosub', J1) == {'ok': False, 'error': 'not_authenticated'})
+    new_leg(db)
     sid, _ = live(db)
     check('P3 stop(null) touches nothing of P1', stop(db, 'P3', None) == {'ok': True, 'stopped': False} and state(db, J1) == (1, 1))
     check('C1 stop on J1 leaves the point', state(db, J1) == (1, 1) and stop(db, 'C1', J1).get('error') == 'not_found' and state(db, J1) == (1, 1))
     check('P1 stop(null) (sign-out) -> stopped:true, wiped', stop(db, 'P1', None) == {'ok': True, 'stopped': True} and state(db, J1) == (0, 0))
-    # resume / supersede / token refresh
+    # founder rule 2026-11-12: a stop is final for this en_route leg; supersede / token refresh
+    new_leg(db)
     s1, _ = live(db)
     stop(db, 'P1', J1)
+    check('start after a deliberate stop on the same leg -> session_stopped, nothing created',
+          start(db, 'P1', J1) == {'ok': False, 'error': 'session_stopped'} and state(db, J1) == (0, 0))
+    check('old session still refused after the stop', upd(db, 'P1', J1, s1) == {'ok': False, 'error': 'session_stopped'})
+    new_leg(db)
     s2 = start(db, 'P1', J1)['session_id']
-    check('resume = new session id', s2 != s1)
-    check('old session still refused after resume', upd(db, 'P1', J1, s1) == {'ok': False, 'error': 'session_stopped'})
+    check('new leg = new session id', s2 != s1)
     check('new session accepted', upd(db, 'P1', J1, s2).get('ok') is True)
     s3 = start(db, 'P1', J1)['session_id']
     age_point(db, J1)
@@ -221,6 +238,115 @@ def g_api(db):
     check("stop removes only the caller's rows (a foreign-Pro row is left for the 0032 rules)", state(db, J1) == (1, 0))
     reset(db)
     check('stop never needs coordinates; result has no coordinates', all(k in ('ok', 'stopped', 'error') for k in stop(db, 'P1', J1)))
+
+
+def g_stopfinal(db):
+    print('\n## S. Founder rule 2026-11-12: a deliberate stop is final for the en_route leg; blips recover')
+    F1 = 'e0370000-0000-4000-8000-0000000000f1'
+
+    def bgrun(sql):
+        return subprocess.Popen(b.PSQL + ['-d', db, '-v', 'ON_ERROR_STOP=1'], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                stderr=subprocess.PIPE, text=True), sql
+
+    def go(pair):
+        p, sql = pair
+        p.stdin.write(sql); p.stdin.close()
+        return p
+
+    reset(db)
+    s1, _ = live(db)
+    check('S1 stop -> marker for (J1, P1)', stop(db, 'P1', J1) == {'ok': True, 'stopped': True} and marker(db) == P1)
+    check('S1 start after stop (e.g. a relaunch that calls start) -> session_stopped, nothing created',
+          start(db, 'P1', J1) == {'ok': False, 'error': 'session_stopped'} and state(db, J1) == (0, 0))
+    cl = {'sub': P1, 'role': 'authenticated', 'iat': int(time.time()) + 120, 'exp': int(time.time()) + 3600, 'session_id': 'fresh-sign-in'}
+    r = psql(db, f"begin;\nset local role authenticated;\nselect set_config('request.jwt.claims', $c${json.dumps(cl)}$c$, true) \\g /dev/null\n"
+                 f"select set_config('request.jwt.claim.sub', '{P1}', true) \\g /dev/null\n"
+                 f"select public.pro_start_live_location('{J1}');\ncommit;\n")
+    check('S2 sign-in again / token refresh (new iat) + start -> session_stopped', '"session_stopped"' in r.stdout and state(db, J1) == (0, 0), r.stdout[-120:])
+    check('S3 reopen with the stored pre-stop session id -> session_stopped, no point',
+          upd(db, 'P1', J1, s1) == {'ok': False, 'error': 'session_stopped'} and state(db, J1) == (0, 0))
+    check('S3 repeated stops keep the marker (idempotent)', stop(db, 'P1', J1) == {'ok': True, 'stopped': False} and marker(db) == P1)
+    # blips / app kill without stop: the same session keeps working
+    reset(db)
+    sid, u = live(db)
+    age_point(db, J1)
+    u2 = upd(db, 'P1', J1, sid)
+    check('S4 blip: a later write with the same session (new connection) -> ok, same session', u.get('ok') is True and u2.get('ok') is True and state(db, J1) == (1, 1))
+    age_point(db, J1)
+    check('S4 app killed (no stop) then relaunched with the stored session id -> ok', upd(db, 'P1', J1, sid).get('ok') is True and marker(db) == '-')
+    s5 = start(db, 'P1', J1).get('session_id')
+    age_point(db, J1)
+    check('S4 relaunch without a stored id but no stop: start -> new session; the old id is refused (one writer)',
+          s5 and s5 != sid and upd(db, 'P1', J1, sid) == {'ok': False, 'error': 'session_stopped'} and upd(db, 'P1', J1, s5).get('ok') is True)
+    # sign-out marks the caller's en_route job even if sharing was never started on it
+    reset(db)
+    check('S5 sign-out stop(null) with no session yet -> ok, stopped:false', stop(db, 'P1', None) == {'ok': True, 'stopped': False})
+    check('S5 sign-out still marks the en_route job (never started)', marker(db, J1) == P1)
+    check('S5 after sign-in again: start -> session_stopped', start(db, 'P1', J1).get('error') == 'session_stopped' and state(db, J1) == (0, 0))
+    must(db, b.OWNER + "begin;\n" + b.job_insert(F1, C2, P3, 'en_route') + "commit;\n")
+    live(db, F1, 'P3')
+    stop(db, 'P3', F1)
+    m1 = marker(db, F1)
+    q(db, 'owner', f"delete from public.jobs where id = '{F1}';")
+    check('S13 job DELETE cascades the marker', m1 == P3 and marker(db, F1) == '-')
+    # a new Driving to Job (release + claim again) clears the marker
+    q(db, 'owner', f"update public.jobs set status = 'posted', pro_id = null, accepted_at = null where id = '{J1}';")
+    check('S6 release (leaves en_route) clears the marker', marker(db) == '-')
+    out, r = q(db, 'P1', f"select count(*) from public.pro_claim_job('{J1}');", stop=False)
+    s6 = start(db, 'P1', J1)
+    check('S6 claim again (Driving to Job) -> start ok, new session', r.returncode == 0 and s6.get('ok') is True, (r.stderr[-160:], s6))
+    # Pro change while en_route clears the old Pro's marker; the new Pro can start
+    reset(db)
+    live(db)
+    stop(db, 'P1', J1)
+    q(db, 'owner', f"update public.jobs set pro_id = '{P2}' where id = '{J1}';")
+    check('S7 reassignment P1 -> P2 clears the marker; P2 start ok', marker(db) == '-' and start(db, 'P2', J1).get('ok') is True)
+    reset(db)
+    live(db)
+    stop(db, 'P1', J1)
+    out, r = q(db, 'P1', f"update public.jobs set status = 'arrived' where id = '{J1}';\nselect 'done';", stop=False)
+    check('S14 Arrived (leaves en_route) clears the marker', out == 'done' and marker(db) == '-', r.stderr[-160:])
+    # stop off en_route never leaves a marker
+    reset(db)
+    must(db, b.OWNER + f"begin; set local session_replication_role = replica; update public.jobs set status = 'arrived' where id = '{J1}'; commit;")
+    check('S8 stop on own arrived job -> ok, no marker', stop(db, 'P1', J1).get('ok') is True and marker(db) == '-')
+    reset(db)
+    live(db)
+    check('S9 other parties cannot stop (or mark) J1',
+          all(stop(db, w, J1) == {'ok': False, 'error': 'not_found'} for w in ('C1', 'P2', 'C2')) and marker(db) == '-' and state(db, J1) == (1, 1))
+    for w in ('P1', 'C1'):
+        _, r = q(db, w, 'select count(*) from public.job_live_session_stops;', stop=False)
+        check(f'S10 {w} cannot read job_live_session_stops (permission denied)', 'permission denied' in r.stderr, r.stderr[-120:])
+    # races: start and stop serialise on the jobs row
+    reset(db)
+    live(db)
+    p = go(bgrun('begin;\n' + b.as_actor('P1') + f"select public.pro_stop_live_location('{J1}');\nselect pg_sleep(2);\ncommit;\n"))
+    time.sleep(0.6)
+    t0 = time.time()
+    st = start(db, 'P1', J1)
+    dt = time.time() - t0
+    p.wait(timeout=20)
+    check('S11 start in flight during a stop waits, then is refused (LOW-3 closed)', dt > 1.0 and st == {'ok': False, 'error': 'session_stopped'}
+          and state(db, J1) == (0, 0) and marker(db) == P1, (f'{dt:.1f}s', st))
+    reset(db)
+    p = go(bgrun('begin;\n' + b.as_actor('P1') + f"select public.pro_start_live_location('{J1}');\nselect pg_sleep(2);\ncommit;\n"))
+    time.sleep(0.6)
+    t0 = time.time()
+    st = stop(db, 'P1', J1)
+    dt = time.time() - t0
+    p.wait(timeout=20); po = p.stdout.read()
+    check('S12 stop during an uncommitted start waits, then removes that session (no session survives)',
+          dt > 1.0 and '"ok": true' in po and st == {'ok': True, 'stopped': True} and state(db, J1) == (0, 0) and marker(db) == P1, (f'{dt:.1f}s', st))
+    reset(db)
+    p = go(bgrun('begin;\n' + b.as_actor('P1') + f"select public.pro_start_live_location('{J1}');\nselect pg_sleep(2);\ncommit;\n"))
+    time.sleep(0.6)
+    t0 = time.time()
+    st = stop(db, 'P1', None)
+    dt = time.time() - t0
+    p.wait(timeout=20)
+    check('S15 sign-out during an uncommitted first start waits, then removes that session',
+          dt > 1.0 and st.get('ok') is True and state(db, J1) == (0, 0) and marker(db) == P1, (f'{dt:.1f}s', st, state(db, J1)))
+    reset(db)
 
 
 def g_coverage(db):
@@ -516,8 +642,8 @@ def g_checks(prefix):
     rc, rows = run(CHK_A)
     check('0037a after apply: READY: already applied (5 of 5)', rc == 0 and rows[0][1] == 'READY: already applied (5 of 5)', rows[:1])
     rc, rows = run(CHK_B)
-    check('0037b after apply: LIVE (10 of 10)', rc == 0 and rows[0][1] == 'LIVE (10 of 10)', rows)
-    check('0037b CRLF copy reads the same', psql(db, f'set role {O};\n' + b.crlf(open(CHK_B).read())).stdout.splitlines()[0].split('|')[1] == 'LIVE (10 of 10)')
+    check('0037b after apply: LIVE (11 of 11)', rc == 0 and rows[0][1] == 'LIVE (11 of 11)', rows)
+    check('0037b CRLF copy reads the same', psql(db, f'set role {O};\n' + b.crlf(open(CHK_B).read())).stdout.splitlines()[0].split('|')[1] == 'LIVE (11 of 11)')
     must(db, 'alter table public.job_live_locations disable trigger job_live_locations_require_session;')
     rc, rows = run(CHK_B)
     check('0037b catches a disabled guard', rows[0][1].startswith('NOT LIVE'), rows[0])
@@ -559,6 +685,7 @@ def main():
     try:
         build(main_db)
         g_api(main_db)
+        g_stopfinal(main_db)
         g_coverage(main_db)
         g_signal(main_db)
         g_races(main_db)

@@ -65,9 +65,20 @@ def run_checks():
     for who in ('P1', None, 'service_role'):
         s, b = call('GET', '/job_live_sessions?select=*', who)
         check(f'{who or "anon"} GET /job_live_sessions -> refused', s in (401, 403, 404), [s])
+    for who in ('P1', 'C1', None):
+        s, b = call('GET', '/job_live_session_stops?select=*', who)
+        check(f'{who or "anon"} GET /job_live_session_stops -> refused', s in (401, 403, 404), [s])
+    s, b = call('POST', '/rpc/pro_start_live_location', 'P1', {'p_job_id': J1})
+    check('start after the stop on the same drive (relaunch / sign-in) -> 200 session_stopped, nothing created',
+          s == 200 and b == {'ok': False, 'error': 'session_stopped'} and counts() == '0,0', [s, b])
+    owner_sql(f"update public.jobs set status = 'posted', pro_id = null, accepted_at = null where id = '{J1}';")
+    s, b = call('POST', '/rpc/pro_claim_job', 'P1', {'job_id': J1})
+    check('released, then Driving to Job again (POST /rpc/pro_claim_job) -> 200', s == 200, [s])
     s, b = call('POST', '/rpc/pro_start_live_location', 'P1', {'p_job_id': J1})
     sid2 = (b or {}).get('session_id')
-    call('POST', '/rpc/pro_update_live_location', 'P1', {'p_job_id': J1, 'p_session_id': sid2, 'p_lat': LAT, 'p_lng': LNG})
+    check('new drive: start -> 200 ok, new session', s == 200 and b.get('ok') is True and sid2 and sid2 != sid, [s, sorted(b or {})])
+    s, b = call('POST', '/rpc/pro_update_live_location', 'P1', {'p_job_id': J1, 'p_session_id': sid2, 'p_lat': LAT, 'p_lng': LNG})
+    check('new drive: update -> 200 ok (point + session exist)', s == 200 and b.get('ok') is True and counts() == '1,1', [s, b, counts()])
     s, b = call('PATCH', f'/jobs?id=eq.{J1}', 'P1', {'status': 'arrived'})
     check('P1 PATCH status=arrived -> 2xx; point + session wiped by triggers', s in (200, 204) and counts() == '0,0', [s, counts()])
 
