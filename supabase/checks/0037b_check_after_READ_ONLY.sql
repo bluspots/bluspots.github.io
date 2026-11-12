@@ -23,7 +23,7 @@ hard(n, label, ok, detail) as (
   values
   ('001', '0037 function bodies (md5, CR-insensitive)',
          (select string_agg(sig || '=' || m, ' ' order by sig collate "C") from fns)
-           is not distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=38c673cf65f1d25fee0e57fbc390a8fe pro_start_live_location(uuid)=472f5c3d071b5426db4760594864cb47 pro_stop_live_location(uuid)=e390865f9b2dfcae77ca1ee822719a05 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2',
+           is not distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=38c673cf65f1d25fee0e57fbc390a8fe pro_start_live_location(uuid)=472f5c3d071b5426db4760594864cb47 pro_stop_live_location(uuid)=a7aa831b7c59e08cf795d40c16c076f9 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2',
          coalesce((select string_agg(sig || '=' || m, ' ' order by sig collate "C") from fns), 'missing')),
   ('002', 'all SECURITY DEFINER, search_path = pg_catalog, public, pg_temp',
          (select count(*) = 5 and bool_and(prosecdef and proconfig = array['search_path=pg_catalog, public, pg_temp']) from fns), ''),

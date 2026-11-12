@@ -35,7 +35,8 @@ the Customer's existing `get_job_live_location`.
    "Share location" action, which calls `start`.
 2. **Every update** carries `p_session_id`. Never call the old 4-argument shape (see §4).
 3. **Sign-out:** stop the native watcher and pending sends, then call `pro_stop_live_location({})`, and
-   **only then** call `signOut()`. Allow about 3 s for the stop. If it fails or times out, sign out anyway.
+   **only then** call `signOut()`. Allow about 3 s for the stop. If it fails (network error, HTTP 5xx,
+   or a transient `40P01`/`40001`), **retry the stop once**; if the retry also fails or times out, sign out anyway.
    A failed stop never blocks sign-out; the 5-minute `paused` rule is the backstop.
 4. **Location permission revoked** (or "Stop sharing" tapped): stop the watcher, then call
    `pro_stop_live_location({p_job_id})`. If the app is offline or suspended, call it as soon as the app

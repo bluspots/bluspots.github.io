@@ -62,7 +62,7 @@ hard(n, label, ok, detail) as (
          'current_user=' || current_user),
   ('05', '0037 objects all absent or all exact',
          (select (f37.n = 0 and t37.n = 0 and not s37.present)
-              or (s37.exact and t37.n = 2 and t37.ok = 2 and f37.v = 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=38c673cf65f1d25fee0e57fbc390a8fe pro_start_live_location(uuid)=472f5c3d071b5426db4760594864cb47 pro_stop_live_location(uuid)=e390865f9b2dfcae77ca1ee822719a05 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2')
+              or (s37.exact and t37.n = 2 and t37.ok = 2 and f37.v = 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=38c673cf65f1d25fee0e57fbc390a8fe pro_start_live_location(uuid)=472f5c3d071b5426db4760594864cb47 pro_stop_live_location(uuid)=a7aa831b7c59e08cf795d40c16c076f9 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2')
             from f37, t37, s37),
          (select 'functions=' || f37.n || '/5 triggers=' || t37.n || '/2 table=' || case when s37.exact then 'exact' when s37.present then 'DIFFERENT' else 'absent' end
             || coalesce(' bodies: ' || f37.v, '') from f37, t37, s37))

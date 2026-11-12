@@ -32,10 +32,14 @@
 -- fingerprint stays valid). After 0037 the old 4-argument writer is refused by the guard with
 -- SQLSTATE P0001, message 'session_required' (PostgREST HTTP 400).
 --
--- Races (lock order is always jobs -> job_live_sessions -> job_live_locations, as in 0032):
+-- Races. Every path locks the jobs row first; that row lock serialises everything after it:
 --   writer : jobs FOR SHARE, session row FOR SHARE, upsert point (guard re-checks the session).
---   stop   : jobs FOR SHARE, DELETE session row (waits for any writer holding it), DELETE point.
---   start  : jobs FOR SHARE, upsert session row.  jobs UPDATE: row lock, then both AFTER triggers.
+--   stop(job)  : jobs FOR SHARE, DELETE session row (waits for any writer holding it), DELETE point.
+--   stop(null) : the caller's jobs FOR SHARE in id order, then the same deletes (sign-out; Quagon LOW-1).
+--   start  : jobs FOR SHARE, upsert session row.
+--   jobs UPDATE: row lock (conflicts with FOR SHARE), then AFTER triggers delete point, then session.
+--   So writer/stop take session -> point and the triggers point -> session, but never concurrently
+--   on the same job, because both hold or wait for that job's row lock first.
 --   A writer that read the session before the stop finishes first and its point is then deleted; a
 --   writer that arrives after the stop finds no session (session_stopped). Token refresh, sign-in or
 --   app restart never revive a session: only pro_start_live_location does.
@@ -95,7 +99,7 @@ begin
                    to_regprocedure('public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz)'),
                    to_regprocedure('public.job_live_locations_require_session()'),
                    to_regprocedure('public.jobs_end_live_session()'));
-  if v is not null and v is distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=38c673cf65f1d25fee0e57fbc390a8fe pro_start_live_location(uuid)=472f5c3d071b5426db4760594864cb47 pro_stop_live_location(uuid)=e390865f9b2dfcae77ca1ee822719a05 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2' then
+  if v is not null and v is distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=38c673cf65f1d25fee0e57fbc390a8fe pro_start_live_location(uuid)=472f5c3d071b5426db4760594864cb47 pro_stop_live_location(uuid)=a7aa831b7c59e08cf795d40c16c076f9 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2' then
     raise exception '0037: 0037 functions already exist with other bodies (%). Send this to Codey. Nothing was changed.', v;
   end if;
   if exists (select 1 from pg_trigger t where t.tgname = 'jobs_end_live_session' and t.tgrelid = 'public.jobs'::regclass
@@ -256,6 +260,15 @@ begin
     if not found or v_pro is distinct from v_uid then
       return jsonb_build_object('ok', false, 'error', 'not_found');
     end if;
+  else
+    -- sign-out: lock the caller's jobs first (by id), so this path also takes jobs -> sessions -> points
+    -- and cannot deadlock with a job update whose triggers delete point then session.
+    perform 1 from public.jobs j
+     where j.id in (select s.job_id from public.job_live_sessions s where s.pro_id = v_uid
+                    union
+                    select l.job_id from public.job_live_locations l where l.pro_id = v_uid)
+     order by j.id
+       for share of j;
   end if;
   -- session first, then point (same order as the writer). Waits for a writer that holds the session.
   with d as (delete from public.job_live_sessions s
@@ -353,7 +366,7 @@ begin
                    to_regprocedure('public.pro_update_live_location(uuid, uuid, double precision, double precision, timestamptz)'),
                    to_regprocedure('public.job_live_locations_require_session()'),
                    to_regprocedure('public.jobs_end_live_session()'));
-  if v is distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=38c673cf65f1d25fee0e57fbc390a8fe pro_start_live_location(uuid)=472f5c3d071b5426db4760594864cb47 pro_stop_live_location(uuid)=e390865f9b2dfcae77ca1ee822719a05 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2' then
+  if v is distinct from 'job_live_locations_require_session()=34bf6259e45ba6b792e0ba5acf2059e6 jobs_end_live_session()=38c673cf65f1d25fee0e57fbc390a8fe pro_start_live_location(uuid)=472f5c3d071b5426db4760594864cb47 pro_stop_live_location(uuid)=a7aa831b7c59e08cf795d40c16c076f9 pro_update_live_location(uuid,uuid,double precision,double precision,timestamp with time zone)=cfe3a4c1d1256fbd33a5b93bf4aaa3e2' then
     raise exception '0037 post-check: function bodies differ (%). Rolled back.', v;
   end if;
   if exists (select 1 from pg_proc p

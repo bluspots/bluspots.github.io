@@ -391,6 +391,25 @@ def g_races(db):
     st = stop(db, 'P1', J1)
     p.communicate(timeout=20)
     check('R6 stop after a concurrent start commits: no session left', st.get('ok') is True and state(db, J1)[1] == 0)
+    # R8 (Quagon LOW-1 / X1c): sign-out stop(null) vs Arrived while the point row is briefly held.
+    # Arrived's triggers delete point then session; without the jobs lock the null stop deletes
+    # session then point -> 40P01. With the fix both paths take the jobs row first.
+    errs = []
+    for i in range(3):
+        reset(db)
+        live(db)
+        h = bg(b.OWNER + f"begin;\nselect 1 from public.job_live_locations where job_id = '{J1}' for update;\nselect pg_sleep(1.0);\ncommit;\n")
+        time.sleep(0.3)
+        a = bg('begin;\n' + b.as_actor('P1') + f"update public.jobs set status = 'arrived' where id = '{J1}';\ncommit;\n")
+        time.sleep(0.3)
+        n = bg('begin;\n' + b.as_actor('P1') + "select public.pro_stop_live_location(null);\ncommit;\n")
+        h.communicate(timeout=30); ao, ae = a.communicate(timeout=30); no, ne = n.communicate(timeout=30)
+        for name, rc, err in (('Arrived', a.returncode, ae), ('null stop', n.returncode, ne)):
+            if rc != 0 or 'deadlock' in err or 'ERROR' in err:
+                errs.append(f'iter{i} {name}: ' + ('40P01 deadlock' if 'deadlock' in err else err.strip()[-120:]))
+        if state(db, J1) != (0, 0):
+            errs.append(f'iter{i} state {state(db, J1)}')
+    check('R8 sign-out stop(null) vs Arrived with point row held: no deadlock, both succeed, no point/session (3 runs)', not errs, ' | '.join(errs))
     # R7: 20 parallel writers with the stopped session after a stop
     reset(db)
     sid, _ = live(db)
