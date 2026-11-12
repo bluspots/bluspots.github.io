@@ -14,20 +14,19 @@
 -- is also one block, one run. Paste as the database owner. Do not apply it
 -- from the app, from CI, or from an agent.
 --
--- PASTE ORDER: 0025 body, 0027, 0026, 0028, 0029, then 0031 (this file).
--- 0031 needs 0029 (section 0 stops with an error, and nothing is applied,
--- if 0029's function or trigger is missing). It is NOT universally safe to
--- re-run; a re-run is:
---   - a no-op in effect ONLY while public.jobs_validate_posting_amounts()
---     already holds the exact body in this file: it re-creates the same
---     function and drops and re-creates the same trigger (new trigger oid,
---     same definition). No column, policy, grant or data change.
---   - refused with an error by section 0, nothing applied (one
---     transaction), when public.jobs_lock_pricing_and_inspection() or its
---     trigger on public.jobs is missing.
---   - NOT guarded otherwise: if another body of
---     jobs_validate_posting_amounts() is installed (an edited or later
---     version), a re-run silently replaces it.
+-- STATUS (refreshed 2026-11-12, t674): DRAFT, NOT APPLIED, do not merge. Paste only
+-- after the founder authorizes it in his own words. This is CoS audit finding F2
+-- (customer-chosen amounts at INSERT); 0029 closes F1 (amounts rewritable after posting).
+--
+-- PASTE ORDER on today's production (0027, 0030, 0032, FCC 0034/0035/0035a and 0036
+-- are already live; 0025 is NOT): 0025 (#91 paste section) -> 0026 (#85) -> 0028 (#89)
+-- -> 0029 (#90 eff1315e, haven-version 0029-v2) -> checks/0031a (READY) -> this file
+-- -> checks/0031b (LIVE). Rollback: supabase/rollback/0031_posting_amounts_validation_rollback.sql.
+-- Contract: supabase/contracts/POSTING_AMOUNTS_CONTRACT.md.
+-- RE-RUN (t674 guards, section 0): a no-op when the installed
+-- public.jobs_validate_posting_amounts() already has this file's body (CR-insensitive md5);
+-- refused, nothing changed, when another body is installed, when 0029-v2 or its trigger
+-- is missing, when a jobs money column is missing, or when not run as the owner.
 --
 -- WHAT IT DOES. A BEFORE INSERT trigger on public.jobs. For non-privileged
 -- callers (current_user anon or authenticated: the apps, PostgREST and
@@ -83,19 +82,45 @@
 
 begin;
 
--- ── 0. Requires 0029 ──────────────────────────────────────────────────────
+-- ── 0. Guards (refuse, change nothing) ────────────────────────────────────
 do $$
+declare v text;
 begin
-  if to_regprocedure('public.jobs_lock_pricing_and_inspection()') is null
-     or not exists (
-       select 1 from pg_trigger
-        where tgrelid = 'public.jobs'::regclass
-          and tgname = 'jobs_lock_pricing_and_inspection'
-          and tgfoid = to_regprocedure('public.jobs_lock_pricing_and_inspection()')::oid
-     ) then
-    raise exception '0031 needs 0029_inspection_fee_lock.sql first (public.jobs_lock_pricing_and_inspection() or its trigger on public.jobs is missing)';
+  if to_regclass('public.jobs') is null then
+    raise exception '0031: public.jobs missing. Nothing was changed.';
   end if;
-end$$;
+  -- 0029-v2 installed and its trigger enabled (0031 relies on 0029 to lock the amounts after posting)
+  if not exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.jobs_lock_pricing_and_inspection()')
+                    and p.prosrc like '%haven-version: 0029-v2 %')
+     or not exists (select 1 from pg_trigger t where t.tgrelid = 'public.jobs'::regclass and not t.tgisinternal
+                       and t.tgname = 'jobs_lock_pricing_and_inspection' and t.tgenabled = 'O'
+                       and t.tgfoid = to_regprocedure('public.jobs_lock_pricing_and_inspection()')) then
+    raise exception '0031 needs 0029 (haven-version 0029-v2) and its enabled trigger first. Nothing was changed.';
+  end if;
+  -- every column the trigger reads, with the reviewed types
+  if (select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod), ',' order by a.attname)
+        from pg_attribute a
+       where a.attrelid = 'public.jobs'::regclass and a.attnum > 0 and not a.attisdropped
+         and a.attname in ('convenience_fee_cents', 'emergency', 'emergency_fee_cents', 'fixed_customer_labor_price_cents',
+                           'fixed_pro_labor_payout_cents', 'inspection_fee_cents', 'margin_rate_bps', 'materials_approved_cents',
+                           'materials_estimate_cents', 'materials_reimbursed_cents', 'requires_diagnosis', 'tip_amount_cents'))
+     is distinct from 'convenience_fee_cents:integer,emergency:boolean,emergency_fee_cents:integer,fixed_customer_labor_price_cents:integer,fixed_pro_labor_payout_cents:integer,inspection_fee_cents:integer,margin_rate_bps:integer,materials_approved_cents:integer,materials_estimate_cents:integer,materials_reimbursed_cents:integer,requires_diagnosis:boolean,tip_amount_cents:integer' then
+    raise exception '0031: public.jobs money columns are not as reviewed (0025 applied?). Nothing was changed.';
+  end if;
+  if not exists (select 1 from pg_roles where rolname = current_user and (rolsuper or rolbypassrls))
+     or not has_table_privilege(current_user, 'public.jobs', 'trigger')
+     or not has_schema_privilege(current_user, 'public', 'create') then
+    raise exception '0031: run as the database owner (postgres), not %. Nothing was changed.', current_user;
+  end if;
+  select md5(replace(p.prosrc, E'\r', '')) into v from pg_proc p where p.oid = to_regprocedure('public.jobs_validate_posting_amounts()');
+  if v is not null and v <> '3e4786774e3ea9ebe49f60e55605f90e' then
+    raise exception '0031: public.jobs_validate_posting_amounts() already exists with another body (md5 %). Send this to Codey. Nothing was changed.', v;
+  end if;
+  if exists (select 1 from pg_trigger t where t.tgrelid = 'public.jobs'::regclass and t.tgname = 'jobs_validate_posting_amounts'
+                and t.tgfoid is distinct from to_regprocedure('public.jobs_validate_posting_amounts()')) then
+    raise exception '0031: a trigger named jobs_validate_posting_amounts runs another function. Nothing was changed.';
+  end if;
+end $$;
 
 -- ── 1. Trigger function ───────────────────────────────────────────────────
 -- SECURITY INVOKER on purpose so current_user is the real caller role.
@@ -103,8 +128,9 @@ create or replace function public.jobs_validate_posting_amounts()
 returns trigger
 language plpgsql
 security invoker
-set search_path = public
+set search_path = pg_catalog, public, pg_temp
 as $$
+-- haven-version: 0031-v2 (2026-11-12 t674 refresh: guards, pinned search_path; rules unchanged from 045665d4).
 declare
   privileged boolean := current_user not in ('anon', 'authenticated');
   margin_bps constant integer := 2000;  -- founder-set margin; future jobs only (item 9)
@@ -156,7 +182,7 @@ end;
 $$;
 
 -- Trigger functions run without EXECUTE; nobody needs to call it directly.
-revoke all on function public.jobs_validate_posting_amounts() from public, anon, authenticated;
+revoke all on function public.jobs_validate_posting_amounts() from public, anon, authenticated, service_role;
 
 -- ── 2. Trigger (INSERT only) ──────────────────────────────────────────────
 drop trigger if exists jobs_validate_posting_amounts on public.jobs;
@@ -164,29 +190,31 @@ create trigger jobs_validate_posting_amounts
   before insert on public.jobs
   for each row execute function public.jobs_validate_posting_amounts();
 
+-- ── 3. Post-checks (any failure rolls everything back) ────────────────────
+do $$
+begin
+  if not exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.jobs_validate_posting_amounts()')
+                    and md5(replace(p.prosrc, E'\r', '')) = '3e4786774e3ea9ebe49f60e55605f90e'
+                    and not p.prosecdef and p.proconfig = array['search_path=pg_catalog, public, pg_temp']
+                    and not has_function_privilege('anon', p.oid, 'execute')
+                    and not has_function_privilege('authenticated', p.oid, 'execute')
+                    and not has_function_privilege('service_role', p.oid, 'execute')) then
+    raise exception '0031 post-check: function body / invoker / search_path / grants wrong. Rolled back.';
+  end if;
+  if not exists (select 1 from pg_trigger t where t.tgrelid = 'public.jobs'::regclass and t.tgname = 'jobs_validate_posting_amounts'
+                    and t.tgtype = 7 and t.tgenabled = 'O' and t.tgqual is null
+                    and t.tgfoid = to_regprocedure('public.jobs_validate_posting_amounts()')) then
+    raise exception '0031 post-check: trigger is not BEFORE INSERT FOR EACH ROW, enabled. Rolled back.';
+  end if;
+  if not exists (select 1 from pg_trigger t where t.tgrelid = 'public.jobs'::regclass and t.tgname = 'jobs_lock_pricing_and_inspection' and t.tgenabled = 'O') then
+    raise exception '0031 post-check: 0029 trigger missing. Rolled back.';
+  end if;
+end $$;
+
 commit;
 
--- ── Verify (read-only) ────────────────────────────────────────────────────
--- Trigger installed, INSERT only, 0029 untouched:
--- select tgname, pg_get_triggerdef(oid) from pg_trigger
---  where tgrelid = 'public.jobs'::regclass and not tgisinternal order by 1;
--- Item 8 count (read-only; nothing here changes these rows):
+-- Verify: supabase/checks/0031b_check_after_READ_ONLY.sql (row 000 LIVE).
+-- Item 8 count (read-only; nothing here changes these rows), for the founder:
 -- select count(*) as legacy_diagnosis_jobs_with_0_inspection_fee
 --   from public.jobs where requires_diagnosis and inspection_fee_cents = 0;
--- Existing rows that would not pass today's posting rules (information
--- only; 0031 never re-checks posted rows):
--- select count(*) from public.jobs
---  where margin_rate_bps <> 2000
---     or fixed_pro_labor_payout_cents <> fixed_customer_labor_price_cents * 80 / 100;
-
--- ── Rollback (only if this file must be undone) ───────────────────────────
--- ONE transaction, one SQL-editor query: remove the leading "-- " from every
--- line between BEGIN-ROLLBACK and END-ROLLBACK and run them together. 0031
--- only added this trigger and function, so dropping both restores the
--- exact 0029 state. Roll 0031 back before 0029 if both are undone.
--- BEGIN-ROLLBACK
--- begin;
--- drop trigger if exists jobs_validate_posting_amounts on public.jobs;
--- drop function if exists public.jobs_validate_posting_amounts();
--- commit;
--- END-ROLLBACK
+-- Rollback: supabase/rollback/0031_posting_amounts_validation_rollback.sql (one run).
