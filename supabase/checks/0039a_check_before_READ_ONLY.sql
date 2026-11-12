@@ -1,8 +1,11 @@
--- Haven: preflight before pasting 0039 (customer status guard). READ-ONLY (one SELECT, catalogs only).
--- Paste the whole file into the Supabase SQL editor and Run. Row 00 must say READY (5 of 5) before the
--- paste, or "READY: already applied" after it. NOT READY: stop and send the whole output to Codey.
+-- Haven: preflight before pasting 0039 v2 (customer status guard + no self-assignment + pro_claim_job
+-- self-claim check). READ-ONLY (one SELECT, catalogs only). Paste the whole file into the Supabase SQL
+-- editor and Run. Row 00 must say READY (7 of 7) before the paste, or "READY: already applied" after it.
+-- NOT READY: stop and send the whole output to Codey.
 with
 fn as (select md5(replace(p.prosrc, E'\r', '')) as m from pg_proc p where p.oid = to_regprocedure('public.jobs_customer_status_guard()')),
+fs as (select md5(replace(p.prosrc, E'\r', '')) as m from pg_proc p where p.oid = to_regprocedure('public.jobs_no_self_assignment()')),
+fc as (select md5(replace(p.prosrc, E'\r', '')) as m from pg_proc p where p.oid = to_regprocedure('public.pro_claim_job(uuid)')),
 hard(n, label, ok, detail) as (
   values
   ('01', 'public.jobs customer_id / pro_id / status',
@@ -16,18 +19,26 @@ hard(n, label, ok, detail) as (
          coalesce(exists (select 1 from pg_roles where rolname = current_user and (rolsuper or rolbypassrls))
                   and has_table_privilege(current_user, 'public.jobs', 'trigger') and has_schema_privilege(current_user, 'public', 'create'), false),
          'current_user=' || current_user),
-  ('04', 'jobs_customer_status_guard absent or exactly 0039 (md5 5712f23601a5d5428f774ae71ace3593)',
-         not exists (select 1 from fn) or (select m from fn) = '5712f23601a5d5428f774ae71ace3593', coalesce((select m from fn), 'absent')),
-  ('05', 'no trigger named jobs_customer_status_guard runs another function',
+  ('04', 'jobs_customer_status_guard absent or exactly 0039 v2 (md5 46c813cf28c2ccabd206ff24c960bee3)',
+         not exists (select 1 from fn) or (select m from fn) = '46c813cf28c2ccabd206ff24c960bee3', coalesce((select m from fn), 'absent')),
+  ('05', 'jobs_no_self_assignment absent or exactly 0039 v2 (md5 0527ced8e3546472bb31b7259b13024f)',
+         not exists (select 1 from fs) or (select m from fs) = '0527ced8e3546472bb31b7259b13024f', coalesce((select m from fs), 'absent')),
+  ('06', 'pro_claim_job(uuid) is the LIVE 0030 body (789cb65e77775da031012f78227d76ad) or 0039 (f72dcd37731bf7379803e9be680d70f0)',
+         coalesce((select m from fc) in ('789cb65e77775da031012f78227d76ad', 'f72dcd37731bf7379803e9be680d70f0'), false), coalesce((select m from fc), 'missing')),
+  ('07', 'no trigger named jobs_customer_status_guard / jobs_no_self_assignment runs another function',
          not exists (select 1 from pg_trigger t where t.tgrelid = to_regclass('public.jobs') and t.tgname = 'jobs_customer_status_guard'
-                        and t.tgfoid is distinct from to_regprocedure('public.jobs_customer_status_guard()')), '')
+                        and t.tgfoid is distinct from to_regprocedure('public.jobs_customer_status_guard()'))
+         and not exists (select 1 from pg_trigger t where t.tgrelid = to_regclass('public.jobs') and t.tgname = 'jobs_no_self_assignment'
+                        and t.tgfoid is distinct from to_regprocedure('public.jobs_no_self_assignment()')), '')
 ),
 info(n, label, detail) as (
   values
   ('90', 'INFO triggers on jobs', (select string_agg(tgname || case when tgenabled <> 'O' then '(' || tgenabled::text || ')' else '' end, ', ' order by tgname)
                                      from pg_trigger where tgrelid = to_regclass('public.jobs') and not tgisinternal)),
-  ('91', 'INFO 0029 installed (rule IV.3 covers the same moves)', coalesce((select substring(p.prosrc from 'haven-version: [^ ]+') from pg_proc p
-                                     where p.oid = to_regprocedure('public.jobs_lock_pricing_and_inspection()')), 'absent'))
+  ('91', 'INFO 0029 installed (rules IV.1-IV.3 cover the same moves)', coalesce((select substring(p.prosrc from 'haven-version: [^ ]+') from pg_proc p
+                                     where p.oid = to_regprocedure('public.jobs_lock_pricing_and_inspection()')), 'absent')),
+  ('92', 'INFO pro_claim_job state', case (select m from fc) when '789cb65e77775da031012f78227d76ad' then '0030 (before 0039)'
+                                     when 'f72dcd37731bf7379803e9be680d70f0' then '0039 (already applied)' else 'other' end)
 )
 select '00' as n,
        case when (select bool_and(ok) from hard) then

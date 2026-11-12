@@ -39,6 +39,24 @@ def run_checks():
     for who in ('C2', 'P3', None):
         s, b = call('PATCH', f'/jobs?id=eq.{J1}', who, {'status': 'complete'})
         check(f'{who or "anon"} PATCH C1 job -> complete: no change', st(J1) == 'arrived', [s, st(J1)])
+    # HIGH-1: the Customer points their own profile at their own posted job (J2) and tries to claim it
+    s, b = call('PATCH', f'/profiles?id=eq.{C1}', 'C1', {'operating_lat': M.NEARPT[0], 'operating_lng': M.NEARPT[1], 'pro_workspace': {'travelRadius': '25'}})
+    check('C1 PATCH own profile operating point (allowed today: the HIGH-1 precondition)', s in (200, 204), [s, b])
+    s, b = call('POST', '/rpc/pro_claim_job', 'C1', {'job_id': J2})
+    check('C1 POST /rpc/pro_claim_job on own posted job: refused P0002 "job not claimable", job unchanged',
+          s >= 400 and isinstance(b, dict) and b.get('code') == 'P0002' and st(J2) == 'posted', [s, b, st(J2)])
+    owner_sql(f"update public.profiles set operating_lat = null, operating_lng = null, pro_workspace = null where id = '{C1}';")
+    # LOW-1: complete only from in_progress
+    X.setjob(S.DB, 'arrived', P1)
+    s, b = call('PATCH', f'/jobs?id=eq.{J1}', 'P1', {'status': 'complete'})
+    check('assigned Pro PATCH arrived -> complete: 403 42501, unchanged', s == 403 and isinstance(b, dict) and b.get('code') == '42501' and st(J1) == 'arrived', [s, b, st(J1)])
+    X.setjob(S.DB, 'in_progress', P1)
+    s, b = call('PATCH', f'/jobs?id=eq.{J1}&status=eq.in_progress', 'P1', {'status': 'complete'})
+    check('assigned Pro PATCH in_progress -> complete (the Pro app write): 2xx, applied', s in (200, 204) and st(J1) == 'complete', [s, b, st(J1)])
+    # MED-1: the Customer cannot rewrite a finished job
+    s, b = call('PATCH', f'/jobs?id=eq.{J1}', 'C1', {'status': 'materials_approved'})
+    check('C1 PATCH own complete job -> materials_approved: refused, unchanged', st(J1) == 'complete', [s, b, st(J1)])
+    X.setjob(S.DB, 'arrived', P1)
     s, b = call('PATCH', f'/jobs?id=eq.{J2}', 'C1', {'status': 'cancelled'})
     check('C1 PATCH own posted job -> cancelled: 2xx, applied (app write unaffected)', s in (200, 204) and st(J2) == 'cancelled', [s, b, st(J2)])
     s, b = call('POST', '/rpc/pro_claim_job', 'P2', {'job_id': M.J3})
@@ -46,7 +64,7 @@ def run_checks():
 
 
 def main():
-    M.build(S.DB)
+    X.build(S.DB)
     X.apply(S.DB)
     conf = tempfile.NamedTemporaryFile('w', suffix='.conf', delete=False)
     os.chmod(conf.name, 0o600)
