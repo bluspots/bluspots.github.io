@@ -18,7 +18,9 @@
  *     property map only when the job's address is one of the customer's own
  *     confirmed addresses, captioned as the address and not the Pro's live
  *     location. No match, no map. Coordinates come only from the customer's own
- *     saved address, never from the job row.
+ *     saved address, never from the job row. While a backend job is en_route
+ *     the live-location card replaces the property map (live_location_view.test.js
+ *     covers it); the property map is checked here on an Arrived job.
  * (6) Nothing map-related renders or is requested at startup.
  */
 const { JSDOM } = require('jsdom');
@@ -313,8 +315,8 @@ async function openMyHome() {
 
   // (5) Tracking
   const now = Date.now();
-  const trackJob = (addressText) => ({
-    id: now - 5000, taskId: 1, tpId: 2, lockedPrice: 65, status: 'en_route', acceptedAt: now - 600000,
+  const trackJob = (addressText, status) => ({
+    id: now - 5000, taskId: 1, tpId: 2, lockedPrice: 65, status: status || 'en_route', acceptedAt: now - 600000,
     backendJobId: JOB_UUID, backendProId: PRO_UUID, backendProName: 'Grace Hopper',
     pro: { i: 'GH', n: 'Grace Hopper', s: 'Haven Pro', col: '#134E4A', r: null, j: null, memberSince: null, trustScore: null, proId: PRO_UUID, real: true },
     workPerformed: [], materials: [], proNotes: '', msgs: [], photos: [], desc: '', addressText, addressLabel: 'Home',
@@ -327,7 +329,13 @@ async function openMyHome() {
     await tap(screen.queryAllByText(/Assemble furniture/).pop(), 'job card');
     await waitFor(() => /← Bookings/.test(bodyText()), 'tracking screen');
   }
+  // en_route backend job: the live-location card replaces the property map
   await mount(() => { setAddrs([CONFIRMED]); setJobs([trackJob(CONFIRMED_TEXT)]); });
+  await openTracking();
+  assert(!!document.querySelector('[data-testid="live-track"]') && !/This map shows your address/.test(bodyText()) && !mapImgs().some(i => /F59E0B/.test(i.getAttribute('src'))), 'en_route backend job: the live-location card replaces the property map');
+  // after en_route (Arrived): the property map as before
+  remoteRows = [{ ...remoteRows[0], status: 'arrived' }];
+  await mount(() => { setAddrs([CONFIRMED]); setJobs([trackJob(CONFIRMED_TEXT, 'arrived')]); });
   await openTracking();
   imgs = mapImgs();
   assert(imgs.length === 1 && /pin-l\+F59E0B\(-81\.379200,28\.538300\)/.test(imgs[0].getAttribute('src')), 'tracking shows the confirmed property map for the job address');
@@ -337,13 +345,13 @@ async function openMyHome() {
   assert(!document.querySelector('svg[viewBox="0 0 350 185"]') && !Array.from(document.querySelectorAll('figure')).some(f => /🚗|🏠/.test(f.textContent.replace('📍', ''))), 'the drawn map with a moving car and house is gone; the map area has no car');
   assert(imgs[0] && imgs[0].getAttribute('loading') === 'lazy', 'tracking map loads lazily');
 
-  await mount(() => { setAddrs([{ ...REAL, isPrimary: true }]); setJobs([trackJob(CONFIRMED_TEXT)]); });
+  await mount(() => { setAddrs([{ ...REAL, isPrimary: true }]); setJobs([trackJob(CONFIRMED_TEXT, 'arrived')]); });
   await openTracking();
   assert(mapImgs().length === 0 && !document.querySelector('svg[viewBox="0 0 350 185"]') && !document.querySelector('figure'), 'tracking at an unconfirmed address shows no map at all');
-  await mount(() => { setAddrs([CONFIRMED]); setJobs([trackJob('77 Elsewhere Rd, Tampa, FL 33601')]); });
+  await mount(() => { setAddrs([CONFIRMED]); setJobs([trackJob('77 Elsewhere Rd, Tampa, FL 33601', 'arrived')]); });
   await openTracking();
   assert(mapImgs().length === 0, 'tracking for an address that is not one of the customer\'s saved addresses shows no map');
-  assert(/is on the way/.test(bodyText()), 'the real job status is still shown on tracking');
+  assert(/Arrived/.test(bodyText()), 'the real job status is still shown on tracking');
   remoteRows = [];
 
   cleanup();

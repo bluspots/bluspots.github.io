@@ -542,6 +542,7 @@ const SOURCE_FILES = [
   'job_signal.js',
   'job_factories.js',
   'geocode.js',
+  'live_location_view.js',
   'home_services_app.jsx',
 ];
 const concatenated = SOURCE_FILES.map(f => fs.readFileSync(f, 'utf8')).join('\n');

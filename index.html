@@ -1599,6 +1599,74 @@ const havenFetchIsQaTester = async () => {
     return false;
   }
 };
+const fetchJobLiveLocation = async (jobId) => {
+  const cfg = getSupabaseConfig();
+  if (!cfg || !jobId) return { state: "unavailable", error: "not_found" };
+  const token = havenSignedInAccessToken();
+  if (!token) return { state: "unavailable", error: "not_authenticated" };
+  const TIMED_OUT = {};
+  const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+  let timer = null;
+  const timeout = new Promise((resolve) => {
+    timer = setTimeout(() => {
+      try {
+        if (ctrl) ctrl.abort();
+      } catch {
+      }
+      resolve(TIMED_OUT);
+    }, HAVEN_LIVE_READ_TIMEOUT_MS);
+  });
+  try {
+    let res;
+    try {
+      res = await Promise.race([timeout, fetch(`${cfg.url}/rest/v1/rpc/get_job_live_location`, {
+        method: "POST",
+        headers: {
+          "Accept": "application/json",
+          "Content-Type": "application/json",
+          apikey: cfg.anonKey,
+          Authorization: `Bearer ${token}`
+        },
+        body: JSON.stringify({ p_job_id: String(jobId) }),
+        ...ctrl ? { signal: ctrl.signal } : {}
+      })]);
+    } catch (err) {
+      return { state: "network" };
+    }
+    if (res === TIMED_OUT) return { state: "network" };
+    if (res.status === 401 || res.status === 403) return { state: "unavailable", error: "not_authenticated" };
+    if (!res.ok) return res.status >= 500 || res.status === 408 || res.status === 429 ? { state: "network" } : { state: "unavailable", error: "http_" + res.status };
+    let body = null;
+    try {
+      body = await Promise.race([timeout, res.json()]);
+    } catch {
+      body = null;
+    }
+    if (body === TIMED_OUT) return { state: "network" };
+    if (!body || typeof body !== "object" || Array.isArray(body)) return { state: "network" };
+    if (body.ok === true) {
+      if (body.available === true) {
+        const num = (v) => {
+          if (typeof v === "number") return Number.isFinite(v) ? v : NaN;
+          if (typeof v === "string" && /^\s*[-+]?(\d+\.?\d*|\.\d+)([eE][-+]?\d+)?\s*$/.test(v)) return Number(v);
+          return NaN;
+        };
+        const p = body.point && typeof body.point === "object" ? body.point : {};
+        const lat = num(p.lat), lng = num(p.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng) || Math.abs(lat) > 90 || Math.abs(lng) > 180) return { state: "network" };
+        const age = num(body.age_s);
+        const iso = (v) => typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2})$/.test(v) && Number.isFinite(Date.parse(v)) ? v : null;
+        return { state: "live", point: { lat, lng }, ageS: Number.isFinite(age) && age >= 0 ? age : null, receivedAt: iso(body.received_at), capturedAt: iso(body.captured_at), readAt: Date.now() };
+      }
+      if (body.reason === "paused") return { state: "paused", lastReceivedAt: typeof body.last_received_at === "string" ? body.last_received_at : null };
+      return { state: "waiting" };
+    }
+    if (body.error === "tracking_not_active") return { state: "ended" };
+    return { state: "unavailable", error: typeof body.error === "string" ? body.error : "refused" };
+  } finally {
+    clearTimeout(timer);
+  }
+};
 const fetchAssignedProLabels = async (backendIds) => {
   if (havenProLabelRpcUnavailable) return {};
   const cfg = getSupabaseConfig();
@@ -2412,6 +2480,54 @@ function havenStaticMapUrl(lat, lng, opts) {
   const w = o.width || 600, h = o.height || 300;
   const ll = `${Number(lng).toFixed(6)},${Number(lat).toFixed(6)}`;
   return `https://api.mapbox.com/styles/v1/mapbox/${style}/static/pin-l+F59E0B(${ll})/${ll},16,0/${w}x${h}@2x?logo=true&attribution=true&access_token=${encodeURIComponent(HAVEN_MAPBOX_PUBLIC_TOKEN)}`;
+}
+const HAVEN_LIVE_POLL_MS = 1e4;
+const HAVEN_LIVE_RETRY_MS = 3e4;
+const HAVEN_LIVE_READ_TIMEOUT_MS = 1e4;
+const HAVEN_LIVE_MAX_AGE_MS = 5 * 6e4;
+const HAVEN_LIVE_WAITING = "Waiting for the Pro's location";
+function havenLiveMapUrl(point, dark) {
+  if (!point || typeof HAVEN_MAPBOX_PUBLIC_TOKEN === "undefined" || !HAVEN_MAPBOX_PUBLIC_TOKEN) return null;
+  const ll = String(point.lng) + "," + String(point.lat);
+  const style = dark ? "dark-v11" : "streets-v12";
+  return "https://api.mapbox.com/styles/v1/mapbox/" + style + "/static/pin-l+0F6E4E(" + ll + ")/" + ll + ",15,0/600x300@2x?logo=true&attribution=true&access_token=" + encodeURIComponent(HAVEN_MAPBOX_PUBLIC_TOKEN);
+}
+function havenLivePausedText(lastReceivedAt, nowMs) {
+  const t = lastReceivedAt ? Date.parse(lastReceivedAt) : NaN;
+  if (!Number.isFinite(t)) return "Location paused.";
+  const min = Math.max(1, Math.round((nowMs - t) / 6e4));
+  return "Location paused. Last update " + min + " min ago.";
+}
+function havenLivePointTime(live) {
+  if (!live || live.state !== "live") return null;
+  if (typeof live.readAt === "number" && typeof live.ageS === "number" && Number.isFinite(live.ageS)) return live.readAt - live.ageS * 1e3;
+  const t = Date.parse(live.receivedAt || live.capturedAt || "");
+  return Number.isFinite(t) ? Math.min(t, typeof live.readAt === "number" ? live.readAt : t) : null;
+}
+function havenLiveCurrentPoint(live, nowMs) {
+  const t = havenLivePointTime(live);
+  if (t == null || !live.point || nowMs - t >= HAVEN_LIVE_MAX_AGE_MS) return null;
+  return live.point;
+}
+function havenLiveAgeText(pointTime, nowMs) {
+  if (typeof pointTime !== "number" || !Number.isFinite(pointTime)) return "";
+  const s = Math.max(0, Math.floor((nowMs - pointTime) / 1e3));
+  if (s < 60) return "Updated " + s + " sec ago";
+  return "Updated " + Math.floor(s / 60) + " min ago";
+}
+function havenLiveMessage(live, nowMs) {
+  const s = live && live.state;
+  if (!s || s === "loading") return "Loading your Pro's location…";
+  if (s === "waiting") return HAVEN_LIVE_WAITING;
+  if (s === "live") {
+    const t = havenLivePointTime(live);
+    return havenLivePausedText(t == null ? null : new Date(t).toISOString(), nowMs);
+  }
+  if (s === "paused") return havenLivePausedText(live.lastReceivedAt, nowMs);
+  if (s === "ended") return "Location sharing has ended for this job.";
+  if (s === "unavailable") return "Your Pro's location isn't available.";
+  if (s === "network") return "Couldn't load your Pro's location. Trying again shortly.";
+  return "";
 }
 const DEMO_CUSTOMER_ID = "11111111-1111-4111-8111-111111111111";
 function maskReceiptEmail(email) {
@@ -4447,6 +4563,36 @@ function App() {
   const vjPro = proShownForJob(vj);
   const vjPname = vjPro.n.split(" ")[0];
   const vjTotal = vjTask ? (vj?.lockedPrice ?? vjTask.p) + (vj?.surge || 0) + (vj?.emergencyFee || 0) : 0;
+  const liveTrackJobId = scr === "tracking" && isAppVisible && havenAuth && vj && vj.backendJobId && vj.status === "en_route" ? String(vj.backendJobId) : null;
+  const [liveLoc, setLiveLoc] = useState(null);
+  useEffect(() => {
+    setLiveLoc(null);
+    if (!liveTrackJobId) return;
+    let cancelled = false, timer = null;
+    setLiveLoc({ jobId: liveTrackJobId, state: "loading" });
+    const tick = async () => {
+      timer = null;
+      const r = await fetchJobLiveLocation(liveTrackJobId);
+      if (cancelled) return;
+      setLiveLoc({ jobId: liveTrackJobId, ...r });
+      if (r.state === "ended" || r.state === "unavailable") return;
+      timer = setTimeout(tick, r.state === "network" ? HAVEN_LIVE_RETRY_MS : HAVEN_LIVE_POLL_MS);
+    };
+    tick();
+    return () => {
+      cancelled = true;
+      if (timer) clearTimeout(timer);
+      setLiveLoc(null);
+    };
+  }, [liveTrackJobId]);
+  const [liveClock, setLiveClock] = useState(() => Date.now());
+  const liveShowing = !!(liveLoc && liveLoc.state === "live");
+  useEffect(() => {
+    if (!liveShowing) return;
+    setLiveClock(Date.now());
+    const id = setInterval(() => setLiveClock(Date.now()), 1e3);
+    return () => clearInterval(id);
+  }, [liveShowing]);
   const progressStatus = vj ? vj.status === "diagnosing" || vj.status === "materials_requested" ? "arrived" : vj.status === "materials_approved" ? "in_progress" : vj.status : null;
   const vjSIdx = vj ? SF.indexOf(progressStatus) : -1;
   const vjMsgsRaw = vj?.msgs;
@@ -7201,6 +7347,15 @@ function App() {
       }
     ));
   };
+  const liveTrackCard = () => {
+    const live = liveLoc && liveLoc.jobId === String(vj.backendJobId) ? liveLoc : null;
+    const nowMs = Math.max(liveClock, Date.now());
+    const point = live && live.state === "live" ? havenLiveCurrentPoint(live, nowMs) : null;
+    const src = point ? havenLiveMapUrl(point, isDark) : null;
+    const msg = point ? "" : havenLiveMessage(live, nowMs);
+    const shownState = live ? live.state === "live" && !point ? "paused" : live.state : "loading";
+    return /* @__PURE__ */ React.createElement("div", { "data-testid": "live-track", "data-live-state": shownState, style: { margin: "12px 20px", background: W, borderRadius: 20, padding: 12, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, src ? /* @__PURE__ */ React.createElement(React.Fragment, null, /* @__PURE__ */ React.createElement("div", { style: { position: "relative", borderRadius: 14, overflow: "hidden", border: `1px solid ${BD}`, background: BG, aspectRatio: "2 / 1" } }, /* @__PURE__ */ React.createElement("img", { key: src, src, alt: "Map showing your Pro's current location", decoding: "async", style: { display: "block", width: "100%", height: "100%", objectFit: "cover" } })), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, marginTop: 8, lineHeight: 1.5 } }, /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, color: TX } }, "📍 Your Pro's live location"), havenLiveAgeText(havenLivePointTime(live), nowMs) ? ` · ${havenLiveAgeText(havenLivePointTime(live), nowMs)}` : "")) : /* @__PURE__ */ React.createElement("div", { role: "status", "aria-live": "polite", style: { borderRadius: 14, border: `1px solid ${BD}`, background: BG, aspectRatio: "2 / 1", display: "flex", alignItems: "center", justifyContent: "center", padding: 16, textAlign: "center", fontSize: 13, fontWeight: 600, color: TS, lineHeight: 1.5 } }, msg));
+  };
   const trackingScreen = () => {
     if (havenIsPhoneOnly(vj)) return postedScreen();
     if (!vj) return unavailableScreen("Tracking", goBookings);
@@ -7219,7 +7374,7 @@ function App() {
       const label = matReq && !hasList ? "Materials requested" : info.label;
       const sub = matReq ? hasList ? "Review and approve the list below" : "Waiting for your Pro's list" : `${vjPname} ${info.sub}`;
       return /* @__PURE__ */ React.createElement("div", null, /* @__PURE__ */ React.createElement("div", { "aria-live": "polite", style: { fontWeight: 800, fontSize: 17, color: TX, marginBottom: 3 } }, label), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 13, color: TS } }, sub));
-    })()), trackMap(), vj.status === "materials_requested" && (() => {
+    })()), vj.backendJobId && vj.status === "en_route" ? liveTrackCard() : trackMap(), vj.status === "materials_requested" && (() => {
       const jt = vjTask ? { n: vjTask.n, c: TASKS.find((t) => t.id === vj.taskId)?.c } : vj.custom ? { n: vj.custom.title, c: vj.custom.cat } : null;
       const req = vj.materialsRequest && Array.isArray(vj.materialsRequest.items) && vj.materialsRequest.items.length ? vj.materialsRequest : null;
       if (!req) return /* @__PURE__ */ React.createElement("div", { role: "status", style: { margin: "0 20px 12px", background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 800, color: TM, letterSpacing: 0.8, textTransform: "uppercase", marginBottom: 8 } }, "Materials request"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 14, fontWeight: 700, color: TX, marginBottom: 6 } }, jt?.n || "Your job"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, lineHeight: 1.5 } }, "Your Pro asked to buy materials. The list hasn't arrived yet. It will show here for your approval as soon as it does."));
@@ -7232,7 +7387,7 @@ function App() {
     })(), vj.status === "en_route" && (() => {
       const durOk = vjTask && getExpectedDuration(vjTask.t).durationConfidence !== "low";
       const acceptedAt = vj.acceptedAt ? new Date(vj.acceptedAt).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : null;
-      return /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 12px", background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 4 } }, "Arrival"), /* @__PURE__ */ React.createElement("div", { "aria-live": "polite", style: { fontWeight: 800, fontSize: 18, color: TX } }, vjPname, " is on the way"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, marginTop: 4, lineHeight: 1.5 } }, acceptedAt ? `Accepted at ${acceptedAt}. ` : "", "A live arrival time will show here once location sharing is available."), durOk && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 12, paddingTop: 12, borderTop: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase" } }, "Typical job length (estimate)"), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 14, color: TX } }, durationText(vjTask.t))));
+      return /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 12px", background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase", marginBottom: 4 } }, "Arrival"), /* @__PURE__ */ React.createElement("div", { "aria-live": "polite", style: { fontWeight: 800, fontSize: 18, color: TX } }, vjPname, " is on the way"), /* @__PURE__ */ React.createElement("div", { style: { fontSize: 12, color: TS, marginTop: 4, lineHeight: 1.5 } }, acceptedAt ? `Accepted at ${acceptedAt}.` : "", vj.backendJobId ? "" : `${acceptedAt ? " " : ""}A live arrival time will show here once location sharing is available.`), durOk && /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "baseline", marginTop: 12, paddingTop: 12, borderTop: `1px solid ${BD}` } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.6, textTransform: "uppercase" } }, "Typical job length (estimate)"), /* @__PURE__ */ React.createElement("span", { style: { fontWeight: 700, fontSize: 14, color: TX } }, durationText(vjTask.t))));
     })(), /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 12px", background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { onClick: () => {
       if (!vjPro.real) openProProfile(vjPro, "tracking");
     }, style: { display: "flex", gap: 14, alignItems: "center", marginBottom: 14, cursor: vjPro.real ? "default" : "pointer" } }, /* @__PURE__ */ React.createElement("div", { style: { width: 50, height: 50, borderRadius: 25, background: vjPro.col, display: "flex", alignItems: "center", justifyContent: "center", color: ON, fontWeight: 800, fontSize: 16, flexShrink: 0 } }, vjPro.i), /* @__PURE__ */ React.createElement("div", { style: { flex: 1 } }, /* @__PURE__ */ React.createElement("div", { style: { fontWeight: 700, fontSize: 15, color: TX } }, vjPro.n), /* @__PURE__ */ React.createElement("div", { style: { color: AMT, fontSize: 12, fontWeight: 600, marginBottom: 6 } }, vjPro.s), typeof vjPro.trustScore === "number" && trustLine(vjPro), typeof vjPro.r === "number" && /* @__PURE__ */ React.createElement("div", { style: { fontSize: 11, color: TM, marginTop: 4 } }, "⭐ ", vjPro.r, " · ", vjPro.j, " jobs")), /* @__PURE__ */ React.createElement("span", { style: { color: TM, fontSize: 18, alignSelf: "flex-start" } }, "›")), /* @__PURE__ */ React.createElement("button", { onClick: () => goTo("messages"), style: { width: "100%", padding: "11px 0", borderRadius: 14, border: `1.5px solid ${vj.status === "complete" ? BD : NT}`, background: vj.status === "complete" ? BG : isDark ? "rgba(241,239,233,.06)" : "rgba(28,43,58,.06)", color: vj.status === "complete" ? TM : NT, fontWeight: 700, fontSize: 14, cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", gap: 7 } }, "💬 ", vj.status === "complete" ? "Chat (closed)" : CUSTOMER_MESSAGING_CONNECTED ? "Message" : "Messages · not available yet")), /* @__PURE__ */ React.createElement("div", { style: { margin: "0 20px 12px", background: W, borderRadius: 20, padding: 18, boxShadow: "0 2px 10px rgba(28,43,58,.07)" } }, /* @__PURE__ */ React.createElement("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 } }, /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: TM, letterSpacing: 0.8, textTransform: "uppercase" } }, "Booking Summary"), vj.emergency && /* @__PURE__ */ React.createElement("span", { style: { fontSize: 11, fontWeight: 700, color: "#C2410C", background: "#FFF1EE", padding: "4px 10px", borderRadius: 20 } }, "🚨 Emergency priority")), [
