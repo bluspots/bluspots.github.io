@@ -4,7 +4,7 @@
 - Backend: `supabase/migrations/0037_live_location_session.sql`.
 - Owner: Codey (backend). Consumers: the Pro app (sender) and the Customer app (viewer), built by Claude.
 - It builds on live tracking v1 (0032, `LIVE_TRACKING_V1_CONTRACT.md`) and the realtime job signal (0036, which is live).
-- Revision: founder decisions t675u (Alex, 2026-11-12 3:40 PM ET), which supersede the earlier "a stop is final for the drive" rule.
+- Revision: founder decisions t675u (Alex, 2026-11-12 3:40 PM ET), which supersede the earlier "a stop is final for the drive" rule. The 30-minute no-update cutoff was **DECIDED** by Alex on 2026-11-12 at 4:51 PM ET (design approval; nothing pasted).
 
 ## 0. The rules (founder, 2026-11-12)
 1. **Driving to Job starts sharing automatically.** When this device's claim succeeds, the app calls `start`.
@@ -109,7 +109,7 @@ The backend cannot tell a human tap from an automatic call. Here is exactly what
 - **Why:** it closes a real gap. Without it, a session stored on a device (or a stop that never reached the server, for example a revoke while offline) stayed usable for as long as the job sat en_route, possibly days. With it, a stored id is only good while the drive is actually live.
 - **No separate maximum age.** The session already ends when the job leaves en_route, and a moving drive keeps writing.
 - The 5-minute `paused` view for the Customer is unchanged and comes first. Expiry is a later, server-side end.
-- **OPEN:** the founder confirms the 30-minute value. It is a single constant in `pro_update_live_location`.
+- **DECIDED (Alex, 2026-11-12 4:51 PM ET, design approval):** 30 minutes with no accepted update. It is a single constant in `pro_update_live_location`.
 
 ## 7. Old (0032) call shape after 0037
 `pro_update_live_location(p_job_id, p_lat, p_lng[, p_captured_at])` still exists, but every call is refused with HTTP 400 `{code:"P0001", message:"session_required"}` and nothing is written.
@@ -117,7 +117,8 @@ The backend cannot tell a human tap from an automatic call. Here is exactly what
 - Ship the Pro update with the paste or before it.
 
 ## 8. OPEN for the founder
-1. Confirm the 30-minute idle expiry value (§6).
-2. Should `start` or `resume` be rate-limited? Today they aren't. Each call just rotates the session.
-3. Should there be an owner-side audit row for each start, resume, stop and expiry? Today the API logs show the RPC names. There is no table.
-4. Should shipped pre-0037 Pro builds stop sharing at paste time (§7), or should 0037 wait for the Pro update?
+1. Should `start` or `resume` be rate-limited? Today they aren't. Each call just rotates the session.
+2. Should there be an owner-side audit row for each start, resume, stop and expiry? Today the API logs show the RPC names. There is no table.
+3. Does the Pro update ship with or before any paste of 0037? Shipped pre-0037 Pro builds stop sharing at paste time (§7).
+
+Decided: the 30-minute no-update cutoff (§6), Alex 2026-11-12 4:51 PM ET.
