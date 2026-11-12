@@ -1,0 +1,119 @@
+#!/usr/bin/env python3
+"""MIG-0037 mutants: each mutant is a self-consistent alternative 0037 file (every changed function's
+md5 re-pinned in the guard and post-check), run through mig_0037_live_session_matrix.py (QUICK unless
+listed in FULL). Every mutant must be KILLED: the matrix fails, or the mutant file itself refuses.
+LOCAL THROWAWAY Postgres only.  Usage: HAVEN_DEPS=... python3 supabase/tests/mig_0037_mutants.py
+"""
+import hashlib, os, re, subprocess, sys, tempfile
+
+sys.dont_write_bytecode = True
+HERE = os.path.dirname(os.path.abspath(__file__))
+F37 = os.path.join(HERE, '..', 'migrations', '0037_live_location_session.sql')
+MATRIX = os.path.join(HERE, 'mig_0037_live_session_matrix.py')
+SRC = open(F37).read()
+
+MUTANTS = [
+    ('M01 writer skips the session check', "  if not found then\n    return jsonb_build_object('ok', false, 'error', 'session_stopped');\n  end if;\n", ""),
+    ('M02 guard lets every write through', "  if v_sid is null or not exists", "  if false and not exists"),
+    ('M03 stop keeps the point', "  with d as (delete from public.job_live_locations l\n              where l.pro_id = v_uid", "  with d as (delete from public.job_live_locations l\n              where false and l.pro_id = v_uid"),
+    ('M04 stop keeps the session', "  with d as (delete from public.job_live_sessions s\n              where s.pro_id = v_uid", "  with d as (delete from public.job_live_sessions s\n              where false and s.pro_id = v_uid"),
+    ('M05 stop skips the ownership check', "    if not found or v_pro is distinct from v_uid then\n      return jsonb_build_object('ok', false, 'error', 'not_found');\n    end if;\n  else", "  else"),
+    ('M06 start skips the ownership check', "  select j.status, j.pro_id into v_status, v_pro from public.jobs j where j.id = p_job_id for no key update;\n  if not found or v_pro is distinct from v_uid then",
+     "  select j.status, j.pro_id into v_status, v_pro from public.jobs j where j.id = p_job_id for no key update;\n  if not found then"),
+    ('M07 start on any status', "  if v_status <> 'en_route' then\n    return jsonb_build_object('ok', false, 'error', 'tracking_not_active');\n  end if;\n  -- founder rule", "  -- founder rule"),
+    ('M08 no end-session trigger', "create trigger jobs_end_live_session\n  after update", "create trigger jobs_end_live_session_x\n  after update"),
+    ('M09 end-session only on status change', "       or new.pro_id is distinct from old.pro_id\n             or new.customer_id is distinct from old.customer_id))\n  execute function public.jobs_end_live_session();", "))\n  execute function public.jobs_end_live_session();"),
+    ('M10 start granted to anon', "grant execute on function public.pro_start_live_location(uuid) to authenticated;", "grant execute on function public.pro_start_live_location(uuid) to authenticated, anon;"),
+    # M11 (writer reads the session without FOR SHARE) is EQUIVALENT since t674: start/stop take the jobs row
+    # FOR NO KEY UPDATE, which already conflicts with the writer's jobs FOR SHARE. Kept in code as defence in depth.
+    ('M12 stop signal to the Pro', "'job_changed', 'jobs:user:' || r.customer_id::text, true);", "'job_changed', 'jobs:user:' || v_uid::text, true);"),
+    ('M13 stop signal even when nothing stopped', "            where j.id = any (v_jobs || v_pts) order by j.id loop", "            where j.id = coalesce(p_job_id, j.id) and (j.pro_id = v_uid or j.id = any (v_jobs || v_pts)) order by j.id loop"),
+    ('M14 stop signal without exception handler', "    exception when others then\n      raise warning '0037 pro_stop_live_location: customer signal skipped (SQLSTATE %)', sqlstate;\n", ""),
+    ('M15 no one-time cleanup', "delete from public.job_live_locations l\n where not exists", "select 1 from public.job_live_locations l\n where not exists"),
+    ('M16 stop ok for anyone (c-min style)', "    if not found or v_pro is distinct from v_uid then\n      return jsonb_build_object('ok', false, 'error', 'not_found');\n    end if;\n  else", "    if not found or v_pro is distinct from v_uid then\n      return jsonb_build_object('ok', true, 'stopped', false);\n    end if;\n  else"),
+    ('M17 trigger fn executable by authenticated', "revoke all on function public.jobs_end_live_session() from public, anon, authenticated, service_role;", "revoke all on function public.jobs_end_live_session() from public, anon, service_role;"),
+    ('M18 stop search_path not pinned', "create or replace function public.pro_stop_live_location(p_job_id uuid default null)\nreturns jsonb\nlanguage plpgsql\nvolatile\nsecurity definer\nset search_path = pg_catalog, public, pg_temp\n", "create or replace function public.pro_stop_live_location(p_job_id uuid default null)\nreturns jsonb\nlanguage plpgsql\nvolatile\nsecurity definer\n"),
+    ('M19 session table without RLS', "alter table public.job_live_sessions enable row level security;", "alter table public.job_live_sessions disable row level security;"),
+    ('M20 guard on INSERT only (ON CONFLICT update path open)', "  before insert or update on public.job_live_locations", "  before insert on public.job_live_locations"),
+    ('M21 start keeps the earlier session', "  on conflict (job_id) do update\n     set pro_id = excluded.pro_id, session_id = excluded.session_id, started_at = excluded.started_at;", "  on conflict (job_id) do nothing;"),
+    ('M22 guard ignores the session id value', "and s.session_id::text = v_sid) then", ") then"),
+    ('M23 guard skips the 0032 body check', "  if v is distinct from 'get_job_live_location(uuid)=cc207fcdd0e2d277bbbcd3a7852dbf75 jobs_discard_live_location()=b8398f9d39127d4e6fb6c5a4082cf5d4 pro_update_live_location(uuid,double precision,double precision,timestamp with time zone)=d94c79fddff0328da6e3d4e04ff734e4' then\n    raise exception '0037: the 0032", "  if false then\n    raise exception '0037: the 0032"),
+    ('M24 guard skips the BYPASSRLS check', "  if not exists (select 1 from pg_roles where rolname = current_user and (rolsuper or rolbypassrls))\n     or not has_table_privilege(current_user, 'public.jobs', 'trigger')\n     or not has_table_privilege(current_user, 'public.job_live_locations', 'trigger')\n     or not has_schema_privilege(current_user, 'public', 'create') then", "  if false then"),
+    ('M25 stop also wipes other Pros\' points on the job', "              where l.pro_id = v_uid and (p_job_id is null or l.job_id = p_job_id) returning l.job_id)", "              where (l.pro_id = v_uid or p_job_id is not null) and (p_job_id is null or l.job_id = p_job_id) returning l.job_id)"),
+    ('M27 sign-out stop takes no jobs lock (LOW-1)', "     order by j.id\n       for no key update of j;\n", "     order by j.id;\n"),
+    ('M28 start ignores the stop marker (relaunch resumes after a stop)', "  if exists (select 1 from public.job_live_session_stops x where x.job_id = p_job_id and x.pro_id = v_uid) then", "  if false then"),
+    ('M29 stop writes no marker', "  select j.id, v_uid, now() from public.jobs j\n   where j.pro_id = v_uid and j.status = 'en_route'", "  select j.id, v_uid, now() from public.jobs j\n   where false and j.pro_id = v_uid and j.status = 'en_route'"),
+    ('M30 a new en_route leg keeps the old marker', "  delete from public.job_live_session_stops where job_id = new.id;\n", ""),
+    ('M31 start and stop(job) only FOR SHARE (no serialisation, LOW-3 back)', [
+        ("where j.id = p_job_id for no key update;\n  if not found or v_pro is distinct from v_uid then\n    return jsonb_build_object('ok', false, 'error', 'not_found');\n  end if;\n  if v_status", "where j.id = p_job_id for share;\n  if not found or v_pro is distinct from v_uid then\n    return jsonb_build_object('ok', false, 'error', 'not_found');\n  end if;\n  if v_status"),
+        ("    select j.pro_id into v_pro from public.jobs j where j.id = p_job_id for no key update;", "    select j.pro_id into v_pro from public.jobs j where j.id = p_job_id for share;")], None),
+    ('M32 sign-out skips en_route jobs that have no session yet', "                    union\n                    select k.id from public.jobs k where k.pro_id = v_uid and k.status = 'en_route')", ")"),
+    ('M33 sign-out marks only jobs it wiped', "   where j.pro_id = v_uid and j.status = 'en_route' and (p_job_id is null or j.id = p_job_id)", "   where j.pro_id = v_uid and j.status = 'en_route' and (p_job_id is null or j.id = p_job_id)\n     and exists (select 1 from public.job_live_sessions z where z.job_id = j.id)"),
+    ('M34 stop marker even off en_route', "   where j.pro_id = v_uid and j.status = 'en_route' and (p_job_id", "   where j.pro_id = v_uid and (p_job_id"),
+    ('M35 stops table readable by authenticated', "revoke all on table public.job_live_session_stops from public, anon, authenticated, service_role;", "revoke all on table public.job_live_session_stops from public, anon, service_role;\ngrant select on table public.job_live_session_stops to authenticated;"),
+    ('M36 resume keeps the stop marker', "  delete from public.job_live_session_stops x where x.job_id = p_job_id;\n", ""),
+    ('M37 resume skips the ownership check', "  -- same lock as start / stop: a resume and a stop on one job never interleave\n  select j.status, j.pro_id into v_status, v_pro from public.jobs j where j.id = p_job_id for no key update;\n  if not found or v_pro is distinct from v_uid then\n    return jsonb_build_object('ok', false, 'error', 'not_found');\n  end if;\n", "  select j.status, j.pro_id into v_status, v_pro from public.jobs j where j.id = p_job_id for no key update;\n"),
+    ('M38 resume on any status (after Arrived / cancel)', "  if v_status <> 'en_route' then\n    return jsonb_build_object('ok', false, 'error', 'tracking_not_active');\n  end if;\n  -- founder rule 2026-11-12 (t675u)", "  -- founder rule 2026-11-12 (t675u)"),
+    ('M39 resume keeps the old session id', "     set pro_id = excluded.pro_id, session_id = excluded.session_id, started_at = excluded.started_at;\n  return jsonb_build_object('ok', true, 'session_id', v_sid,", "     set pro_id = excluded.pro_id, session_id = s.session_id, started_at = excluded.started_at;\n  return jsonb_build_object('ok', true, 'session_id', v_sid,", 2),
+    ('M40 no expiry', "  if now() - v_idle_from > interval '30 minutes' then", "  if false then"),
+    ('M41 expiry counts from the start only (ignores later points)', "greatest(v_started, coalesce(max(l.received_at), v_started))", "coalesce(min(v_started), v_started)"),
+    ('M42 expiry writes no stop marker', "    insert into public.job_live_session_stops as x (job_id, pro_id, stopped_at)\n    values (p_job_id, v_uid, now())\n    on conflict (job_id) do update set pro_id = excluded.pro_id, stopped_at = excluded.stopped_at;\n", ""),
+    ('M43 expiry keeps the point', "    delete from public.job_live_locations l where l.job_id = p_job_id;\n", ""),
+    ('M44 writer takes the session row only FOR SHARE', "   where s.job_id = p_job_id and s.pro_id = v_uid and s.session_id = p_session_id\n     for update;", "   where s.job_id = p_job_id and s.pro_id = v_uid and s.session_id = p_session_id\n     for share;"),
+    ('M45 resume granted to anon', "grant execute on function public.pro_resume_live_location(uuid) to authenticated;", "grant execute on function public.pro_resume_live_location(uuid) to authenticated, anon;"),
+    ('M46 expiry limit 30 min -> 30 h', "  if now() - v_idle_from > interval '30 minutes' then", "  if now() - v_idle_from > interval '30 hours' then"),
+    ('M26 writer forgets to set the session GUC', "  perform set_config('haven.live_session_id', p_session_id::text, true);\n", ""),
+]
+FULL = {'M15', 'M23', 'M24'}
+NTH = {'M06': 1, 'M07': 1, 'M21': 1, 'M31': 1}   # start's copy (resume repeats these lines)
+
+
+def bodies(text):
+    return {m.group(1): hashlib.md5(m.group(2).replace('\r', '').encode()).hexdigest()
+            for m in re.finditer(r'create or replace function public\.(\w+)\(.*?\nas \$\$(.*?)\$\$;', text, re.S)}
+
+
+def main():
+    base = bodies(SRC)
+    killed = 0
+    only = [x for x in os.environ.get('HAVEN_MUTANTS', '').split(',') if x]
+    sel = [m for m in MUTANTS if not only or m[0].split()[0] in only]
+    for mt in sel:
+        name, old, new = mt[0], mt[1], mt[2]
+        pairs = old if isinstance(old, list) else [(old, new)]
+        text = SRC
+        for o, n in pairs:
+            # anchors shared by start and resume (t675u) are taken at their Nth occurrence (default 1 = start)
+            nth = mt[3] if len(mt) > 3 else NTH.get(name.split()[0], 0)
+            c = text.count(o)
+            if (nth == 0 and c != 1) or (nth and c < nth):
+                print(f'BROKEN {name}: anchor found {c} times'); sys.exit(2)
+            if nth:
+                i = -1
+                for _ in range(nth):
+                    i = text.index(o, i + 1)
+                text = text[:i] + n + text[i + len(o):]
+            else:
+                text = text.replace(o, n)
+        for fn, m in bodies(text).items():
+            if m != base[fn]:
+                text = text.replace(base[fn], m)
+        with tempfile.NamedTemporaryFile('w', suffix='.sql', delete=False, dir='/tmp', prefix='codey0037_mut_') as f:
+            f.write(text); path = f.name
+        env = dict(os.environ, HAVEN_0037=path, HAVEN_DB_PREFIX='codey0037_m%d' % os.getpid())
+        if name.split()[0] not in FULL:
+            env['HAVEN_QUICK'] = '1'
+        r = subprocess.run([sys.executable, '-B', MATRIX], env=env, capture_output=True, text=True)
+        os.unlink(path)
+        fails = [l for l in r.stdout.splitlines() if l.startswith('FAIL')]
+        errs = [l for l in (r.stdout + r.stderr).splitlines() if 'ERROR' in l]
+        how = (fails[0] if fails else errs[0] if errs else '')[:150]
+        ok = r.returncode != 0
+        killed += ok
+        print(f"{'KILLED' if ok else 'SURVIVED'} {name} -> {how}", flush=True)
+    print(f'\nMUTANTS killed {killed}/{len(sel)}')
+    sys.exit(0 if killed == len(sel) else 1)
+
+
+if __name__ == '__main__':
+    main()
