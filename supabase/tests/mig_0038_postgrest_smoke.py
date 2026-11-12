@@ -37,6 +37,11 @@ def run_checks():
     check('...signals C1 updated + P1 removed', S.signals(J1) == ','.join(sorted([f'{C1}/updated/cancelled', f'{P1}/removed/cancelled'])), S.signals(J1))
     s, b = call('GET', f'/jobs?id=eq.{J1}&select=id,status', 'P1')
     check('old Pro GET /jobs -> [] (no access)', s == 200 and b == [], [s, b])
+    check('...released Pro recorded owner-side (job_pro_releases)', owner_sql(f"select released_pro_id from public.job_pro_releases where job_id = '{J1}';") == P1)
+    for who in ('C1', 'P1', None, 'service_role'):
+        for tbl in (('job_pro_releases', 'job_status_events') if who != 'service_role' else ('job_pro_releases',)):   # server key may read events (0027)
+            s, b = call('GET', f'/{tbl}?select=*', who)
+            check(f'{who or "anon"} GET /{tbl} -> refused', s in (401, 403, 404), [s])
     s, b = call('GET', f'/jobs?id=eq.{J1}&select=id,status,pro_id', 'C1')
     check('Customer GET /jobs -> cancelled, pro_id null', s == 200 and b == [{'id': J1, 'status': 'cancelled', 'pro_id': None}], [s, b])
     s, b = call('POST', '/rpc/customer_cancel_job', 'C1', {'p_job_id': J1})

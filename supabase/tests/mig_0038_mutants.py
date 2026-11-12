@@ -16,8 +16,8 @@ MUTANTS = [
     ('N03 diagnosing allowed', "    when j.status in ('diagnosing', 'in_progress') then 'work_started'\n", "    when j.status = 'in_progress' then 'work_started'\n    when j.status = 'diagnosing' and j.pro_id is not null then null\n"),
     ('N04 payment_snapshot treated as money', "       or exists (select 1 from public.earnings_statements e where e.job_id = j.id) then", "       or exists (select 1 from public.earnings_statements e where e.job_id = j.id)\n       or (r ->> 'payment_snapshot') is not null then"),
     ('N05 Pro kept on the cancelled job', "set status = 'cancelled', cancelled_at = coalesce(cancelled_at, now()), pro_id = null, accepted_at = null", "set status = 'cancelled', cancelled_at = coalesce(cancelled_at, now()), accepted_at = null"),
-    ('N06 no status event', "  insert into public.job_status_events (job_id, from_status, to_status, actor_role, actor_id)\n  values (j.id, j.status, 'cancelled', 'customer', v_uid);\n", ""),
-    ('N07 event actor system', "values (j.id, j.status, 'cancelled', 'customer', v_uid);", "values (j.id, j.status, 'cancelled', 'system', null);"),
+    ('N06 no status event (and so no release row)', "  insert into public.job_status_events (job_id, from_status, to_status, actor_role, actor_id)\n  values (j.id, j.status, 'cancelled', 'customer', v_uid)\n  returning id into v_ev;\n  if j.pro_id is not null then\n    insert into public.job_pro_releases (event_id, job_id, released_pro_id) values (v_ev, j.id, j.pro_id);\n  end if;\n", ""),
+    ('N07 event actor system', "values (j.id, j.status, 'cancelled', 'customer', v_uid)\n  returning id into v_ev;", "values (j.id, j.status, 'cancelled', 'system', null)\n  returning id into v_ev;"),
     ('N08 EXECUTE to anon', "grant execute on function public.customer_cancel_job(uuid) to authenticated;", "grant execute on function public.customer_cancel_job(uuid) to authenticated, anon;"),
     ('N09 search_path not pinned', "volatile\nsecurity definer\nset search_path = pg_catalog, public, pg_temp\nas $$", "volatile\nsecurity definer\nas $$"),
     ('N10 tips ignored', "       or exists (select 1 from public.tips t where t.job_id = j.id and t.status <> 'not_added')\n", ""),
@@ -32,6 +32,11 @@ MUTANTS = [
     ('N18 inspection_completed allowed', "    when j.status = 'inspection_completed' then 'inspection_fee_due'\n", "    when j.status = 'inspection_completed' and j.pro_id is not null then null\n"),
     ('N19 approved amount ignored', "       or coalesce((r ->> 'materials_approved_cents')::numeric, 0) > 0\n       or (r ->> 'materials_approved_at') is not null then", " then"),
     ('N20 not_allowed when Pro missing ignored', "    when j.status in ('en_route', 'arrived') and j.pro_id is not null then null", "    when j.status in ('en_route', 'arrived') then null"),
+    ('N21 no released-Pro record', "  if j.pro_id is not null then\n    insert into public.job_pro_releases", "  if false then\n    insert into public.job_pro_releases"),
+    ('N22 released-Pro table readable by authenticated', "revoke all on table public.job_pro_releases from public, anon, authenticated, service_role;", "revoke all on table public.job_pro_releases from public, anon, service_role;\ngrant select on table public.job_pro_releases to authenticated;"),
+    ('N23 fee value alone refuses (arrived + inspection fee)', "    when j.status in ('en_route', 'arrived') and j.pro_id is not null then null", "    when j.status = 'arrived' and j.requires_diagnosis and j.inspection_fee_cents > 0 then 'inspection_fee_due'\n    when j.status in ('en_route', 'arrived') and j.pro_id is not null then null"),
+    ('N24 records the Customer as the released Pro', "values (v_ev, j.id, j.pro_id);", "values (v_ev, j.id, v_uid);"),
+    ('N25 released-Pro table without RLS', "alter table public.job_pro_releases enable row level security;", "alter table public.job_pro_releases disable row level security;"),
 ]
 FULL = {'N16'}
 
@@ -44,7 +49,9 @@ def body_md5(text):
 def main():
     base = body_md5(SRC)
     killed = 0
-    for name, old, new in MUTANTS:
+    only = [x for x in os.environ.get('HAVEN_MUTANTS', '').split(',') if x]
+    sel = [m for m in MUTANTS if not only or m[0].split()[0] in only]
+    for name, old, new in sel:
         if old not in SRC:
             print(f'BROKEN {name}: anchor not found'); sys.exit(2)
         text = SRC.replace(old, new, 1)
@@ -64,8 +71,8 @@ def main():
         ok = r.returncode != 0
         killed += ok
         print(f"{'KILLED' if ok else 'SURVIVED'} {name} -> {how}", flush=True)
-    print(f'\nMUTANTS killed {killed}/{len(MUTANTS)}')
-    sys.exit(0 if killed == len(MUTANTS) else 1)
+    print(f'\nMUTANTS killed {killed}/{len(sel)}')
+    sys.exit(0 if killed == len(sel) else 1)
 
 
 if __name__ == '__main__':

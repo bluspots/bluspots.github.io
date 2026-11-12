@@ -1,6 +1,6 @@
 -- Haven shared backend: Customer cancel, including after a Pro has accepted (MIG-0038)
 -- DRAFT. NOT APPLIED. Do not paste until the founder authorizes it in his own words.
--- Number: 0038 (0033 reserved for c-min; 0034/0035/0035a Founder Control Center; 0036 realtime job
+-- Number: 0038 (0033 retired, never written; 0034/0035/0035a Founder Control Center; 0036 realtime job
 -- signal; 0037 live-location sessions). Starting point: Hub PR #3
 -- backend/contracts/customer-cancel-job-PROPOSED-2026-11-10.md, option 1 ("cancel allowed after accept").
 --
@@ -9,9 +9,10 @@
 -- (read-only, row 000 LIVE). Rollback: supabase/rollback/0038_customer_cancel_job_rollback.sql.
 -- Works with or without 0036 / 0037 / 0034-0035a, in any order relative to them.
 --
--- WHAT IT ADDS: one function, public.customer_cancel_job(p_job_id uuid) returns jsonb.
--- No table, column, policy, trigger, grant on a table, or status value is added or changed, so no new
--- client UPDATE path is opened: the direct PATCH rules (0010 posted-only cancel, 0017 owner) stay exactly
+-- WHAT IT ADDS: one function, public.customer_cancel_job(p_job_id uuid) returns jsonb, and one owner-only
+-- table, public.job_pro_releases (t674): which Pro a cancel released. No column, policy, trigger, grant
+-- to a client role, or status value is added or changed on any existing table, so no new client UPDATE
+-- path is opened: the direct PATCH rules (0010 posted-only cancel, 0017 owner) stay exactly
 -- as they are. This is a deliberate privileged path (SECURITY DEFINER, owner of public.jobs), like 0035.
 --
 -- Rules:
@@ -32,6 +33,19 @@
 --     en_route, plus a direct delete here as belt and braces. 0037 (if applied) ends the live session by
 --     trigger. One job_status_events row (actor_role 'customer', actor_id = the Customer). The 0036 trigger
 --     (if applied) signals the Customer ('updated') and the released Pro ('removed'), both status cancelled.
+--   * Released Pro (t674): when the cancel releases a Pro, one row in public.job_pro_releases
+--     (event_id -> that job_status_events row, job_id, released_pro_id, at). Owner-only: RLS on, no
+--     policies, no client grants, not published. Why not job_status_events: it has no Pro column, and its
+--     read rules may open to the Customer later (job timeline); the Customer must never read the Pro's id.
+--     Readers today: the database owner / SQL editor (and a future admin RPC). OPEN: should the released
+--     Pro read their own rows?
+--   * Inspection fee (t674 definition, OPEN for the founder): a cancel is refused for the inspection only
+--     when a previously disclosed obligation is evidenced, and the schema's only evidence is that the
+--     inspection actually started (status diagnosing -> work_started, inspection_completed ->
+--     inspection_fee_due). A requires_diagnosis job with inspection_fee_cents > 0 that is en_route or
+--     arrived is NOT refused: the fee value alone is not an acceptance. There is no fee-acceptance column
+--     or event in the schema. If the founder wants "accepted at posting" to count, that needs a new,
+--     server-set acceptance timestamp first (a later migration).
 --   * No refund, fee, charge or payment logic of any kind.
 
 begin;
@@ -74,13 +88,33 @@ begin
      or not has_schema_privilege(current_user, 'public', 'create') then
     raise exception '0038: run as the database owner (postgres), not %. Nothing was changed.', current_user;
   end if;
+  if to_regclass('public.job_pro_releases') is not null
+     and ((select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull, ',' order by a.attnum)
+             from pg_attribute a where a.attrelid = to_regclass('public.job_pro_releases') and a.attnum > 0 and not a.attisdropped)
+            is distinct from 'event_id:bigint:true,job_id:uuid:true,released_pro_id:uuid:true,at:timestamp with time zone:true'
+          or exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'job_pro_releases')) then
+    raise exception '0038: public.job_pro_releases exists with other columns or with policies. Nothing was changed.';
+  end if;
   select md5(replace(p.prosrc, E'\r', '')) into v from pg_proc p where p.oid = to_regprocedure('public.customer_cancel_job(uuid)');
-  if v is not null and v <> '438c6938071e85d8812acc21ec701ea8' then
+  if v is not null and v <> 'f166ad02756be2a392a2cb1ecf510fe5' then
     raise exception '0038: public.customer_cancel_job(uuid) already exists with another body (md5 %). Send this to Codey. Nothing was changed.', v;
   end if;
 end $$;
 
--- ---------------------------------------------------------------- 1. the RPC
+-- ---------------------------------------------------------------- 1. released-Pro record (owner-only)
+create table if not exists public.job_pro_releases (
+  event_id        bigint primary key references public.job_status_events(id) on delete cascade,
+  job_id          uuid not null references public.jobs(id) on delete cascade,
+  released_pro_id uuid not null,
+  at              timestamptz not null default now()
+);
+create index if not exists job_pro_releases_job_idx on public.job_pro_releases(job_id);
+comment on table public.job_pro_releases is
+  'Which Pro a Customer cancel released (0038). Owner-only: RLS on, no policies, no client grants. The Customer never reads it.';
+alter table public.job_pro_releases enable row level security;
+revoke all on table public.job_pro_releases from public, anon, authenticated, service_role;
+
+-- ---------------------------------------------------------------- 2. the RPC
 create or replace function public.customer_cancel_job(p_job_id uuid)
 returns jsonb
 language plpgsql
@@ -94,6 +128,7 @@ declare
   r jsonb;
   v_err text;
   v_n int;
+  v_ev bigint;
 begin
   if v_uid is null then
     return jsonb_build_object('ok', false, 'error', 'not_authenticated');
@@ -142,7 +177,11 @@ begin
   end if;
   delete from public.job_live_locations where job_id = j.id;
   insert into public.job_status_events (job_id, from_status, to_status, actor_role, actor_id)
-  values (j.id, j.status, 'cancelled', 'customer', v_uid);
+  values (j.id, j.status, 'cancelled', 'customer', v_uid)
+  returning id into v_ev;
+  if j.pro_id is not null then
+    insert into public.job_pro_releases (event_id, job_id, released_pro_id) values (v_ev, j.id, j.pro_id);
+  end if;
   return jsonb_build_object('ok', true, 'status', 'cancelled', 'from_status', j.status,
                             'pro_released', j.pro_id is not null);
 end;
@@ -151,11 +190,23 @@ $$;
 revoke all on function public.customer_cancel_job(uuid) from public, anon, service_role;
 grant execute on function public.customer_cancel_job(uuid) to authenticated;
 
--- ---------------------------------------------------------------- 2. post-checks (any failure rolls back)
+-- ---------------------------------------------------------------- 3. post-checks (any failure rolls back)
 do $$
 begin
+  if to_regclass('public.job_pro_releases') is null
+     or (select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull, ',' order by a.attnum)
+           from pg_attribute a where a.attrelid = to_regclass('public.job_pro_releases') and a.attnum > 0 and not a.attisdropped)
+          is distinct from 'event_id:bigint:true,job_id:uuid:true,released_pro_id:uuid:true,at:timestamp with time zone:true'
+     or not (select relrowsecurity from pg_class where oid = 'public.job_pro_releases'::regclass)
+     or exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'job_pro_releases')
+     or has_table_privilege('anon', 'public.job_pro_releases', 'select, insert, update, delete')
+     or has_table_privilege('authenticated', 'public.job_pro_releases', 'select, insert, update, delete')
+     or has_table_privilege('service_role', 'public.job_pro_releases', 'select, insert, update, delete')
+     or exists (select 1 from pg_publication_tables where schemaname = 'public' and tablename = 'job_pro_releases') then
+    raise exception '0038 post-check: job_pro_releases must be owner-only (RLS on, no policies, no grants, no publication). Rolled back.';
+  end if;
   if not exists (select 1 from pg_proc p where p.oid = to_regprocedure('public.customer_cancel_job(uuid)')
-                    and md5(replace(p.prosrc, E'\r', '')) = '438c6938071e85d8812acc21ec701ea8'
+                    and md5(replace(p.prosrc, E'\r', '')) = 'f166ad02756be2a392a2cb1ecf510fe5'
                     and p.prosecdef and p.proconfig = array['search_path=pg_catalog, public, pg_temp']
                     and p.prorettype = 'jsonb'::regtype
                     and has_function_privilege('authenticated', p.oid, 'execute')

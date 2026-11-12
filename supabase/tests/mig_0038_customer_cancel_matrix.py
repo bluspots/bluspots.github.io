@@ -84,7 +84,8 @@ def setjob(db, status, pro=P1, extra='', job=J1, cust=C1):
     mat = ''.join(f', {c} = {v}' for c, v in (('materials_requested_at', 'null'), ('materials_approved_cents', 'null'), ('materials_approved_at', 'null'),
                                                ('materials_request_seq', '0'), ('materials_decided_seq', '0')) if c in cols)
     must(db, "begin;\nset local session_replication_role = replica;\n"
-             f"delete from public.job_status_events where job_id = '{job}';\n"
+             + (f"delete from public.job_pro_releases where job_id = '{job}';\n" if must(db, "select to_regclass('public.job_pro_releases') is not null;").strip() == 't' else '')
+             + f"delete from public.job_status_events where job_id = '{job}';\n"
              f"delete from public.materials_requests where job_id = '{job}'; delete from public.tips where job_id = '{job}';\n"
              f"delete from public.materials_receipts where job_id = '{job}'; delete from public.earnings_statements where job_id = '{job}';\n"
              f"delete from public.job_live_locations where job_id = '{job}';\n"
@@ -102,6 +103,13 @@ def row(db, job=J1):
 def events(db, job=J1):
     return json.loads(must(db, f"select coalesce(json_agg(json_build_object('from', from_status, 'to', to_status, 'role', actor_role, 'actor', actor_id) order by id), '[]') "
                                f"from public.job_status_events where job_id = '{job}';").strip())
+
+
+def releases(db, job=J1):
+    if must(db, "select to_regclass('public.job_pro_releases') is not null;").strip() != 't':
+        return None
+    return json.loads(must(db, "select coalesce(json_agg(json_build_object('pro', r.released_pro_id, 'event_to', e.to_status, 'event_actor', e.actor_id) order by r.event_id), '[]') "
+                               f"from public.job_pro_releases r join public.job_status_events e on e.id = r.event_id where r.job_id = '{job}';").strip())
 
 
 def add_point(db, job=J1, pro=P1):
@@ -125,6 +133,7 @@ def g_allowed(db):
     check('posted -> {ok, status cancelled, from posted, pro_released false}', res == {'ok': True, 'status': 'cancelled', 'from_status': 'posted', 'pro_released': False}, res)
     check('posted: row cancelled, cancelled_at set, no Pro', row(db) == {'status': 'cancelled', 'pro_id': None, 'accepted_at': False, 'cancelled_at': True}, row(db))
     check('posted: one event customer posted->cancelled by C1', events(db) == [{'from': 'posted', 'to': 'cancelled', 'role': 'customer', 'actor': C1}], events(db))
+    check('posted: no released-Pro record (no Pro)', releases(db) == [], releases(db))
     for st in ('en_route', 'arrived'):
         setjob(db, st)
         if st == 'en_route':
@@ -141,6 +150,7 @@ def g_allowed(db):
         check(f'{st} -> {{ok, cancelled, from {st}, pro_released true}}', res == {'ok': True, 'status': 'cancelled', 'from_status': st, 'pro_released': True}, res)
         check(f'{st}: row cancelled, Pro + accepted_at cleared, cancelled_at set', row(db) == {'status': 'cancelled', 'pro_id': None, 'accepted_at': False, 'cancelled_at': True}, row(db))
         check(f'{st}: exactly one event (customer, from {st})', events(db) == [{'from': st, 'to': 'cancelled', 'role': 'customer', 'actor': C1}], events(db))
+        check(f'{st}: released Pro P1 recorded (owner-only), linked to that event', releases(db) == [{'pro': P1, 'event_to': 'cancelled', 'event_actor': C1}], releases(db))
         check(f'{st}: live point gone', points(db) == 0)
         out, _ = q(db, 'P1', f"select count(*) from public.jobs where id = '{J1}';")
         check(f'{st}: old Pro can no longer read the job (RLS)', out == '0', out)
@@ -151,6 +161,19 @@ def g_allowed(db):
             check(f'{st}: old Pro live write -> not_found, no point', out == 'not_found' and points(db) == 0, out)
         out, _ = q(db, 'C1', f"select public.get_job_live_location('{J1}')->>'error';")
         check(f'{st}: Customer live view -> tracking_not_active', out == 'tracking_not_active', out)
+    # released-Pro record and job history are not readable by any app role
+    for w in ('C1', 'P1', 'P2'):
+        _, r = q(db, w, 'select count(*) from public.job_pro_releases;', stop=False)
+        check(f'{w} cannot read job_pro_releases (permission denied)', 'permission denied' in r.stderr, r.stderr[-100:])
+        _, r = q(db, w, 'select count(*) from public.job_status_events;', stop=False)
+        check(f'{w} cannot read job_status_events (0027: RLS on, no grants)', 'permission denied' in r.stderr, r.stderr[-100:])
+    # inspection fee value alone is not an obligation (t674 definition; OPEN for the founder)
+    for st in ('en_route', 'arrived'):
+        setjob(db, st, extra=f"update public.jobs set requires_diagnosis = true, inspection_fee_cents = 4500 where id = '{J1}';")
+        res = cancel(db, 'C1', J1)
+        check(f'{st} + requires_diagnosis + inspection_fee_cents 4500 (not started) -> allowed', res.get('ok') is True and res.get('from_status') == st, res)
+    setjob(db, 'diagnosing', extra=f"update public.jobs set requires_diagnosis = true, inspection_fee_cents = 4500 where id = '{J1}';")
+    check('inspection started (diagnosing) -> refused work_started', cancel(db, 'C1', J1) == {'ok': False, 'error': 'work_started', 'status': 'diagnosing'})
     # payment_snapshot is not a money signal
     setjob(db, 'en_route', extra=f"update public.jobs set payment_snapshot = '{{\"brand\":\"visa\",\"last4\":\"4242\"}}' where id = '{J1}';")
     check('payment_snapshot set (placeholder) does NOT block', cancel(db, 'C1', J1).get('ok') is True)
@@ -196,7 +219,13 @@ def g_refusals(db):
     ]
     if 'materials_request_seq' in must(db, "select string_agg(attname, ',') from pg_attribute where attrelid = 'public.jobs'::regclass;"):
         cases.append(('arrived', P1, f"update public.jobs set materials_request_seq = 1, materials_decided_seq = 0 where id = '{J1}';", 'materials_pending'))
+    cols = must(db, "select string_agg(attname, ',') from pg_attribute where attrelid = 'public.jobs'::regclass and not attisdropped;").strip().split(',')
+    skipped = [c for c in cases if 'materials_approved_cents' in c[2] and 'materials_approved_cents' not in cols]
+    if skipped:
+        print(f'   (no 0025 columns on this stack: {len(skipped)} materials_approved_cents case skipped)')
     for st, pro, extra, want in cases:
+        if (st, pro, extra, want) in skipped:
+            continue
         setjob(db, st, pro=pro, extra=extra)
         if st == 'en_route' and pro:
             add_point(db)
@@ -353,16 +382,16 @@ def g_checks(prefix):
         rows = [l.split('|') for l in r.stdout.strip().splitlines() if '|' in l]
         return r.returncode, rows
     rc, rows = run(CHK_A)
-    check('0038a before: READY (6 of 6)', rc == 0 and rows[0][1] == 'READY (6 of 6)', rows[:1])
+    check('0038a before: READY (7 of 7)', rc == 0 and rows[0][1] == 'READY (7 of 7)', rows[:1])
     rc, rows = run(CHK_B)
     check('0038b before: NOT LIVE', rc == 0 and rows[0][1].startswith('NOT LIVE'), rows[:1])
     apply_0038(db)
     rc, rows = run(CHK_A)
-    check('0038a after: READY: already applied (6 of 6)', rows[0][1] == 'READY: already applied (6 of 6)', rows[:1])
+    check('0038a after: READY: already applied (7 of 7)', rows[0][1] == 'READY: already applied (7 of 7)', rows[:1])
     rc, rows = run(CHK_B)
-    check('0038b after: LIVE (5 of 5)', rows[0][1] == 'LIVE (5 of 5)', rows)
+    check('0038b after: LIVE (6 of 6)', rows[0][1] == 'LIVE (6 of 6)', rows)
     rc, rows = run(CHK_B, b.crlf(open(CHK_B).read()))
-    check('0038b CRLF copy reads the same', rows[0][1] == 'LIVE (5 of 5)')
+    check('0038b CRLF copy reads the same', rows[0][1] == 'LIVE (6 of 6)')
     must(db, 'grant execute on function public.customer_cancel_job(uuid) to anon;')
     rc, rows = run(CHK_B)
     check('0038b catches an anon grant', rows[0][1].startswith('NOT LIVE'))

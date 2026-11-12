@@ -1,10 +1,11 @@
 -- Haven: preflight before pasting 0038 (customer_cancel_job). READ-ONLY (one SELECT, catalogs only).
--- Paste the whole file into the Supabase SQL editor and Run. Row 00 must say READY (6 of 6) before
+-- Paste the whole file into the Supabase SQL editor and Run. Row 00 must say READY (7 of 7) before
 -- the paste, or "READY: already applied" after it. NOT READY: stop and send the whole output to Codey.
 -- md5 is CR-insensitive: md5(replace(prosrc, E'\r', '')).
 -- Hard rows: 01 jobs columns; 02 job_status values; 03 job_status_events columns + actor_role allows
 --   'customer'; 04 money/materials tables + job_live_locations exist; 05 SQL editor role bypasses RLS and
---   can CREATE in public; 06 customer_cancel_job absent or exactly 0038.
+--   can CREATE in public; 06 customer_cancel_job absent or exactly 0038;
+--   07 job_pro_releases absent or exactly 0038 (t674).
 -- INFO rows (never block): 90 triggers on jobs, 91 0036 / 0037 present, 92 actor_role check,
 --   93 one_active_job_per_pro predicate, 94 jobs UPDATE policies (unchanged by 0038).
 with
@@ -34,9 +35,16 @@ hard(n, label, ok, detail) as (
   ('05', 'SQL editor role bypasses RLS and can CREATE in public',
          exists (select 1 from pg_roles where rolname = current_user and (rolsuper or rolbypassrls)) and has_schema_privilege(current_user, 'public', 'create'),
          'current_user=' || current_user),
-  ('06', 'customer_cancel_job absent or exactly 0038 (md5 438c6938071e85d8812acc21ec701ea8)',
-         not exists (select 1 from fn) or (select m from fn) = '438c6938071e85d8812acc21ec701ea8',
-         coalesce((select m from fn), 'absent'))
+  ('06', 'customer_cancel_job absent or exactly 0038 (md5 f166ad02756be2a392a2cb1ecf510fe5)',
+         not exists (select 1 from fn) or (select m from fn) = 'f166ad02756be2a392a2cb1ecf510fe5',
+         coalesce((select m from fn), 'absent')),
+  ('07', 'job_pro_releases absent, or exactly the 0038 owner-only table',
+         to_regclass('public.job_pro_releases') is null
+         or (coalesce((select string_agg(a.attname || ':' || format_type(a.atttypid, a.atttypmod) || ':' || a.attnotnull, ',' order by a.attnum)
+                         from pg_attribute a where a.attrelid = to_regclass('public.job_pro_releases') and a.attnum > 0 and not a.attisdropped)
+                      = 'event_id:bigint:true,job_id:uuid:true,released_pro_id:uuid:true,at:timestamp with time zone:true', false)
+             and not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'job_pro_releases')),
+         case when to_regclass('public.job_pro_releases') is null then 'absent' else 'present' end)
 ),
 info(n, label, detail) as (
   values
