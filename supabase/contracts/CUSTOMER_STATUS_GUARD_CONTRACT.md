@@ -40,8 +40,9 @@ v2 (t676) also closes Quagon's #101 review findings:
 - The job board (`jobs_posted_within_radius`): a Customer who has set an operating point may still **see** their own posted job there, but they can't claim it.
 
 ## Known effect on the Founder Control Center fingerprint
-- `haven_admin.baseline_mismatches()` (0035) pins `pg_get_functiondef` of the 0030 `pro_claim_job`. After 0039 it reports `public.pro_claim_job(uuid) (changed)`. This is expected.
-- It is read only when 0035 is pasted (already done) and by the read-only FCC verify probe.
+- `haven_admin.baseline_mismatches()` (0035) pins `pg_get_functiondef` of the 0030 `pro_claim_job` (`f6edbf47224d21c578758d3b7c6b89a2`). After 0039 it reports `public.pro_claim_job(uuid) (changed)`. This is an expected, explained mismatch. Production `baseline_mismatches()` itself is not changed: there is no migration for it.
+- After 0039, use the versioned read-only probe `/workspace/codey-cc-review/probe/founder_0034_0035_verify_v2_READ_ONLY.sql` (sha256 `44391de04a0ed8f5a8cde39762793a477a46ebbf850469f11a8058ee01ef345e`). It is catalog-only, in a rolled-back read-only transaction, and accepts either the 0030 body (`789cb65e77775da031012f78227d76ad`) or the 0039 body (`f72dcd37731bf7379803e9be680d70f0`), labelling which one is present: `VERIFIED (40 of 40); pro_claim_job body = 0030` or `0039`. A foreign body is `NOT VERIFIED`.
+- The original probe `founder_0034_0035_verify_READ_ONLY.sql` (sha256 `6ce2471b40bdf20b76f6d30340510e3c54031beb9f264615e9dd20c47e9372a8`) still reads `VERIFIED (38 of 38)` after 0039, because it does not inspect `pro_claim_job`.
 - The rollback restores the exact 0030 body, and the fingerprint is clean again (tested).
 
 ## OPEN for the founder
