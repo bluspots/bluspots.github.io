@@ -4565,23 +4565,40 @@ function App() {
   const vjTotal = vjTask ? (vj?.lockedPrice ?? vjTask.p) + (vj?.surge || 0) + (vj?.emergencyFee || 0) : 0;
   const liveTrackJobId = scr === "tracking" && isAppVisible && havenAuth && vj && vj.backendJobId && vj.status === "en_route" ? String(vj.backendJobId) : null;
   const [liveLoc, setLiveLoc] = useState(null);
+  const liveLocKickRef = useRef(null);
   useEffect(() => {
     setLiveLoc(null);
     if (!liveTrackJobId) return;
-    let cancelled = false, timer = null;
+    let cancelled = false, timer = null, reading = false;
     setLiveLoc({ jobId: liveTrackJobId, state: "loading" });
     const tick = async () => {
       timer = null;
+      reading = true;
       const r = await fetchJobLiveLocation(liveTrackJobId);
+      reading = false;
       if (cancelled) return;
       setLiveLoc({ jobId: liveTrackJobId, ...r });
+      if (timer) return;
       if (r.state === "ended" || r.state === "unavailable") return;
       timer = setTimeout(tick, r.state === "network" ? HAVEN_LIVE_RETRY_MS : HAVEN_LIVE_POLL_MS);
+    };
+    liveLocKickRef.current = () => {
+      if (cancelled) return;
+      if (timer) {
+        clearTimeout(timer);
+        timer = null;
+      }
+      if (reading) {
+        timer = setTimeout(tick, 0);
+        return;
+      }
+      tick();
     };
     tick();
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      liveLocKickRef.current = null;
       setLiveLoc(null);
     };
   }, [liveTrackJobId]);
@@ -5023,7 +5040,9 @@ function App() {
     };
   }, [scr, tab]);
   const jobSignalRefetchRef = useRef(null);
-  jobSignalRefetchRef.current = async () => {
+  jobSignalRefetchRef.current = async (batch) => {
+    const tracked = liveTrackJobId ? String(liveTrackJobId).toLowerCase() : null;
+    if (tracked && batch && Array.isArray(batch.signals) && batch.signals.some((s) => s && s.jobId === tracked) && liveLocKickRef.current) liveLocKickRef.current();
     await hydrateMyJobs({ soft: true });
   };
   const jobSignalRef = useRef(null);

@@ -20,6 +20,9 @@
  *  7.  Foreground and back online re-read; the payload is never trusted
  *      (a signal with a false status changes nothing the server didn't say).
  *  8.  Sign-out removes the channel; another account joins only its own.
+ *  9.  0037 §5: a job_changed for the job being tracked (the Pro stopped sharing,
+ *      signed out or the session expired) re-reads the Pro's location at once,
+ *      not at the next 10 s poll; a signal for another job does not.
  * fetch and Realtime are mocked. A mock is never certification: Quagon
  * certifies against the real backend once 0036 is applied.
  */
@@ -98,6 +101,7 @@ const JOB = (n) => '5eed0000-0000-4000-8000-0000000000' + String(n).padStart(2, 
 let rowsByCustomer = {};
 let readCount = 0;
 let readFail = false;
+let liveReads = 0; // get_job_live_location calls (0037 §5)
 function row(id, customer, extra) {
   return {
     id, status: 'en_route', customer_id: customer, pro_id: P_ID,
@@ -114,6 +118,7 @@ global.fetch = async (url, opts) => {
   const ok = (body) => ({ ok: true, status: 200, json: async () => body, text: async () => JSON.stringify(body) });
   if (u.endsWith('/auth/v1/health')) return ok({});
   if (u.includes('/rest/v1/rpc/is_qa_tester')) return ok(false);
+  if (u.includes('/rest/v1/rpc/get_job_live_location')) { liveReads++; return ok({ ok: true, available: false, reason: 'waiting' }); }
   if (u.includes('/rest/v1/rpc/')) return ok({});
   if (u.includes('/rest/v1/jobs')) {
     const m = u.match(/customer_id=eq\.([0-9a-f-]+)/i);
@@ -337,6 +342,23 @@ async function openTracking() {
   await waitFor(() => liveChan() && liveChan().topic === 'jobs:user:' + Y_ID, 'Y channel after switch');
   const iRem = rt.log.lastIndexOf('remove:jobs:user:' + X_ID), iY = rt.log.lastIndexOf('channel:jobs:user:' + Y_ID);
   assert(xc.removed && iRem >= 0 && iRem < iY, 'account switch: removeChannel(X) before joining Y');
+
+  console.log('9. 0037: a stop signal re-reads the tracked location at once:');
+  rowsByCustomer = { [X_ID]: [row(JOB(9), X_ID)] };
+  await boot(X_ID);
+  await waitFor(() => liveChan() && liveChan().topic === 'jobs:user:' + X_ID, 'X channel (9)');
+  await openTracking();
+  await waitFor(() => liveReads > 0, 'first location read on Tracking');
+  await settle(300);
+  let liveBefore = liveReads;
+  await emit({ v: 1, id: 'stop9', job_id: JOB(9), status: 'en_route', reason: 'updated', at: '2026-11-28T12:00:00.000Z' });
+  await settle(900); // 400 ms debounce, well under the 10 s poll
+  assert(liveReads === liveBefore + 1, 'job_changed for the tracked job → one immediate get_job_live_location');
+  assert(/Waiting for the Pro's location/.test(bodyText()), 'with no point the card says it is waiting (no stale pin)');
+  liveBefore = liveReads;
+  await emit({ v: 1, id: 'other9', job_id: JOB(8), status: 'en_route', reason: 'updated', at: '2026-11-28T12:00:01.000Z' });
+  await settle(900);
+  assert(liveReads === liveBefore, 'a signal for another job does not re-read this location');
 
   cleanup();
   console.log(`\n--- Live job updates: ${pass} passing, ${fail} failing ---`);
