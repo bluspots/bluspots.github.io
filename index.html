@@ -1428,22 +1428,23 @@ const postCanonicalJob = async (payload) => {
     return null;
   }
 };
-const updateCanonicalJob = async (backendJobId, fields) => {
+const updateCanonicalJobResult = async (backendJobId, fields) => {
   const cfg = getSupabaseConfig();
-  if (!cfg || !backendJobId) return false;
+  const failed = { ok: false, kind: "failed" };
+  if (!cfg || !backendJobId) return failed;
   if (havenJobWriteSessionMissing()) {
     console.warn("Haven: job update skipped. No signed-in session, so the demo customer and anon bearer are not sent.");
-    return false;
+    return failed;
   }
   if (havenSignedInUpdateStampsDemoCustomer(fields)) {
     console.warn("Haven: signed-in job update refused the demo customer id.");
-    return false;
+    return failed;
   }
   const headers = havenJobRestHeaders({
     "Content-Type": "application/json",
     "Prefer": "return=representation"
   });
-  if (!headers) return false;
+  if (!headers) return failed;
   try {
     const res = await fetch(`${cfg.url}/rest/v1/jobs?id=eq.${backendJobId}`, {
       method: "PATCH",
@@ -1453,7 +1454,7 @@ const updateCanonicalJob = async (backendJobId, fields) => {
     if (!res.ok) {
       const text = await res.text().catch(() => "(no body)");
       console.warn("Haven CHUNK3 update failed:", res.status, text);
-      return false;
+      return res.status === 403 ? { ok: false, kind: "refused" } : failed;
     }
     let rows = [];
     try {
@@ -1463,22 +1464,23 @@ const updateCanonicalJob = async (backendJobId, fields) => {
     }
     if (!Array.isArray(rows) || rows.length === 0) {
       console.warn("Haven CHUNK3 update returned no row; not treating as landed.");
-      return false;
+      return { ok: false, kind: "not_applied" };
     }
     const wantStatus = fields && Object.prototype.hasOwnProperty.call(fields, "status") ? String(fields.status) : "";
     if (wantStatus) {
       const landed = rows.some((r) => r && String(r.id).toLowerCase() === String(backendJobId).toLowerCase() && String(r.status) === wantStatus);
       if (!landed) {
         console.warn("Haven CHUNK3 update returned no matching status row; not treating as landed.");
-        return false;
+        return { ok: false, kind: "not_applied" };
       }
     }
-    return true;
+    return { ok: true };
   } catch (err) {
     console.warn("Haven CHUNK3 update error:", err);
-    return false;
+    return failed;
   }
 };
+const updateCanonicalJob = async (backendJobId, fields) => (await updateCanonicalJobResult(backendJobId, fields)).ok;
 const HAVEN_RECEIPT_JOB_COLUMNS = "fixed_customer_labor_price_cents,emergency_fee_cents,tip_amount_cents";
 const HAVEN_MATERIALS_APPROVED_COLUMN = "materials_approved_cents";
 let havenMaterialsApprovedColumnUnavailable = false;
@@ -5923,12 +5925,18 @@ function App() {
     const cfg = getSupabaseConfig();
     {
       const when = (/* @__PURE__ */ new Date()).toISOString();
-      const ok = cfg && vj?.backendJobId ? await updateCanonicalJob(vj.backendJobId, { status: "cancelled", cancelled_at: when }) : false;
-      if (!ok) {
+      const res = cfg && vj?.backendJobId ? await updateCanonicalJobResult(vj.backendJobId, { status: "cancelled", cancelled_at: when }) : { ok: false, kind: "failed" };
+      if (!res.ok) {
         console.warn("Haven: cancel sync failed; not advancing locally.");
         setShowCancelConfirm(false);
-        setWriteSyncNotice("Couldn't cancel the job — try again");
-        setTimeout(() => setWriteSyncNotice(""), 2500);
+        if (res.kind === "refused" || res.kind === "not_applied") {
+          setWriteSyncNotice("This job can't be cancelled here anymore. A Pro may have just accepted it. Your booking has been refreshed.");
+          setTimeout(() => setWriteSyncNotice(""), 4e3);
+          hydrateMyJobs({ soft: true });
+        } else {
+          setWriteSyncNotice("Couldn't cancel the job — try again");
+          setTimeout(() => setWriteSyncNotice(""), 2500);
+        }
         return;
       }
     }
@@ -5948,9 +5956,15 @@ function App() {
     if (!vj) return;
     const cfg = getSupabaseConfig();
     {
-      const patched = cfg && vj.backendJobId ? await updateCanonicalJob(vj.backendJobId, { status: "materials_approved" }) : false;
-      if (!patched) {
+      const res = cfg && vj.backendJobId ? await updateCanonicalJobResult(vj.backendJobId, { status: "materials_approved" }) : { ok: false, kind: "failed" };
+      if (!res.ok) {
         console.warn("Haven: materials approval sync failed; not advancing locally.");
+        if (res.kind === "refused" || res.kind === "not_applied") {
+          setWriteSyncNotice("This materials request has already been answered or has changed. Your booking has been refreshed.");
+          setTimeout(() => setWriteSyncNotice(""), 4e3);
+          hydrateMyJobs({ soft: true });
+          return;
+        }
         setShowApproveSyncFailed(true);
         setTimeout(() => setShowApproveSyncFailed(false), 2500);
         return;
@@ -5966,10 +5980,16 @@ function App() {
     const extraFields = isDiag ? {} : { convenience_fee_cents: 3e3 };
     const cfg = getSupabaseConfig();
     {
-      const patched = cfg && vj.backendJobId ? await updateCanonicalJob(vj.backendJobId, { status: nextStatus, ...extraFields }) : false;
-      if (!patched) {
+      const res = cfg && vj.backendJobId ? await updateCanonicalJobResult(vj.backendJobId, { status: nextStatus, ...extraFields }) : { ok: false, kind: "failed" };
+      if (!res.ok) {
         console.warn("Haven: materials decline sync failed; not advancing locally.");
         setShowMaterialsDeclineConfirm(false);
+        if (res.kind === "refused" || res.kind === "not_applied") {
+          setWriteSyncNotice("This materials request has already been answered or has changed. Your booking has been refreshed.");
+          setTimeout(() => setWriteSyncNotice(""), 4e3);
+          hydrateMyJobs({ soft: true });
+          return;
+        }
         setWriteSyncNotice("Couldn't decline materials — try again");
         setTimeout(() => setWriteSyncNotice(""), 2500);
         return;

@@ -186,22 +186,29 @@
   };
   // Prototype PATCH helper — updates fields on jobs by backend UUID.
   // Slice 5: a 2xx with no returned row is a failed write. Do not treat it as landed.
-  const updateCanonicalJob=async(backendJobId,fields)=>{
+  // -> { ok:true } | { ok:false, kind } where kind is
+  //    "refused"     the server refused the change on purpose (0029 / 0039
+  //                  triggers: SQLSTATE 42501 → HTTP 403): final, don't retry
+  //    "not_applied" 2xx but no matching row: the row no longer matches (for
+  //                  example a Pro accepted the job first): final, re-read
+  //    "failed"      no session / config, network or server error: may retry
+  const updateCanonicalJobResult=async(backendJobId,fields)=>{
     const cfg=getSupabaseConfig();
-    if(!cfg||!backendJobId) return false;
+    const failed={ok:false,kind:"failed"};
+    if(!cfg||!backendJobId) return failed;
     if(havenJobWriteSessionMissing()){
       console.warn("Haven: job update skipped. No signed-in session, so the demo customer and anon bearer are not sent.");
-      return false;
+      return failed;
     }
     if(havenSignedInUpdateStampsDemoCustomer(fields)){
       console.warn("Haven: signed-in job update refused the demo customer id.");
-      return false;
+      return failed;
     }
     const headers=havenJobRestHeaders({
       "Content-Type":"application/json",
       "Prefer":"return=representation",
     });
-    if(!headers) return false;
+    if(!headers) return failed;
     try{
       const res=await fetch(`${cfg.url}/rest/v1/jobs?id=eq.${backendJobId}`,{
         method:"PATCH",
@@ -211,28 +218,29 @@
       if(!res.ok){
         const text=await res.text().catch(()=>"(no body)");
         console.warn("Haven CHUNK3 update failed:", res.status, text);
-        return false;
+        return res.status===403?{ok:false,kind:"refused"}:failed;
       }
       let rows=[];
       try{ rows=await res.json(); }catch{ rows=[]; }
       if(!Array.isArray(rows) || rows.length===0){
         console.warn("Haven CHUNK3 update returned no row; not treating as landed.");
-        return false;
+        return {ok:false,kind:"not_applied"};
       }
       const wantStatus=fields && Object.prototype.hasOwnProperty.call(fields,"status") ? String(fields.status) : "";
       if(wantStatus){
         const landed=rows.some(r=>r && String(r.id).toLowerCase()===String(backendJobId).toLowerCase() && String(r.status)===wantStatus);
         if(!landed){
           console.warn("Haven CHUNK3 update returned no matching status row; not treating as landed.");
-          return false;
+          return {ok:false,kind:"not_applied"};
         }
       }
-      return true;
+      return {ok:true};
     }catch(err){
       console.warn("Haven CHUNK3 update error:", err);
-      return false;
+      return failed;
     }
   };
+  const updateCanonicalJob=async(backendJobId,fields)=>(await updateCanonicalJobResult(backendJobId,fields)).ok;
 
   // Phase 1B item B: receipt amounts. The in-app receipt, the PDF and the
   // share text read only these stored public.jobs columns (0001 / 0008 / 0025):

@@ -3355,14 +3355,23 @@ export default function App(){
     // or no backend job id does not cancel locally (Phase 1B A1: no demo path).
     {
       const when=new Date().toISOString();
-      const ok = cfg && vj?.backendJobId
-        ? await updateCanonicalJob(vj.backendJobId,{status:"cancelled",cancelled_at:when})
-        : false;
-      if(!ok){
+      const res = cfg && vj?.backendJobId
+        ? await updateCanonicalJobResult(vj.backendJobId,{status:"cancelled",cancelled_at:when})
+        : {ok:false,kind:"failed"};
+      if(!res.ok){
         console.warn("Haven: cancel sync failed; not advancing locally.");
         setShowCancelConfirm(false);
-        setWriteSyncNotice("Couldn't cancel the job — try again");
-        setTimeout(()=>setWriteSyncNotice(""),2500);
+        if(res.kind==="refused"||res.kind==="not_applied"){
+          // The server said no (0039: a Customer cancels directly only while the
+          // job is posted with no Pro). Most often a Pro accepted it a moment
+          // ago: re-read so the screen shows where the job really is.
+          setWriteSyncNotice("This job can't be cancelled here anymore. A Pro may have just accepted it. Your booking has been refreshed.");
+          setTimeout(()=>setWriteSyncNotice(""),4000);
+          hydrateMyJobs({soft:true});
+        }else{
+          setWriteSyncNotice("Couldn't cancel the job — try again");
+          setTimeout(()=>setWriteSyncNotice(""),2500);
+        }
         return;
       }
     }
@@ -3383,11 +3392,19 @@ export default function App(){
     // Fail closed. A failed or missing PATCH must not local-advance, or Pro
     // never sees the approval. Phase 1B A1: no config / no backend id fails too.
     {
-      const patched = cfg && vj.backendJobId
-        ? await updateCanonicalJob(vj.backendJobId,{status:"materials_approved"})
-        : false;
-      if(!patched){
+      const res = cfg && vj.backendJobId
+        ? await updateCanonicalJobResult(vj.backendJobId,{status:"materials_approved"})
+        : {ok:false,kind:"failed"};
+      if(!res.ok){
         console.warn("Haven: materials approval sync failed; not advancing locally.");
+        if(res.kind==="refused"||res.kind==="not_applied"){
+          // 0026 / 0029: only an open request can be answered. It was already
+          // answered or changed: re-read instead of asking to try again.
+          setWriteSyncNotice("This materials request has already been answered or has changed. Your booking has been refreshed.");
+          setTimeout(()=>setWriteSyncNotice(""),4000);
+          hydrateMyJobs({soft:true});
+          return;
+        }
         setShowApproveSyncFailed(true);
         setTimeout(()=>setShowApproveSyncFailed(false),2500);
         return;
@@ -3404,12 +3421,18 @@ export default function App(){
     const cfg=getSupabaseConfig();
     // Same bar as approve: the backend must accept the write first.
     {
-      const patched = cfg && vj.backendJobId
-        ? await updateCanonicalJob(vj.backendJobId,{status:nextStatus, ...extraFields})
-        : false;
-      if(!patched){
+      const res = cfg && vj.backendJobId
+        ? await updateCanonicalJobResult(vj.backendJobId,{status:nextStatus, ...extraFields})
+        : {ok:false,kind:"failed"};
+      if(!res.ok){
         console.warn("Haven: materials decline sync failed; not advancing locally.");
         setShowMaterialsDeclineConfirm(false);
+        if(res.kind==="refused"||res.kind==="not_applied"){
+          setWriteSyncNotice("This materials request has already been answered or has changed. Your booking has been refreshed.");
+          setTimeout(()=>setWriteSyncNotice(""),4000);
+          hydrateMyJobs({soft:true});
+          return;
+        }
         setWriteSyncNotice("Couldn't decline materials — try again");
         setTimeout(()=>setWriteSyncNotice(""),2500);
         return;

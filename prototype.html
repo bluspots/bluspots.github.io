@@ -1181,22 +1181,29 @@ const HAVEN_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
   };
   // Prototype PATCH helper — updates fields on jobs by backend UUID.
   // Slice 5: a 2xx with no returned row is a failed write. Do not treat it as landed.
-  const updateCanonicalJob=async(backendJobId,fields)=>{
+  // -> { ok:true } | { ok:false, kind } where kind is
+  //    "refused"     the server refused the change on purpose (0029 / 0039
+  //                  triggers: SQLSTATE 42501 → HTTP 403): final, don't retry
+  //    "not_applied" 2xx but no matching row: the row no longer matches (for
+  //                  example a Pro accepted the job first): final, re-read
+  //    "failed"      no session / config, network or server error: may retry
+  const updateCanonicalJobResult=async(backendJobId,fields)=>{
     const cfg=getSupabaseConfig();
-    if(!cfg||!backendJobId) return false;
+    const failed={ok:false,kind:"failed"};
+    if(!cfg||!backendJobId) return failed;
     if(havenJobWriteSessionMissing()){
       console.warn("Haven: job update skipped. No signed-in session, so the demo customer and anon bearer are not sent.");
-      return false;
+      return failed;
     }
     if(havenSignedInUpdateStampsDemoCustomer(fields)){
       console.warn("Haven: signed-in job update refused the demo customer id.");
-      return false;
+      return failed;
     }
     const headers=havenJobRestHeaders({
       "Content-Type":"application/json",
       "Prefer":"return=representation",
     });
-    if(!headers) return false;
+    if(!headers) return failed;
     try{
       const res=await fetch(`${cfg.url}/rest/v1/jobs?id=eq.${backendJobId}`,{
         method:"PATCH",
@@ -1206,28 +1213,29 @@ const HAVEN_PUBLIC_SUPABASE_ANON_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ
       if(!res.ok){
         const text=await res.text().catch(()=>"(no body)");
         console.warn("Haven CHUNK3 update failed:", res.status, text);
-        return false;
+        return res.status===403?{ok:false,kind:"refused"}:failed;
       }
       let rows=[];
       try{ rows=await res.json(); }catch{ rows=[]; }
       if(!Array.isArray(rows) || rows.length===0){
         console.warn("Haven CHUNK3 update returned no row; not treating as landed.");
-        return false;
+        return {ok:false,kind:"not_applied"};
       }
       const wantStatus=fields && Object.prototype.hasOwnProperty.call(fields,"status") ? String(fields.status) : "";
       if(wantStatus){
         const landed=rows.some(r=>r && String(r.id).toLowerCase()===String(backendJobId).toLowerCase() && String(r.status)===wantStatus);
         if(!landed){
           console.warn("Haven CHUNK3 update returned no matching status row; not treating as landed.");
-          return false;
+          return {ok:false,kind:"not_applied"};
         }
       }
-      return true;
+      return {ok:true};
     }catch(err){
       console.warn("Haven CHUNK3 update error:", err);
-      return false;
+      return failed;
     }
   };
+  const updateCanonicalJob=async(backendJobId,fields)=>(await updateCanonicalJobResult(backendJobId,fields)).ok;
 
   // Phase 1B item B: receipt amounts. The in-app receipt, the PDF and the
   // share text read only these stored public.jobs columns (0001 / 0008 / 0025):
@@ -5679,14 +5687,23 @@ function App(){
     // or no backend job id does not cancel locally (Phase 1B A1: no demo path).
     {
       const when=new Date().toISOString();
-      const ok = cfg && vj?.backendJobId
-        ? await updateCanonicalJob(vj.backendJobId,{status:"cancelled",cancelled_at:when})
-        : false;
-      if(!ok){
+      const res = cfg && vj?.backendJobId
+        ? await updateCanonicalJobResult(vj.backendJobId,{status:"cancelled",cancelled_at:when})
+        : {ok:false,kind:"failed"};
+      if(!res.ok){
         console.warn("Haven: cancel sync failed; not advancing locally.");
         setShowCancelConfirm(false);
-        setWriteSyncNotice("Couldn't cancel the job — try again");
-        setTimeout(()=>setWriteSyncNotice(""),2500);
+        if(res.kind==="refused"||res.kind==="not_applied"){
+          // The server said no (0039: a Customer cancels directly only while the
+          // job is posted with no Pro). Most often a Pro accepted it a moment
+          // ago: re-read so the screen shows where the job really is.
+          setWriteSyncNotice("This job can't be cancelled here anymore. A Pro may have just accepted it. Your booking has been refreshed.");
+          setTimeout(()=>setWriteSyncNotice(""),4000);
+          hydrateMyJobs({soft:true});
+        }else{
+          setWriteSyncNotice("Couldn't cancel the job — try again");
+          setTimeout(()=>setWriteSyncNotice(""),2500);
+        }
         return;
       }
     }
@@ -5707,11 +5724,19 @@ function App(){
     // Fail closed. A failed or missing PATCH must not local-advance, or Pro
     // never sees the approval. Phase 1B A1: no config / no backend id fails too.
     {
-      const patched = cfg && vj.backendJobId
-        ? await updateCanonicalJob(vj.backendJobId,{status:"materials_approved"})
-        : false;
-      if(!patched){
+      const res = cfg && vj.backendJobId
+        ? await updateCanonicalJobResult(vj.backendJobId,{status:"materials_approved"})
+        : {ok:false,kind:"failed"};
+      if(!res.ok){
         console.warn("Haven: materials approval sync failed; not advancing locally.");
+        if(res.kind==="refused"||res.kind==="not_applied"){
+          // 0026 / 0029: only an open request can be answered. It was already
+          // answered or changed: re-read instead of asking to try again.
+          setWriteSyncNotice("This materials request has already been answered or has changed. Your booking has been refreshed.");
+          setTimeout(()=>setWriteSyncNotice(""),4000);
+          hydrateMyJobs({soft:true});
+          return;
+        }
         setShowApproveSyncFailed(true);
         setTimeout(()=>setShowApproveSyncFailed(false),2500);
         return;
@@ -5728,12 +5753,18 @@ function App(){
     const cfg=getSupabaseConfig();
     // Same bar as approve: the backend must accept the write first.
     {
-      const patched = cfg && vj.backendJobId
-        ? await updateCanonicalJob(vj.backendJobId,{status:nextStatus, ...extraFields})
-        : false;
-      if(!patched){
+      const res = cfg && vj.backendJobId
+        ? await updateCanonicalJobResult(vj.backendJobId,{status:nextStatus, ...extraFields})
+        : {ok:false,kind:"failed"};
+      if(!res.ok){
         console.warn("Haven: materials decline sync failed; not advancing locally.");
         setShowMaterialsDeclineConfirm(false);
+        if(res.kind==="refused"||res.kind==="not_applied"){
+          setWriteSyncNotice("This materials request has already been answered or has changed. Your booking has been refreshed.");
+          setTimeout(()=>setWriteSyncNotice(""),4000);
+          hydrateMyJobs({soft:true});
+          return;
+        }
         setWriteSyncNotice("Couldn't decline materials — try again");
         setTimeout(()=>setWriteSyncNotice(""),2500);
         return;
