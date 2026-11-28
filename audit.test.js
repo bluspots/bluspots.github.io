@@ -2251,7 +2251,8 @@ async function runApproveAndDeclineChecks(){
     const approve = byText('Approve materials');
     await act(async () => { fireEvent.click(approve); });
     await act(async () => { await delay(40); });
-    assert(existsRegex("Couldn't sync approval"), 'Failed approve shows an error toast');
+    // 0039 / 0029 compat: a 403 is a final refusal → plain copy + re-read (not "try again").
+    assert(existsRegex("already been answered or has changed"), 'Refused approve (403) says so and refreshes');
     assert(existsRegex('Materials needed'), 'Failed approve stays on the materials request');
     assert(!existsRegex('pro is buying'), 'Failed approve does not local-advance to materials approved');
     const failedJobs = JSON.parse(storedData['haven_jobs']);
@@ -2276,7 +2277,7 @@ async function runApproveAndDeclineChecks(){
     const approveEmpty = byText('Approve materials');
     await act(async () => { fireEvent.click(approveEmpty); });
     await act(async () => { await delay(40); });
-    assert(existsRegex("Couldn't sync approval"), 'Empty representation approve shows an error toast');
+    assert(existsRegex("already been answered or has changed"), 'Empty representation approve (row no longer matches) says so and refreshes');
     assert(existsRegex('Materials needed'), 'Empty representation approve stays on the materials request');
     assert(JSON.parse(storedData['haven_jobs']).data[0].status === 'materials_requested', 'Empty representation approve does not persist a local advance');
     global.fetch = origFetchEmpty;
