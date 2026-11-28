@@ -4295,21 +4295,34 @@ function App(){
   // sign-out all stop polling and drop the point (memory only, never stored).
   const liveTrackJobId=(scr==="tracking"&&isAppVisible&&havenAuth&&vj&&vj.backendJobId&&vj.status==="en_route")?String(vj.backendJobId):null;
   const [liveLoc,setLiveLoc]=useState(null);
+  // 0037 contract §5: when the Pro stops sharing, signs out or the session
+  // expires, the backend sends job_changed for this job; the card reads again at
+  // once (the point is gone) instead of waiting for the next 10 s poll.
+  const liveLocKickRef=useRef(null);
   useEffect(()=>{
     setLiveLoc(null);
     if(!liveTrackJobId) return;
-    let cancelled=false, timer=null;
+    let cancelled=false, timer=null, reading=false;
     setLiveLoc({jobId:liveTrackJobId,state:"loading"});
     const tick=async()=>{
       timer=null;
+      reading=true;
       const r=await fetchJobLiveLocation(liveTrackJobId);
+      reading=false;
       if(cancelled) return;
       setLiveLoc({jobId:liveTrackJobId,...r});
+      if(timer) return; // a signal already asked for the next read
       if(r.state==="ended"||r.state==="unavailable") return; // tracking over or not allowed: stop
       timer=setTimeout(tick,r.state==="network"?HAVEN_LIVE_RETRY_MS:HAVEN_LIVE_POLL_MS);
     };
+    liveLocKickRef.current=()=>{
+      if(cancelled) return;
+      if(timer){ clearTimeout(timer); timer=null; }
+      if(reading){ timer=setTimeout(tick,0); return; } // right after the read in progress
+      tick();
+    };
     tick();
-    return ()=>{ cancelled=true; if(timer) clearTimeout(timer); setLiveLoc(null); };
+    return ()=>{ cancelled=true; if(timer) clearTimeout(timer); liveLocKickRef.current=null; setLiveLoc(null); };
   },[liveTrackJobId]);
   // While a point is on screen, re-check it every second: the "Updated … ago"
   // text keeps counting and the pin goes at 5 minutes even if a read is pending.
@@ -4831,7 +4844,12 @@ function App(){
   // active-job screen (Tracking, Posted) is open. Before 0036 is live the
   // channel simply never delivers, and these re-reads keep the app current.
   const jobSignalRefetchRef=useRef(null);
-  jobSignalRefetchRef.current=async()=>{ await hydrateMyJobs({soft:true}); };
+  jobSignalRefetchRef.current=async(batch)=>{
+    // A signal for the job whose Pro is being tracked: read the location now too.
+    const tracked=liveTrackJobId?String(liveTrackJobId).toLowerCase():null;
+    if(tracked&&batch&&Array.isArray(batch.signals)&&batch.signals.some(s=>s&&s.jobId===tracked)&&liveLocKickRef.current) liveLocKickRef.current();
+    await hydrateMyJobs({soft:true});
+  };
   const jobSignalRef=useRef(null);
   if(!jobSignalRef.current){
     jobSignalRef.current=havenCreateJobSignal({
